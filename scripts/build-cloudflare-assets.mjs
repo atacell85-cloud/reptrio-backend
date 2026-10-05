@@ -5,7 +5,7 @@ const root = resolve('.');
 const output = resolve('.cloudflare-assets');
 const canonicalExerciseSource = resolve(root, 'data', 'exercises.v1.json');
 const files = [
-  'index.html', 'app.js', 'storage.js', 'exercise-service.js', 'program-service.js',
+  'index.html', 'recovery.html', '_headers', 'app.js', 'storage.js', 'exercise-service.js', 'program-service.js',
   'import-service.js', 'document-extractor.js', 'local-import-parser.js',
   'import-provider.js', 'openai-import-parser.js', 'youtube-service.js', 'styles.css',
   'auth-service.js', 'sync-service.js', 'manifest.webmanifest', 'sw.js'
