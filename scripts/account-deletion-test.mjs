@@ -38,7 +38,7 @@ globalThis.fetch = async (url, init = {}) => {
   if (target === 'https://oauth2.googleapis.com/token' || target === 'https://appleid.apple.com/auth/token') {
     const apple = target.includes('apple');
     const now = Math.floor(Date.now() / 1000);
-    const claims = { iss: apple ? 'https://appleid.apple.com' : 'https://accounts.google.com', aud: apple ? 'com.reptrio.signin' : 'google-client', exp: now + 600, iat: now, sub: net.subject, email: net.email, nonce: net.nonce };
+    const claims = { iss: apple ? 'https://appleid.apple.com' : 'https://accounts.google.com', aud: apple ? 'com.reptrio.signin' : 'google-client', exp: now + 600, iat: now, sub: net.subject, email: net.email, nonce: net.nonce, email_verified: apple ? 'true' : true };
     return ok({ id_token: await idToken(claims), access_token: 'access', token_type: 'bearer', expires_in: 3600, ...(apple && net.appleRefreshToken ? { refresh_token: net.appleRefreshToken } : {}) });
   }
   if (target === 'https://appleid.apple.com/auth/revoke') {
@@ -216,11 +216,14 @@ const bystanderFootprint = footprint(bystander.id);
   assert.equal(await me(bystander.token), 200);
 }
 
-// ---- 6. A password account that later linked Google keeps its password requirement.
+// ---- 6. A password account that already has a Google link (legacy data, linked by email before issue #12) keeps its
+// password requirement. Since #12 such a link is no longer created at sign-in, so the row is seeded directly.
 {
   const user = await register('linked@example.test', 'linked-pass-1');
+  const later = new Date(Date.now() + 1000).toISOString();
+  db.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES ('google', 'google-sub-linked', ?, 'linked@example.test', ?, ?)").run(user.id, later, later);
   const linked = await oauthLogin('google', 'google-sub-linked', 'linked@example.test');
-  assert.equal(linked.id, user.id, 'linked by email (existing behaviour)');
+  assert.equal(linked.id, user.id, 'the existing provider + sub link signs in');
   assert.deepEqual((await info(linked.token)).body, { requiresPassword: true, providers: ['google'], appleReauthRequired: false });
   assert.equal((await remove(linked.token)).status, 401);
   assert.equal((await remove(linked.token, { confirm: 'DELETE', password: 'linked-pass-1' })).status, 200);

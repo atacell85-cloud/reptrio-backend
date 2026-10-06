@@ -95,7 +95,7 @@ async function oauthCallback(request, env, provider) {
     if (reauthTicket && provider === 'apple' && mobile && mobileRedirect) return completeAppleReauth(request, env, config, reauthTicket, String(claims.sub), token.refresh_token, mobileRedirect, clearHeaders);
     const email = normalizeEmail(claims.email);
     if (!email) throw coded('OAUTH_EMAIL_MISSING');
-    const user = await upsertOAuthUser(env, provider, String(claims.sub), email);
+    const user = await upsertOAuthUser(env, provider, String(claims.sub), email, providerEmailVerified(provider, claims), providerEmailTrusted(provider, claims, email));
     if (provider === 'apple') await storeAppleRefreshToken(env, config, String(claims.sub), token.refresh_token);
     if (mobile && mobileRedirect) return issueMobileOAuthCode(env, user.id, mobileRedirect, clearHeaders);
     return issueSession(env, user.id, user.email, 303, { Location: new URL('/', request.url).toString(), 'Set-Cookie': clearHeaders });
@@ -148,19 +148,51 @@ function validateIdTokenClaims(claims, config, expectedNonce) {
   if (!claims.sub) throw coded('OAUTH_SUBJECT_MISSING');
 }
 
-async function upsertOAuthUser(env, provider, subject, email) {
+// Whether the provider asserts the ID token's email as verified, from the signature-verified token only (never the
+// callback body). Google: `email_verified` is a boolean and must be exactly true. Apple: the claim is "true" or true
+// (Apple may report false, e.g. for Apple at Work & School accounts).
+export function providerEmailVerified(provider, claims) {
+  if (provider === 'google') return claims.email_verified === true;
+  if (provider === 'apple') return claims.email_verified === true || claims.email_verified === 'true';
+  return false;
+}
+
+// Whether the email is trusted enough to link this identity to an EXISTING account. Google documents that it is
+// authoritative for an email only for @gmail.com addresses, or when email_verified is true and `hd` (Workspace hosted
+// domain) is set — here it must also be the email's domain. Otherwise a once-verified address (e.g. a former
+// employee's company email kept on a consumer Google account) proves nothing about its current owner. Apple: its
+// verified email (accepted per the product decision; Private Relay addresses are unique per app).
+export function providerEmailTrusted(provider, claims, email) {
+  if (!providerEmailVerified(provider, claims)) return false;
+  if (provider === 'apple') return true;
+  const domain = String(email || '').split('@')[1] || '';
+  return domain === 'gmail.com' || (typeof claims.hd === 'string' && claims.hd.length > 0 && claims.hd.toLowerCase() === domain);
+}
+
+// OAuth identity → Reptrio account (issue #12). The identity key is provider + `sub`, never the email.
+// 1. A linked provider + sub signs in to its account (even when the provider email changed).
+// 2. Not linked, and an account with this email exists: link only when this identity's email is trusted (see
+//    `providerEmailTrusted`) AND the account's email was itself proven by the trusted provider identity that created it. A password account's email
+//    was never verified (registration does not prove ownership), so linking it by email could hand someone else's
+//    pre-registered account to the email owner or vice versa. Otherwise fail closed — no link, no duplicate account.
+// 3. No account: create one only for a verified email (an unverified one could squat the address); the user and its
+//    first link are written atomically.
+async function upsertOAuthUser(env, provider, subject, email, emailVerified, emailTrusted) {
   const now = new Date().toISOString();
+  const trusted = emailTrusted ? 1 : 0;
   const linked = await env.DB.prepare('SELECT users.id, users.email FROM oauth_accounts JOIN users ON users.id = oauth_accounts.user_id WHERE oauth_accounts.provider = ? AND oauth_accounts.provider_subject = ? AND users.deleted_at IS NULL').bind(provider, subject).first();
   if (linked) {
-    await env.DB.prepare('UPDATE oauth_accounts SET email = ?, last_login_at = ? WHERE provider = ? AND provider_subject = ?').bind(email, now, provider, subject).run();
+    await env.DB.prepare('UPDATE oauth_accounts SET email = ?, email_trusted = ?, last_login_at = ? WHERE provider = ? AND provider_subject = ?').bind(email, trusted, now, provider, subject).run();
     return linked;
   }
-  const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL').bind(email).first();
-  const link = userId => env.DB.prepare('INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)').bind(provider, subject, userId, email, now, now);
+  const link = userId => env.DB.prepare('INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, email_trusted, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(provider, subject, userId, email, trusted, now, now);
+  const user = await env.DB.prepare('SELECT id, email, created_at FROM users WHERE email = ? AND deleted_at IS NULL').bind(email).first();
   if (user) {
+    if (!emailTrusted || !(await emailProvenByProvider(env, user))) throw coded('OAUTH_ACCOUNT_LINK_REQUIRES_VERIFICATION');
     await link(user.id).run();
-    return user;
+    return { id: user.id, email: user.email };
   }
+  if (!emailVerified) throw coded('OAUTH_EMAIL_UNVERIFIED');
   // A new user and its first provider link are written together (same `now`; account deletion relies on it to know
   // the password was generated), atomically, so a half-created user without its link cannot exist.
   const id = crypto.randomUUID();
@@ -171,6 +203,14 @@ async function upsertOAuthUser(env, provider, subject, email) {
     link(id),
   ]);
   return { id, email };
+}
+
+// The account was created by a provider identity whose email is trusted and is still the account's email: its creating
+// link carries the account's creation time, email_trusted = 1 as of its latest sign-in, and the same email as the
+// account (a provider email change leaves the old address unproven). Password accounts and legacy rows (NULL) are not.
+async function emailProvenByProvider(env, user) {
+  const row = await env.DB.prepare('SELECT 1 AS proven FROM oauth_accounts WHERE user_id = ? AND created_at = ? AND email_trusted = 1 AND lower(email) = lower(?) LIMIT 1').bind(user.id, user.created_at, user.email).first();
+  return Boolean(row);
 }
 
 async function register(request, env) {
