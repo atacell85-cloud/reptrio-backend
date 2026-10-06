@@ -40,3 +40,24 @@ Store secrets with `npx wrangler secret put <NAME>`. Do not place these values i
 - Custom hostnames are configured as Worker custom domains in `wrangler.jsonc`: `app.reptrio.com` and `api.reptrio.com`.
 
 Do not upload `.env`, `.dev.vars`, API keys, or imported document contents. Worker logs contain request metadata only, never keys or document bodies.
+
+## Account deletion (issue #6) — deploy notes
+
+Not deployed by the change itself. When this branch is released:
+
+1. **Apply migration 0005 before deploying the Worker:** `npx wrangler d1 migrations apply a2-workout-pilot --remote`. It adds the encrypted Apple refresh-token columns and `oauth_reauth_tickets`. Without them, `/api/auth/delete` and Apple sign-in token storage fail. `worker-deploy.yml` does not apply migrations.
+2. **Deploy the Worker before shipping the app build** that uses `GET /api/auth/delete`. The app falls back to the old password flow against an older backend (405), but Google / Apple users can only delete after this backend is live.
+3. **Accounts the old flow only soft-deleted** (`users.deleted_at`): purge them with the maintenance script, **not** a migration. It is irreversible; run it only with explicit owner approval, after step 1:
+   `npx wrangler d1 execute a2-workout-pilot --remote --file scripts/maintenance/purge-soft-deleted-accounts.sql`
+4. **Configuration:** no new secret is needed. Apple refresh tokens are encrypted with a key derived from the decoded `APPLE_OAUTH_PRIVATE_KEY`. Replacing that key makes stored tokens unreadable; affected Apple users re-authorize once before deleting (`APPLE_REAUTH_REQUIRED`).
+5. **Apple users who signed in before this release:** they have no stored token. Deletion asks them to re-authorize with Apple once, through a single-use ticket bound to their signed-in account (`POST /api/auth/reauth/apple`, then Apple sign-in with `reauth=<ticket>`). The callback only accepts the Apple ID already linked to that account and never creates or switches accounts.
+6. **What `POST /api/auth/delete` does:**
+   - revokes Sign in with Apple at `https://appleid.apple.com/auth/revoke` first; if that fails, nothing is deleted;
+   - deletes stored OpenAI background import responses (best effort);
+   - removes every `user_id`-linked row and the `users` row in one atomic D1 batch.
+   `GET /api/auth/delete` tells the client whether a password is required and whether Apple re-authorization is needed.
+7. **Not reachable by deletion; document these publicly:**
+   - OpenAI abuse-monitoring retention;
+   - earlier synchronous import responses, which are stored by default (new ones use `store: false`);
+   - background responses whose id was lost;
+   - D1 Time Travel recovery window.
