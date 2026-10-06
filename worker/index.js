@@ -293,7 +293,9 @@ function requestBody(model, input, requestId, options = {}) {
     { type: 'input_text', text: JSON.stringify({ importId: input.importId, normalizedDocument: sanitize(input.normalizedDocument), note: input.rawFile ? 'The original uploaded file is attached as input_file. Use the original file as the primary source. If file parsing is imperfect, use normalizedDocument as extracted text/table helper context.' : 'No original file is attached. Use normalizedDocument as the source.' }) }
   ];
   if (input.rawFile?.base64) content.push({ type: 'input_file', filename: input.rawFile.name, file_data: `data:${input.rawFile.type || 'application/octet-stream'};base64,${input.rawFile.base64}` });
-  return { model, temperature: 0, metadata: { import_request_id: requestId }, background: Boolean(options.background), input: [{ role: 'developer', content: [{ type: 'input_text', text: prompt() }] }, { role: 'user', content }], text: { format: { type: 'json_schema', name: 'import_program_v1_1', strict: true, schema: responseSchema } } };
+  // Account deletion (issue #6): synchronous responses are not stored at OpenAI (their ids are not kept, so they could
+  // not be deleted later). Background responses must be stored; their ids are kept and deleted with the account.
+  return { model, temperature: 0, metadata: { import_request_id: requestId }, background: Boolean(options.background), store: Boolean(options.background), input: [{ role: 'developer', content: [{ type: 'input_text', text: prompt() }] }, { role: 'user', content }], text: { format: { type: 'json_schema', name: 'import_program_v1_1', strict: true, schema: responseSchema } } };
 }
 function prompt() { return `You are a strict workout-program extractor, not a coach.
 

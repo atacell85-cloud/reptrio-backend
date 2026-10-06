@@ -5,7 +5,12 @@ const OAUTH_STATE_COOKIE = 'aks_oauth_state';
 const OAUTH_NONCE_COOKIE = 'aks_oauth_nonce';
 const OAUTH_CLIENT_COOKIE = 'aks_oauth_client';
 const OAUTH_REDIRECT_COOKIE = 'aks_oauth_redirect';
+const OAUTH_REAUTH_COOKIE = 'aks_oauth_reauth';
+const REAUTH_TICKET_MINUTES = 10;
 const MOBILE_OAUTH_CODE_MINUTES = 5;
+const APPLE_REVOKE_URL = 'https://appleid.apple.com/auth/revoke';
+const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+const PROVIDER_TIMEOUT_MS = 10_000;
 // Cloudflare Workers caps WebCrypto PBKDF2 at 100,000 iterations.
 const PBKDF2_ITERATIONS = 100_000;
 
@@ -17,7 +22,8 @@ export async function handleAccountRequest(request, env, pathname) {
   if (pathname === '/api/auth/register') return register(request, env);
   if (pathname === '/api/auth/login') return login(request, env);
   if (pathname === '/api/auth/logout') return logout(request, env);
-  if (pathname === '/api/auth/delete') return deleteAccount(request, env);
+  if (pathname === '/api/auth/reauth/apple') return createAppleReauthTicket(request, env);
+  if (pathname === '/api/auth/delete') return request.method === 'GET' ? deletionInfo(request, env) : deleteAccount(request, env);
   if (pathname === '/api/me') return me(request, env);
   if (pathname === '/api/sync/pull') return pull(request, env);
   if (pathname === '/api/sync/push') return push(request, env);
@@ -62,6 +68,10 @@ async function oauthStart(request, env, provider) {
   headers.append('Set-Cookie', shortCookie(OAUTH_NONCE_COOKIE, nonce));
   if (mobile) headers.append('Set-Cookie', shortCookie(OAUTH_CLIENT_COOKIE, 'mobile'));
   if (mobile && mobileRedirect) headers.append('Set-Cookie', shortCookie(OAUTH_REDIRECT_COOKIE, mobileRedirect));
+  const reauthTicket = provider === 'apple' && mobile ? String(url.searchParams.get('reauth') || '').trim() : '';
+  // Every start sets or clears the re-authorization cookie, so a cancelled re-authorization can never turn a later
+  // normal sign-in on the same browser into a re-authorization.
+  headers.append('Set-Cookie', reauthTicket && /^[A-Za-z0-9_-]{20,100}$/.test(reauthTicket) ? shortCookie(OAUTH_REAUTH_COOKIE, reauthTicket) : clearNamedCookie(OAUTH_REAUTH_COOKIE));
   headers.append('Cache-Control', 'no-store');
   return new Response(null, { status: 302, headers });
 }
@@ -73,7 +83,8 @@ async function oauthCallback(request, env, provider) {
   const expectedNonce = cookie(request, OAUTH_NONCE_COOKIE);
   const mobile = cookie(request, OAUTH_CLIENT_COOKIE) === 'mobile';
   const mobileRedirect = mobileRedirectUri(cookie(request, OAUTH_REDIRECT_COOKIE));
-  const clearHeaders = [clearNamedCookie(OAUTH_STATE_COOKIE), clearNamedCookie(OAUTH_NONCE_COOKIE), clearNamedCookie(OAUTH_CLIENT_COOKIE), clearNamedCookie(OAUTH_REDIRECT_COOKIE)];
+  const reauthTicket = cookie(request, OAUTH_REAUTH_COOKIE);
+  const clearHeaders = [clearNamedCookie(OAUTH_STATE_COOKIE), clearNamedCookie(OAUTH_NONCE_COOKIE), clearNamedCookie(OAUTH_CLIENT_COOKIE), clearNamedCookie(OAUTH_REDIRECT_COOKIE), clearNamedCookie(OAUTH_REAUTH_COOKIE)];
   if (!values.code || !values.state || !expectedState || !constantEqual(String(values.state), expectedState)) return oauthErrorRedirect(request, 'OAUTH_STATE_INVALID', clearHeaders, mobileRedirect);
   const config = oauthConfig(env, provider);
   if (!config.ready) return oauthErrorRedirect(request, 'OAUTH_PROVIDER_NOT_CONFIGURED', clearHeaders, mobileRedirect);
@@ -81,9 +92,11 @@ async function oauthCallback(request, env, provider) {
     const token = await exchangeOAuthCode(request, config, provider, String(values.code));
     const claims = await decodeAndVerifyIdToken(token.id_token, config);
     validateIdTokenClaims(claims, config, expectedNonce);
+    if (reauthTicket && provider === 'apple' && mobile && mobileRedirect) return completeAppleReauth(request, env, config, reauthTicket, String(claims.sub), token.refresh_token, mobileRedirect, clearHeaders);
     const email = normalizeEmail(claims.email);
     if (!email) throw coded('OAUTH_EMAIL_MISSING');
     const user = await upsertOAuthUser(env, provider, String(claims.sub), email);
+    if (provider === 'apple') await storeAppleRefreshToken(env, config, String(claims.sub), token.refresh_token);
     if (mobile && mobileRedirect) return issueMobileOAuthCode(env, user.id, mobileRedirect, clearHeaders);
     return issueSession(env, user.id, user.email, 303, { Location: new URL('/', request.url).toString(), 'Set-Cookie': clearHeaders });
   } catch (error) {
@@ -142,16 +155,22 @@ async function upsertOAuthUser(env, provider, subject, email) {
     await env.DB.prepare('UPDATE oauth_accounts SET email = ?, last_login_at = ? WHERE provider = ? AND provider_subject = ?').bind(email, now, provider, subject).run();
     return linked;
   }
-  let user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL').bind(email).first();
-  if (!user) {
-    const id = crypto.randomUUID();
-    const salt = randomToken(16);
-    const passwordHash = await passwordDigest(randomToken(32), salt);
-    await env.DB.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, email, passwordHash, salt, now).run();
-    user = { id, email };
+  const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL').bind(email).first();
+  const link = userId => env.DB.prepare('INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)').bind(provider, subject, userId, email, now, now);
+  if (user) {
+    await link(user.id).run();
+    return user;
   }
-  await env.DB.prepare('INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?)').bind(provider, subject, user.id, email, now, now).run();
-  return user;
+  // A new user and its first provider link are written together (same `now`; account deletion relies on it to know
+  // the password was generated), atomically, so a half-created user without its link cannot exist.
+  const id = crypto.randomUUID();
+  const salt = randomToken(16);
+  const passwordHash = await passwordDigest(randomToken(32), salt);
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, email, passwordHash, salt, now),
+    link(id),
+  ]);
+  return { id, email };
 }
 
 async function register(request, env) {
@@ -225,24 +244,170 @@ async function push(request, env) {
   return json({ ok: true, syncVersion: version, updatedAt: now });
 }
 
+// ---- Apple re-authorization for account deletion (legacy Apple users without a stored token).
+// The signed-in app asks for a single-use ticket bound to its account, opens Apple sign-in with it, and the callback
+// only stores the Apple token when that Apple ID is already linked to the same account. It never creates, links or
+// switches accounts and issues no session, so another Apple ID cannot redirect the deletion to a different account.
+async function createAppleReauthTicket(request, env) {
+  if (!isJsonPost(request)) return methodOrTypeError(request);
+  if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
+  const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
+  const ticket = randomToken(32);
+  const now = new Date();
+  await env.DB.prepare('INSERT INTO oauth_reauth_tickets (id, user_id, ticket_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').bind(crypto.randomUUID(), user.id, await tokenDigest(ticket), now.toISOString(), new Date(now.getTime() + REAUTH_TICKET_MINUTES * 60000).toISOString()).run();
+  return json({ ticket });
+}
+
+async function completeAppleReauth(request, env, config, ticket, subject, refreshToken, mobileRedirect, cookies) {
+  const now = new Date().toISOString();
+  const row = await env.DB.prepare('SELECT id, user_id FROM oauth_reauth_tickets WHERE ticket_hash = ? AND expires_at > ? AND used_at IS NULL').bind(await tokenDigest(ticket), now).first();
+  if (!row) return oauthErrorRedirect(request, 'APPLE_REAUTH_INVALID', cookies, mobileRedirect);
+  await env.DB.prepare('UPDATE oauth_reauth_tickets SET used_at = ? WHERE id = ?').bind(now, row.id).run();
+  const linked = await env.DB.prepare("SELECT user_id FROM oauth_accounts WHERE provider = 'apple' AND provider_subject = ?").bind(subject).first();
+  if (!linked || linked.user_id !== row.user_id) return oauthErrorRedirect(request, 'APPLE_REAUTH_MISMATCH', cookies, mobileRedirect);
+  if (!refreshToken) return oauthErrorRedirect(request, 'APPLE_REAUTH_INVALID', cookies, mobileRedirect);
+  await storeAppleRefreshToken(env, config, subject, refreshToken);
+  await env.DB.prepare("UPDATE oauth_accounts SET last_login_at = ? WHERE provider = 'apple' AND provider_subject = ?").bind(now, subject).run();
+  const url = new URL(mobileRedirect);
+  url.searchParams.set('reauth', 'ok');
+  const headers = new Headers({ Location: url.toString(), 'Cache-Control': 'no-store' });
+  cookies.forEach(value => headers.append('Set-Cookie', value));
+  return new Response(null, { status: 303, headers });
+}
+
+// ---- Account deletion (issue #6; App Review Guideline 5.1.1(v)).
+// The session identifies the account; nothing in the body can name another user. A user whose password was chosen
+// at registration confirms it; a user created by Google / Apple sign-in never knew their generated password and is
+// authenticated by the session alone. Linked Sign in with Apple authorizations are revoked at Apple first; if that is
+// not possible nothing is deleted. Then every account-linked row is removed in one atomic D1 batch.
+async function deletionInfo(request, env) {
+  const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
+  const context = await deletionContext(env, user.id);
+  if (!context) return error('AUTH_REQUIRED', 401);
+  const appleConfig = oauthConfig(env, 'apple');
+  const appleTokens = await Promise.all(context.apple.map(row => openProviderToken(appleConfig, 'apple', row.provider_subject, row.refresh_token_ciphertext)));
+  return json({
+    requiresPassword: context.requiresPassword,
+    providers: context.providers,
+    appleReauthRequired: appleTokens.some(token => !token),
+  });
+}
+
 async function deleteAccount(request, env) {
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
   const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
   const { confirm, password } = await body(request); if (confirm !== 'DELETE') return error('ACCOUNT_DELETE_CONFIRMATION_REQUIRED', 400);
-  const row = await env.DB.prepare('SELECT password_hash, password_salt FROM users WHERE id = ?').bind(user.id).first();
-  if (!row || !constantEqual(await passwordDigest(password || '', row.password_salt), row.password_hash)) return error('AUTH_INVALID_CREDENTIALS', 401);
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM user_data WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM programs WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM workout_sessions WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM workout_sets WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM user_settings WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM sync_metadata WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').bind(new Date().toISOString(), user.id)
-  ]);
+  const context = await deletionContext(env, user.id);
+  if (!context) return error('AUTH_REQUIRED', 401);
+  if (context.requiresPassword && !(validPassword(password) && constantEqual(await passwordDigest(password, context.passwordSalt), context.passwordHash))) return error('AUTH_INVALID_CREDENTIALS', 401);
+
+  // Sign in with Apple: revoke every linked authorization before any data is removed.
+  if (context.apple.length) {
+    const config = oauthConfig(env, 'apple');
+    if (!config.ready) return error('APPLE_REVOKE_UNAVAILABLE', 503);
+    for (const row of context.apple) {
+      const refreshToken = await openProviderToken(config, 'apple', row.provider_subject, row.refresh_token_ciphertext);
+      if (!refreshToken) return error('APPLE_REAUTH_REQUIRED', 409);
+      const result = await revokeAppleToken(config, refreshToken);
+      if (result === 'invalid_grant') return error('APPLE_REAUTH_REQUIRED', 409);
+      if (result !== 'revoked') {
+        console.warn(JSON.stringify({ event: 'account_delete_failed', stage: 'apple_revoke', code: result }));
+        return error('APPLE_REVOKE_FAILED', 502);
+      }
+    }
+  }
+
+  // Import jobs: the uploaded program document may be stored with the OpenAI background response; delete it there
+  // (best effort; a failure does not keep the account).
+  await deleteStoredImportResponses(env, user.id);
+
+  try {
+    await env.DB.batch(ACCOUNT_TABLES.map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
+      .concat(env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id)));
+  } catch (cause) {
+    console.error(JSON.stringify({ event: 'account_delete_failed', stage: 'database', message: String(cause?.message || cause) }));
+    return error('ACCOUNT_DELETE_FAILED', 500);
+  }
+  console.log(JSON.stringify({ event: 'account_deleted', providers: context.providers, appleRevoked: context.apple.length }));
   return json({ ok: true }, 200, { 'Set-Cookie': clearCookie() });
+}
+
+// Every table with a user_id column (migrations 0001–0005). `users` is deleted last, in the same batch.
+const ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata'];
+
+async function deletionContext(env, userId) {
+  const user = await env.DB.prepare('SELECT id, password_hash, password_salt, created_at FROM users WHERE id = ? AND deleted_at IS NULL').bind(userId).first();
+  if (!user) return null;
+  const linked = (await env.DB.prepare('SELECT provider, provider_subject, created_at, refresh_token_ciphertext FROM oauth_accounts WHERE user_id = ? ORDER BY created_at').bind(userId).all()).results || [];
+  // `upsertOAuthUser` creates the user and its first provider link with the same timestamp: such a user only has a
+  // generated password. A password account that later linked Google / Apple keeps its real password requirement.
+  const generatedPassword = linked.some(row => row.created_at === user.created_at);
+  return {
+    requiresPassword: !generatedPassword,
+    passwordHash: user.password_hash,
+    passwordSalt: user.password_salt,
+    providers: Array.from(new Set(linked.map(row => row.provider))),
+    apple: linked.filter(row => row.provider === 'apple'),
+  };
+}
+
+// Apple's revoke endpoint returns 200 when the token was revoked or was already invalid.
+async function revokeAppleToken(config, refreshToken) {
+  try {
+    const form = new URLSearchParams({ client_id: config.clientId, client_secret: await appleClientSecret(config), token: refreshToken, token_type_hint: 'refresh_token' });
+    const response = await fetch(APPLE_REVOKE_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form, signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) });
+    if (response.ok) return 'revoked';
+    const payload = await response.json().catch(() => ({}));
+    return payload.error === 'invalid_grant' ? 'invalid_grant' : `APPLE_${payload.error || response.status}`;
+  } catch {
+    return 'APPLE_UNREACHABLE';
+  }
+}
+
+async function deleteStoredImportResponses(env, userId) {
+  if (!env.OPENAI_API_KEY) return;
+  const rows = (await env.DB.prepare('SELECT openai_response_id FROM import_jobs WHERE user_id = ? AND openai_response_id IS NOT NULL').bind(userId).all()).results || [];
+  await Promise.all(rows.map(row => fetch(`${OPENAI_RESPONSES_URL}/${encodeURIComponent(row.openai_response_id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` }, signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS) })
+    .then(response => { if (!response.ok && response.status !== 404) console.warn(JSON.stringify({ event: 'import_response_delete_failed', status: response.status })); })
+    .catch(() => console.warn(JSON.stringify({ event: 'import_response_delete_failed', status: 'unreachable' })))));
+}
+
+// ---- Provider refresh tokens at rest: AES-GCM with a key derived (HKDF-SHA-256) from the Sign in with Apple private
+// key, bound to provider + subject. No new secret; rotating the Apple key makes old tokens unreadable, which is
+// handled like a missing token (the user re-authorizes with Apple before deletion).
+async function storeAppleRefreshToken(env, config, subject, refreshToken) {
+  if (!refreshToken) return;
+  try {
+    const sealed = await sealProviderToken(config, 'apple', subject, String(refreshToken));
+    await env.DB.prepare('UPDATE oauth_accounts SET refresh_token_ciphertext = ?, refresh_token_updated_at = ? WHERE provider = ? AND provider_subject = ?').bind(sealed, new Date().toISOString(), 'apple', subject).run();
+  } catch (cause) {
+    // Sign-in must not fail because the token could not be kept; deletion will ask for Apple re-authorization.
+    console.warn(JSON.stringify({ event: 'apple_refresh_token_store_failed', message: String(cause?.message || cause) }));
+  }
+}
+
+async function providerTokenKey(config) {
+  // The decoded key bytes, not the PEM text: re-pasting the same key with other line breaks keeps tokens readable.
+  const material = await crypto.subtle.importKey('raw', pemToArrayBuffer(config.privateKey), 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('reptrio-oauth-token-v1'), info: encoder.encode('apple-refresh-token') }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+export async function sealProviderToken(config, provider, subject, token) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encoder.encode(`${provider}:${subject}`) }, await providerTokenKey(config), encoder.encode(token));
+  return `v1.${base64Url(iv)}.${base64Url(new Uint8Array(ciphertext))}`;
+}
+
+export async function openProviderToken(config, provider, subject, sealed) {
+  const [version, iv, data] = String(sealed || '').split('.');
+  if (version !== 'v1' || !iv || !data || !config.privateKey) return null;
+  try {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64Url(iv), additionalData: encoder.encode(`${provider}:${subject}`) }, await providerTokenKey(config), fromBase64Url(data));
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
 }
 
 async function issueSession(env, id, email, status = 201, extraHeaders = {}) {
