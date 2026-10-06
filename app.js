@@ -223,6 +223,8 @@ function oauthErrorMessage(code) {
     OAUTH_CODE_INVALID: 'Google giriş izni doğrulanamadı. Lütfen tekrar dene.',
     OAUTH_CLIENT_INVALID: 'Google bağlantı ayarları geçersiz. Kurulumu kontrol etmemiz gerekiyor.',
     OAUTH_EMAIL_MISSING: 'Google hesabından e-posta bilgisi alınamadı.',
+    OAUTH_ACCOUNT_LINK_REQUIRES_VERIFICATION: 'Bu e-posta ile mevcut bir Reptrio hesabı var. Hesabınıza mevcut giriş yönteminizle giriş yapın.',
+    OAUTH_EMAIL_UNVERIFIED: 'Bu hesabın e-posta adresi sağlayıcı tarafından doğrulanmamış. Doğrulanmış bir e-postayla giriş yapın.',
     OAUTH_FAILED: 'Google ile giriş tamamlanamadı. Lütfen tekrar dene.'
   })[code] || 'Google ile giriş tamamlanamadı. Lütfen tekrar dene.';
 }

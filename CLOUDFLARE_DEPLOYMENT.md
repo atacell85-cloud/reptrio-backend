@@ -61,3 +61,19 @@ Not deployed by the change itself. When this branch is released:
    - earlier synchronous import responses, which are stored by default (new ones use `store: false`);
    - background responses whose id was lost;
    - D1 Time Travel recovery window.
+
+## OAuth account linking (issue #12) — deploy notes
+
+Not deployed by the change itself. This release builds on the account-deletion release (merge backend PR #2 / mobile PR #11 first).
+
+1. **Apply migration `0006_oauth_email_trusted.sql`** (additive: `oauth_accounts.email_trusted`) together with 0005, **before** the Worker deploy. Without it, sign-in fails on the new column.
+   - Links written by the old Worker between the migration and the deploy stay NULL. Like all pre-migration links, they are "unproven" until that identity signs in again.
+2. **Behaviour after deploy.** The identity key is provider + `sub`. Already-linked identities sign in unchanged.
+   - **A new identity whose email matches an existing account** is linked only when:
+     - its email is **trusted**: Google verified it AND Google is authoritative for it (`@gmail.com`, or a Workspace account whose `hd` is the email's domain); Apple verified it; and
+     - the account was created by a trusted provider identity that still has that email.
+   - **Otherwise sign-in fails closed** with `OAUTH_ACCOUNT_LINK_REQUIRES_VERIFICATION`. No link and no duplicate account are created.
+   - **New accounts** need a provider-verified email (`OAUTH_EMAIL_UNVERIFIED`).
+3. **Product follow-ups:**
+   - Password users cannot add Google / Apple sign-in by email match; a signed-in "link Google / Apple" flow does not exist yet.
+   - Because registration does not verify email, someone can pre-register a password account for another person's address. That person can then never use Google / Apple with it until email verification or account recovery exists.
