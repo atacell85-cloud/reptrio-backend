@@ -74,7 +74,7 @@ const env = {
 const call = (path, init = {}, overrideEnv = env) => worker.fetch(new Request(`${ORIGIN}${path}`, init), overrideEnv, { waitUntil() {} });
 const authed = (token, init = {}) => ({ ...init, headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile', Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
 const deleteRequest = (token, payload) => authed(token, { method: 'POST', body: JSON.stringify(payload) });
-const USER_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata'];
+const USER_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
 const footprint = userId => Object.fromEntries([...USER_TABLES.map(table => [table, db.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`, userId)[0].n]), ['users', db.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', userId)[0].n]]);
 const empty = Object.fromEntries([...USER_TABLES, 'users'].map(table => [table, 0]));
 
@@ -120,7 +120,7 @@ async function appleReauth(token, subject, email, refreshToken, ticketOverride =
 }
 
 // Gives the account data in every user table: sync payload (programs, sessions, sets, settings with profile photo),
-// an import job with an OpenAI response id, and an unused mobile OAuth code.
+// an import job with an OpenAI response id, an unused mobile OAuth code and a password reset link.
 async function seed(user, tag) {
   const data = { programs: [{ id: `p-${tag}` }], sessions: [{ id: `s-${tag}`, sets: { e1: { 1: { weight: '50', reps: '5', completed: true } } } }], settings: { profile: { displayName: tag, avatarDataUrl: 'data:image/jpeg;base64,AAAA' } } };
   const push = await call('/api/sync/push', authed(user.token, { method: 'POST', body: JSON.stringify({ data, syncVersion: 0 }) }));
@@ -128,6 +128,7 @@ async function seed(user, tag) {
   const now = new Date().toISOString();
   db.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, openai_response_id, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?, ?)").run(`job-${tag}`, user.id, `resp_${tag}`, now, now);
   db.raw.prepare('INSERT INTO mobile_oauth_codes (id, user_id, code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`code-${tag}`, user.id, `hash-${tag}`, now, now);
+  db.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${tag}`, user.id, `reset-hash-${tag}`, now, now);
 }
 
 const info = async token => { const response = await call('/api/auth/delete', authed(token)); return { status: response.status, body: await response.json() }; };
@@ -344,19 +345,20 @@ const bystanderFootprint = footprint(bystander.id);
 
 // ---- 10. The maintenance script (not a migration) purges accounts that were only soft-deleted by the old flow; active accounts stay.
 {
-  const legacy = createD1();
+  const legacy = createD1({ foreignKeys });
   const now = '2026-09-01T00:00:00.000Z';
   for (const [id, deleted] of [['gone', now], ['kept', null]]) {
     legacy.raw.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, `${id}@example.test`, 'h', 's', now, deleted);
     legacy.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES ('google', ?, ?, ?, ?, ?)").run(`sub-${id}`, id, `${id}@example.test`, now, now);
     legacy.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?)").run(`job-${id}`, id, now, now);
     legacy.raw.prepare('INSERT INTO user_data (user_id, payload_json, updated_at) VALUES (?, ?, ?)').run(id, '{}', now);
+    legacy.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${id}`, id, `reset-hash-${id}`, now, now);
   }
   const fs = await import('node:fs');
   assert.ok(!fs.readdirSync(new URL('../migrations/', import.meta.url)).some(file => /purge/i.test(file)), 'the irreversible purge is not an automatic migration');
   legacy.exec(fs.readFileSync(new URL('./maintenance/purge-soft-deleted-accounts.sql', import.meta.url), 'utf8'));
   const count = (table, column, id) => legacy.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`, id)[0].n;
-  assert.deepEqual(['users:id', 'oauth_accounts:user_id', 'import_jobs:user_id', 'user_data:user_id'].map(spec => { const [table, column] = spec.split(':'); return [count(table, column, 'gone'), count(table, column, 'kept')]; }), [[0, 1], [0, 1], [0, 1], [0, 1]]);
+  assert.deepEqual(['users:id', 'oauth_accounts:user_id', 'import_jobs:user_id', 'user_data:user_id', 'password_reset_tokens:user_id'].map(spec => { const [table, column] = spec.split(':'); return [count(table, column, 'gone'), count(table, column, 'kept')]; }), [[0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]);
 }
 
 // ---- 11. Web Apple sign-in (cookie session, no mobile client) also stores the token; IVs are random; a re-pasted

@@ -1,4 +1,5 @@
 import { currentUser, handleAccountRequest } from './account-api.js';
+import { handlePasswordResetRequest } from './password-reset.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
@@ -7,6 +8,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/runtime-config.js') return runtimeConfig(request);
+    const passwordResetResponse = await handlePasswordResetRequest(request, env, ctx, url.pathname);
+    if (passwordResetResponse) return passwordResetResponse;
     const accountResponse = await handleAccountRequest(request, env, url.pathname);
     if (accountResponse) return accountResponse;
     if (url.pathname === '/api/health') return health(request, env);

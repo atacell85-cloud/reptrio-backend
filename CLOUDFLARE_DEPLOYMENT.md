@@ -77,3 +77,36 @@ Not deployed by the change itself. This release builds on the account-deletion r
 3. **Product follow-ups:**
    - Password users cannot add Google / Apple sign-in by email match; a signed-in "link Google / Apple" flow does not exist yet.
    - Because registration does not verify email, someone can pre-register a password account for another person's address. That person can then never use Google / Apple with it until email verification or account recovery exists.
+
+## Password reset (Build 43 G) — deploy notes
+
+Not deployed by the change itself. This branch (`build43/password-reset`) stacks on the account-deletion and OAuth-linking branches (PRs #2 / #3), so deploying it also ships those. Their notes above apply first.
+
+1. **Apply migration `0007_password_reset_tokens.sql` before deploying the Worker** (with 0005 / 0006 if they are not applied yet): `npx wrangler d1 execute a2-workout-pilot --remote --file .\migrations\0007_password_reset_tokens.sql`. It is additive: a new table plus an index.
+   - **Order matters:** account deletion now also erases `password_reset_tokens`. A Worker deployed without the table fails every `POST /api/auth/delete` with `ACCOUNT_DELETE_FAILED`, and reset requests fail silently.
+2. **Secret:** `ZEPTOMAIL_API_KEY` must exist on the `a2-workout` Worker. It is the ZeptoMail Send Mail token of the `reptrio-password-reset` mail agent, with or without the `Zoho-enczapikey ` prefix. Check with `npx wrangler secret list`; never print the value. If it is missing, requests still answer 202 and the log shows `password_reset_mail_failed` / `not_configured`.
+3. **Configuration in `wrangler.jsonc` (deployed with the Worker):**
+   - rate-limit binding `PASSWORD_RESET_LIMITER` (namespace `1002`, 5 requests / 60 s per client IP and action);
+   - `/reset-password` added to `assets.run_worker_first`, so the Worker serves the reset page.
+   - If the limiter binding is missing, the endpoints fail open; the per-account throttle still applies.
+4. **Mail endpoint:** `https://cpaas.zoho.eu/v1.1/email` (EU data center) in `worker/transactional-email.js`. Before the first deploy, confirm it against the mail agent's "Setup info → API" page. Sender `Reptrio <no-reply@mail.reptrio.com>`; click and open tracking are off (tracking would route the reset link, and its token, through the provider).
+5. **Endpoints:**
+   - `POST /api/auth/password/forgot {email}` → always `202 {ok:true}` for a valid email, `400 AUTH_INVALID_EMAIL` for a malformed one, `429 PASSWORD_RESET_RATE_LIMITED`.
+     - The lookup, the link and the mail happen after the response.
+     - Per account: at most one link per 60 s and three per hour, silently.
+     - Google / Apple-created accounts (generated password) and deleted or unknown accounts get nothing.
+   - `POST /api/auth/password/reset {token, password}` → `200 {ok:true}`. Errors:
+     - `400 AUTH_PASSWORD_TOO_SHORT` (8–200; checked before the link);
+     - `400 PASSWORD_RESET_INVALID` (wrong, malformed, expired, used, revoked, deleted or ineligible);
+     - `429`;
+     - `500 PASSWORD_RESET_FAILED`.
+     - On success it changes the password, deletes all sessions, voids pending mobile OAuth codes and the user's other links, and sends a "şifren değiştirildi" notice. It does not sign in.
+   - `GET /reset-password` → the page the emailed link `https://api.reptrio.com/reset-password#token=…` opens. It offers the app handoff `reptrio://reset-password?token=…` or a web form.
+6. **Smoke test after deploy** (own test account only):
+   - request a link;
+   - the mail arrives;
+   - the web form and the app both reset;
+   - the old password and old sessions are rejected;
+   - the same link again → invalid.
+   - Logs contain only event names and status codes.
+7. **Apple Private Relay:** mail to `@privaterelay.appleid.com` addresses is delivered only if `mail.reptrio.com` / the sender is registered in Apple's Private Email Relay settings. Apple-created accounts never receive reset mail, so this matters only for password accounts using a relay address.

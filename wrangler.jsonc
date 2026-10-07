@@ -17,7 +17,7 @@
   "assets": {
     "directory": "./.cloudflare-assets",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/runtime-config.js"]
+    "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password"]
   },
   "vars": {
     "OPENAI_IMPORT_MODEL": "gpt-4.1-mini",
@@ -57,6 +57,14 @@
       "namespace_id": "1001",
       "simple": {
         "limit": 4,
+        "period": 60
+      }
+    },
+    {
+      "name": "PASSWORD_RESET_LIMITER",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 5,
         "period": 60
       }
     }

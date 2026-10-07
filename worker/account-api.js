@@ -373,8 +373,8 @@ async function deleteAccount(request, env) {
   return json({ ok: true }, 200, { 'Set-Cookie': clearCookie() });
 }
 
-// Every table with a user_id column (migrations 0001–0005). `users` is deleted last, in the same batch.
-const ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata'];
+// Every table with a user_id column (migrations 0001–0007). `users` is deleted last, in the same batch.
+const ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
 
 async function deletionContext(env, userId) {
   const user = await env.DB.prepare('SELECT id, password_hash, password_salt, created_at FROM users WHERE id = ? AND deleted_at IS NULL').bind(userId).first();
@@ -477,16 +477,16 @@ export async function currentUser(request, env) {
   return row || null;
 }
 
-function isJsonPost(request) { return request.method === 'POST' && request.headers.get('content-type')?.toLowerCase().startsWith('application/json'); }
-function sameOrigin(request) { const origin = request.headers.get('origin'); return !origin || origin === new URL(request.url).origin; }
+export function isJsonPost(request) { return request.method === 'POST' && request.headers.get('content-type')?.toLowerCase().startsWith('application/json'); }
+export function sameOrigin(request) { const origin = request.headers.get('origin'); return !origin || origin === new URL(request.url).origin; }
 function mobileClient(request) { return request.headers.get('x-reptrio-client') === 'mobile'; }
-function methodOrTypeError(request) { return request.method !== 'POST' ? error('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' }) : error('UNSUPPORTED_CONTENT_TYPE', 415); }
-async function body(request) { try { return await request.json(); } catch { return {}; } }
-function normalizeEmail(value) { const email = String(value || '').trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 ? email : null; }
-function validPassword(value) { return typeof value === 'string' && value.length >= 8 && value.length <= 200; }
-async function passwordDigest(password, salt) { const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromBase64Url(salt), iterations: PBKDF2_ITERATIONS }, key, 256); return base64Url(new Uint8Array(bits)); }
-async function tokenDigest(token) { const digest = await crypto.subtle.digest('SHA-256', encoder.encode(token)); return base64Url(new Uint8Array(digest)); }
-function randomToken(length) { const bytes = crypto.getRandomValues(new Uint8Array(length)); return base64Url(bytes); }
+export function methodOrTypeError(request) { return request.method !== 'POST' ? error('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' }) : error('UNSUPPORTED_CONTENT_TYPE', 415); }
+export async function body(request) { try { return await request.json(); } catch { return {}; } }
+export function normalizeEmail(value) { const email = String(value || '').trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 ? email : null; }
+export function validPassword(value) { return typeof value === 'string' && value.length >= 8 && value.length <= 200; }
+export async function passwordDigest(password, salt) { const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']); const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromBase64Url(salt), iterations: PBKDF2_ITERATIONS }, key, 256); return base64Url(new Uint8Array(bits)); }
+export async function tokenDigest(token) { const digest = await crypto.subtle.digest('SHA-256', encoder.encode(token)); return base64Url(new Uint8Array(digest)); }
+export function randomToken(length) { const bytes = crypto.getRandomValues(new Uint8Array(length)); return base64Url(bytes); }
 function base64Url(bytes) { let text = ''; bytes.forEach(byte => { text += String.fromCharCode(byte); }); return btoa(text).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', ''); }
 function fromBase64Url(value) { const text = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '='); const binary = atob(text); return Uint8Array.from(binary, char => char.charCodeAt(0)); }
 function constantEqual(a, b) { if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false; let result = 0; for (let index = 0; index < a.length; index += 1) result |= a.charCodeAt(index) ^ b.charCodeAt(index); return result === 0; }
@@ -506,14 +506,14 @@ function materializeRecords(db, userId, data, now) {
 }
 function sqlRecord(db, table, userId, id, payload, now) { return db.prepare(`INSERT INTO ${table} (id, user_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`).bind(id, userId, JSON.stringify(payload), payload.createdAt || now, payload.updatedAt || now); }
 function sqlSet(db, userId, id, sessionId, payload, now) { return db.prepare('INSERT INTO workout_sets (id, user_id, session_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, sessionId, JSON.stringify(payload), now, now); }
-function json(value, status = 200, headers = {}) {
+export function json(value, status = 200, headers = {}) {
   const responseHeaders = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   Object.entries(headers).forEach(([key, value]) => {
     asArray(value).forEach(item => responseHeaders.append(key, item));
   });
   return new Response(JSON.stringify(value), { status, headers: responseHeaders });
 }
-function error(code, status, headers) { return json({ code }, status, headers); }
+export function error(code, status, headers) { return json({ code }, status, headers); }
 function oauthErrorRedirect(request, code, cookies = [], mobileRedirect = null) {
   const url = new URL(mobileRedirect || '/', request.url);
   url.searchParams.set('auth_error', code);
