@@ -30,3 +30,7 @@ Mobil karar ve kullanıcı akışı: https://github.com/atacell85-cloud/reptrio-
 7. KVKK / Apple politika kontrolü; HIGH/CRITICAL bağımsız Guardian PASS, prod migration ve deploy için ayrı açık yetki.
 
 Resmî kaynaklar: https://developer.apple.com/support/offering-account-deletion-in-your-app/ ; https://www.kvkk.gov.tr/Icerik/5441/KISISEL-VERILERIN-SILINMESI-YOK-EDILMESI-VEYA-ANONIM-HALE-GETIRILMESI-HAKKINDA-YONETMELIK .
+
+## B44-10 kişisel dosya restore ile ayrım (2026-10-08)
+
+30 gün recovery aynı hesabın doğrulamalı reaktivasyonudur. B44-10 ise kullanıcıda bulunan REPTRIO-Verilerim.zip dosyasını yeni ACTIVE hesaba preview+onay sonrası taşır; eski hesap/auth token/provider binding yeniden oluşmaz, purge süresi uzamaz. Pending/purging/deleted hedef normal import/sync kabul etmez. Yeni kayıt önce boş, restore isteğe bağlıdır. Ortak detay `BUILD_44_BACKUP_RESTORE_CONTRACT.md` (mobile: `docs/tasks/`, backend: `docs/`).

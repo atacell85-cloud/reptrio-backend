@@ -73,3 +73,11 @@ If Planner proves local sync not sufficient, add authenticated `GET /api/export`
 Kullanıcı, silme onayı ardından 30 gün geri alınabilir saklamayı **varsayılan seçenek** olarak onayladı. Aynı ekranda hemen kalıcı silme yolu bulunacak. Pending hesap normal API/sync/AI kullanamaz, recovery yalnız yeni kimlik doğrulama ve açık onayla olur. Son onaydan itibaren 30 gün sonunda sunucu tarafından otomatik purge yapılır; cron, iş kuyruğu, Apple revoke, race condition, audit ve KVKK/App Store incelemesi tam zorunludur. E-posta doğrulaması tek kullanımlık **link** yöntemiyle devam eder. Bu karar önceki bölümlerdeki yalnız anında silme uygulaması varsayımlarını geçersiz kılar.
 
 Kanonik backend sözleşmesi: `docs/BUILD_44_ACCOUNT_RETENTION_CONTRACT.md`. Mobil tasarım: https://github.com/atacell85-cloud/reptrio-mobile/blob/build44/planning/docs/tasks/BUILD_44_30_DAY_ACCOUNT_RECOVERY.md. Bu dosya planlama kaydıdır; gerçek D1 veya servis değişmedi.
+
+## S4 / S8 — B44-08 export + YENİ B44-10 güvenli restore
+
+Kilitli ortak sözleşme: `docs/BUILD_44_BACKUP_RESTORE_CONTRACT.md`. Sessions/sets/programs/body measurements/structured metadata; bounded schema/manifest/checksum/ZIP/CSV validation ve credential projection, counts/conflict preview, explicit confirmation, atomik geri alınabilir no-data-loss merge ve idempotent cross-device sync zorunlu. Mevcut user_data sync davranışı incelenmeden client-only güvenli merge varsayımı yapılmaz. Önemli yeni import ledger/revision/transaction migration kararı önce kullanıcıya onaylatılır; schema runtime henüz değişmedi.
+
+Auth'den gelen ACTIVE user hedef scope'u belirler; backup owner/user IDs hedefi belirleyemez. Yeni ACTIVE hesap kendi dosyasını içe alabilir; eski deleted hesabın token/provider yetkisi dirilmez. Pending/purging hedef, stale device/replayed push ve recovery/purge ile eşzamanlı restore fail-closed. Atomiklik, undo concurrent user writes, tombstone, same-file/second-device dedup ve stats parity contract tests zorunludur. S4a pure validation önce, sonra snapshot/ZIP, preview, onaylı merge/sync. Export-only endpoint varsayımı bu gereksinimlerin yerine geçmez.
+
+B45-01 Hevy/Strong/başka workout export adapter'ları yalnız sonraki sürüm PLAN_ONLY; B44 backend haricî import implement etmez. HIGH bağımsız Guardian, odak testleri; production D1/deploy ve veri silme yetkisi verilmedi.
