@@ -37,8 +37,8 @@
 
 **Current code:** `worker/account-api.js deletionInfo/deleteAccount/deletionContext`, `worker/transactional-email.js`, `worker/password-reset.js`. Current `deletionContext` uses `oauth_accounts.created_at === users.created_at` to classify generated random password. This fails for legacy timing and password+linked accounts; it is not reliable identity provenance.
 
-**New contract pending user confirmation:**
-- Email/password account: user can request deletion without knowing current password. Preferred in-app 6-digit code from registered e-mail (TTL 10 min, limited attempts/rate, single-use hashed challenge, account/session+intent bound). Alternative secure one-use mail link exists; user selection pending. Final destructive screen warning and confirmation remains, optional export first.
+**Approved user choice (2026-10-08): email verification LINK, not code.**
+- Email/password account: user can request deletion without knowing current password. Use a single-use email verification link (proposed TTL 10 min); link visit is not account deletion and separate in-app final confirmation is required. Protect the link with expiration, replay control and account/session binding. Final destructive screen warning and confirmation remains, optional export first.
 - OAuth-created Apple/Google: never ask a meaningless generated password. Use live, authenticated session plus appropriate fresh provider check/Apple reauth when needed; Apple refresh tokens must be revoked before D1 wipe.
 - Explicit provenance in `users` (nullable legacy/migrated source, e.g. `credential_origin`, not boolean inferred from timestamp equality). Backfill only proven records; unknown legacy values cannot default to passwordless deletion without account re-verification.
 - Existing password login/reset, trusted OAuth account-linking and provider-sub user identity remain unchanged.
