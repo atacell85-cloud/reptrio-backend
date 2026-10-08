@@ -67,3 +67,9 @@ If Planner proves local sync not sufficient, add authenticated `GET /api/export`
 5. Independent Guardian (HIGH for import/consent, CRITICAL for deletion) + unit, integration, end-to-end tests.
 
 **Do not change:** workout set completion and stats semantics, HealthKit/Watch, OAuth trusted account linking, password reset/ZeptoMail sender, app bundle/team, payment/secrets, existing manual routines.
+
+## B44-04 — 30 günlük kurtarma varsayılanı (2026-10-08)
+
+Kullanıcı, silme onayı ardından 30 gün geri alınabilir saklamayı **varsayılan seçenek** olarak onayladı. Aynı ekranda hemen kalıcı silme yolu bulunacak. Pending hesap normal API/sync/AI kullanamaz, recovery yalnız yeni kimlik doğrulama ve açık onayla olur. Son onaydan itibaren 30 gün sonunda sunucu tarafından otomatik purge yapılır; cron, iş kuyruğu, Apple revoke, race condition, audit ve KVKK/App Store incelemesi tam zorunludur. E-posta doğrulaması tek kullanımlık **link** yöntemiyle devam eder. Bu karar önceki bölümlerdeki yalnız anında silme uygulaması varsayımlarını geçersiz kılar.
+
+Kanonik backend sözleşmesi: `docs/BUILD_44_ACCOUNT_RETENTION_CONTRACT.md`. Mobil tasarım: https://github.com/atacell85-cloud/reptrio-mobile/blob/build44/planning/docs/tasks/BUILD_44_30_DAY_ACCOUNT_RECOVERY.md. Bu dosya planlama kaydıdır; gerçek D1 veya servis değişmedi.
