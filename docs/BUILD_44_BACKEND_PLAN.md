@@ -81,3 +81,7 @@ Kilitli ortak sözleşme: `docs/BUILD_44_BACKUP_RESTORE_CONTRACT.md`. Sessions/s
 Auth'den gelen ACTIVE user hedef scope'u belirler; backup owner/user IDs hedefi belirleyemez. Yeni ACTIVE hesap kendi dosyasını içe alabilir; eski deleted hesabın token/provider yetkisi dirilmez. Pending/purging hedef, stale device/replayed push ve recovery/purge ile eşzamanlı restore fail-closed. Atomiklik, undo concurrent user writes, tombstone, same-file/second-device dedup ve stats parity contract tests zorunludur. S4a pure validation önce, sonra snapshot/ZIP, preview, onaylı merge/sync. Export-only endpoint varsayımı bu gereksinimlerin yerine geçmez.
 
 B45-01 Hevy/Strong/başka workout export adapter'ları yalnız sonraki sürüm PLAN_ONLY; B44 backend haricî import implement etmez. HIGH bağımsız Guardian, odak testleri; production D1/deploy ve veri silme yetkisi verilmedi.
+
+## 2026-10-08 — B kayıt bazlı authoritative storage/sync uygulama kararı
+
+Kullanıcı B'yi onayladı: programs/workout sessions/sets kayıtları snapshot projections yerine authoritative olacak; measurements ve structured metadata için bounded entity schema; revisions/tombstones/journal ve eski AppData API tüketicileri için güvenli adaptör. Legacy snapshot fallback, zero data deletion migration, gerçek SQL atomic concurrency guard, eski PWA unsupported mobile alan koruması/fail-closed; auth/isolation/deletion cleanup odak kanıtı zorunlu. Önemli yeni davranış çıkarsa sohbet içinde kullanıcıya sorulur. Backend runtime geliştirme yetkili, production migration/deploy değil.

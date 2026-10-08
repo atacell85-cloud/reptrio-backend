@@ -42,3 +42,7 @@ Her runtime commit `BUILD_CURRENT.md` + `DECISIONS.md` günceller. Mevcut rollou
 ## Build 45 sınırı
 
 B45-01 Hevy/Strong ve başka workout uygulamalarının CSV/export transferi yalnız sonraki sürüm. Source-specific adapter, identity reconciliation, unmatched custom moves, preview/correction, provenance ve fixture setleri ayrı kontrat ister. B44 içinde haricî import implement etme; mevcut AI program import'u farklı özelliktir ve parser semantiği korunur.
+
+## 2026-10-08 — Onaylı backend mimarisi B
+
+Kullanıcı kayıt bazlı kalıcı depolama/sync yoluna devam etmeyi onayladı. Tek all-account JSON satırının D1 boyut sınırı kaldırılacak; tek kayıt/platform bütçeleri yine bounded kalacak. Revision check + domain writes + operation journal atomik; legacy fallback/capability koruması veri kaybına yol açamaz. Bu onay yalnız implementation/schema dosyaları/production dışı test içindir; production migration/deploy/build/veri silme yetkisi değildir.
