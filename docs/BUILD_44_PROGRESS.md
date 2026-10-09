@@ -1,4 +1,4 @@
-# Build 44 backend ilerleme — 2026-10-08
+# Build 44 backend ilerleme — 2026-10-09
 
 B44-08 ZIP JSON+CSV ve B44-10 güvenli kişisel yedek restore son onaylı kapsamı kaydedildi; `BUILD_44_BACKUP_RESTORE_CONTRACT.md` mobil kontratla eşleşir. Runtime/schema NOT_STARTED, tests NOT_RUN, Guardian PENDING; deploy/migration/veri silme yapılmadı. B45-01 source-specific external workout transfer ayrı sonraki sürüm PLAN_ONLY. Sonraki: mevcut sync transaction/identity/account-status kaynak incelemesi, önemli schema kararı için kullanıcı onayı ve küçük feature branch'te odak testleri.
 
@@ -63,3 +63,13 @@ Corrected P2 final verification: focus PASS, full `npm test` EXIT0 (`/private/tm
 Tam bağımsız Guardian **GEÇTİ**, frozen17 manifest `0a94e9dfe0270517f94943c54972aa6031238b0096d1d4f8f18de1230c1f0561`. Önceki DURDURULDU tarihsel kaydı korunur; P2 boyut açığı düzeltilmiş sürümün tamamı yeniden incelendi. Independent full npm EXIT0 `/private/tmp/reptrio-b44-guardian-phase2a-p2-full.log`, focus ve tüm adversarial kontroller PASS. Kendi normal eski producer23.009B örneği artık413/zero payload/batch/writes; bağımsız escaped near-limit transfer3.792.306B SQLbound ile aynı. Same-fetch revision/token/blocked/deleted races zero payload. 70.006 kayıt exact paging, signed64/cursor completeness, sequential order oracle, CAS/receipt races/rollback, schema5/unknown/tombstone/cleanup ve toplam10 mutant PASS. Syntax8/diff PASS; mechanical NOT_AVAILABLE.
 
 Parent sonrasında yalnız bu kabul kayıtlarını ekledi; denetlenen runtime kaynakları değişmedi. Bu backend dilimi commit/push için kabul edildi; tüm B44-08/B44-10 hâlâ PARTIAL. Sonraki staged publisher + personal restore/journal/undo, ardından native entegrasyon. Production migration/deploy, native build/TestFlight/veri silme yetkisi verilmedi veya uygulanmadı.
+
+## 2026-10-09 — İlk kayıt depolama dilimi kabul edildi
+
+`feat/build44-record-storage@a25046df171c30dd70bc790db82ae764cb49bda6` commit/push tamamlandı; taslak PR4 https://github.com/atacell85-cloud/reptrio-backend/pull/4 (base build44/planning, merge edilmedi). Additive migration0008 yalnız dosya/yerel fixture kapsamındadır. Tek record authority, atomik revision/token CAS, durable tombstones, legacy read ve kayıp korumalı eski API uyumluluğu uygulanmıştır.
+
+Taze tam bağımsız HIGH Guardian GEÇTİ. Full npm test EXIT0, gerçek SQLite yarış/rollback/bütçe kontrolleri, beş kritik mutant, PWA null retry 1→2→3, phone/Watch undo ve account deletion FK on/off/external cleanup öncesi schema gates PASS. Mechanical test:change-guardian backend'de NOT_AVAILABLE.
+
+Sonraki küçük dal `feat/build44-record-transport`, acceptedbase a25046d: paged raw record reads, bounded complete-root mutations, signed cursors/order ve retry receipts. Planner yedi bölüm etki haritası verdi; implementasyon başladı, kabul henüz yok. Ardından staged normal publisher ve personal restore/journal/undo; sonrasında native akış/local hydration/stats. Tam B44-08/B44-10 PARTIAL.
+
+Production migration/deploy, iOS build/TestFlight veya gerçek kullanıcı verisi silme yapılmadı. Record-aware emergency rollback artifact yayın kapısı olarak açık kalır. B45 external adapters PLAN_ONLY.
