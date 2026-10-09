@@ -19,7 +19,9 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password"]
   },
+  "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
+    "RECORD_TRANSPORT_ENABLED": "true",
     "OPENAI_IMPORT_MODEL": "gpt-4.1-mini",
     "OPENAI_IMPORT_TIMEOUT_MS": "90000",
     "OPENAI_IMPORT_MAX_RETRIES": "2",

@@ -83,7 +83,7 @@ for (const hard of [false,true]) {
 }
 // Missing additive migration is readable legacy-only; writes fail closed and capabilities is actionable.
 {
-  const f=await fixture({migrationsUpTo:'0007_password_reset_tokens.sql'});const d=data();f.seedLegacy(d,3);f.db.resetMetrics();assert.deepEqual((await f.pull()).data,d);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await code(await f.push(d,3)),[503,'SYNC_STORAGE_MIGRATION_REQUIRED']);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await (await f.call('capabilities')).json(),{storageSchemaVersion:1,writable:false,code:'SYNC_STORAGE_MIGRATION_REQUIRED'});
+  const f=await fixture({migrationsUpTo:'0007_password_reset_tokens.sql'});const d=data();f.seedLegacy(d,3);f.db.resetMetrics();assert.deepEqual((await f.pull()).data,d);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await code(await f.push(d,3)),[503,'SYNC_STORAGE_MIGRATION_REQUIRED']);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await (await f.call('capabilities')).json(),{storageSchemaVersion:1,writable:false,recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,code:'SYNC_STORAGE_MIGRATION_REQUIRED'});
 }
 {
   const f=await fixture();f.db.raw.exec('DROP TABLE sync_records');f.db.resetMetrics();assert.deepEqual(await code(await f.push(data())),[503,'SYNC_STORAGE_SCHEMA_UNSUPPORTED']);assert.equal(f.db.metrics.writes,0);
