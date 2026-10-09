@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import worker from '../worker/index.js';
-import { openProviderToken } from '../worker/account-api.js';
+import { openProviderToken, sealProviderToken, tokenDigest } from '../worker/account-api.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
 
 // Issue #6 (App Review Guideline 5.1.1(v)): provider-aware account deletion on real SQLite with the repository
@@ -74,7 +74,7 @@ const env = {
 const call = (path, init = {}, overrideEnv = env) => worker.fetch(new Request(`${ORIGIN}${path}`, init), overrideEnv, { waitUntil() {} });
 const authed = (token, init = {}) => ({ ...init, headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile', Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
 const deleteRequest = (token, payload) => authed(token, { method: 'POST', body: JSON.stringify(payload) });
-const USER_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
+const USER_TABLES = ['sync_records', 'sync_account_state', 'import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
 const footprint = userId => Object.fromEntries([...USER_TABLES.map(table => [table, db.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`, userId)[0].n]), ['users', db.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', userId)[0].n]]);
 const empty = Object.fromEntries([...USER_TABLES, 'users'].map(table => [table, 0]));
 
@@ -122,10 +122,17 @@ async function appleReauth(token, subject, email, refreshToken, ticketOverride =
 // Gives the account data in every user table: sync payload (programs, sessions, sets, settings with profile photo),
 // an import job with an OpenAI response id, an unused mobile OAuth code and a password reset link.
 async function seed(user, tag) {
-  const data = { programs: [{ id: `p-${tag}` }], sessions: [{ id: `s-${tag}`, sets: { e1: { 1: { weight: '50', reps: '5', completed: true } } } }], settings: { profile: { displayName: tag, avatarDataUrl: 'data:image/jpeg;base64,AAAA' } } };
+  const data = { schemaVersion: 8, programs: [{ id: `p-${tag}` }], sessions: [{ id: `s-${tag}`, sets: { e1: { 1: { weight: '50', reps: '5', completed: true } } } }], settings: { profile: { displayName: tag, avatarDataUrl: 'data:image/jpeg;base64,AAAA' } } };
   const push = await call('/api/sync/push', authed(user.token, { method: 'POST', body: JSON.stringify({ data, syncVersion: 0 }) }));
   assert.equal(push.status, 200);
   const now = new Date().toISOString();
+  // Legacy projections are intentionally retained without dual write. Seed them independently so deletion proves
+  // both generations are cleaned, including with foreign keys disabled.
+  db.raw.prepare('INSERT INTO user_data (user_id,payload_json,sync_version,updated_at) VALUES (?,?,0,?)').run(user.id,JSON.stringify(data),now);
+  for (const table of ['programs','workout_sessions']) db.raw.prepare(`INSERT INTO ${table} (id,user_id,payload_json,created_at,updated_at) VALUES (?,?,?,?,?)`).run(`${table}-${tag}`,user.id,'{}',now,now);
+  db.raw.prepare('INSERT INTO workout_sets (id,user_id,session_id,payload_json,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(`set-${tag}`,user.id,`s-${tag}`,'{}',now,now);
+  db.raw.prepare('INSERT INTO user_settings (user_id,payload_json,updated_at) VALUES (?,?,?)').run(user.id,'{}',now);
+  db.raw.prepare('INSERT INTO sync_metadata (user_id,sync_version,updated_at) VALUES (?,0,?)').run(user.id,now);
   db.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, openai_response_id, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?, ?)").run(`job-${tag}`, user.id, `resp_${tag}`, now, now);
   db.raw.prepare('INSERT INTO mobile_oauth_codes (id, user_id, code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`code-${tag}`, user.id, `hash-${tag}`, now, now);
   db.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${tag}`, user.id, `reset-hash-${tag}`, now, now);
@@ -351,6 +358,8 @@ const bystanderFootprint = footprint(bystander.id);
     legacy.raw.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, `${id}@example.test`, 'h', 's', now, deleted);
     legacy.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES ('google', ?, ?, ?, ?, ?)").run(`sub-${id}`, id, `${id}@example.test`, now, now);
     legacy.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?)").run(`job-${id}`, id, now, now);
+    legacy.raw.prepare("INSERT INTO sync_account_state (user_id,storage_schema_version,revision,write_token,updated_at) VALUES (?,1,1,'seed',?)").run(id,now);
+    legacy.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'metadata','seed',0,'{}','null',1,1)").run(id);
     legacy.raw.prepare('INSERT INTO user_data (user_id, payload_json, updated_at) VALUES (?, ?, ?)').run(id, '{}', now);
     legacy.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${id}`, id, `reset-hash-${id}`, now, now);
   }
@@ -358,7 +367,36 @@ const bystanderFootprint = footprint(bystander.id);
   assert.ok(!fs.readdirSync(new URL('../migrations/', import.meta.url)).some(file => /purge/i.test(file)), 'the irreversible purge is not an automatic migration');
   legacy.exec(fs.readFileSync(new URL('./maintenance/purge-soft-deleted-accounts.sql', import.meta.url), 'utf8'));
   const count = (table, column, id) => legacy.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`, id)[0].n;
-  assert.deepEqual(['users:id', 'oauth_accounts:user_id', 'import_jobs:user_id', 'user_data:user_id', 'password_reset_tokens:user_id'].map(spec => { const [table, column] = spec.split(':'); return [count(table, column, 'gone'), count(table, column, 'kept')]; }), [[0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]);
+  assert.deepEqual(['users:id', 'oauth_accounts:user_id', 'import_jobs:user_id', 'user_data:user_id', 'password_reset_tokens:user_id','sync_records:user_id','sync_account_state:user_id'].map(spec => { const [table, column] = spec.split(':'); return [count(table, column, 'gone'), count(table, column, 'kept')]; }), [[0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]);
+}
+
+// Storage compatibility gate runs before Apple/OpenAI external cleanup. Legacy-only databases use the
+// original table list; partial/unsupported schema/version cannot partially revoke or delete a user's data.
+for (const mode of ['missing','ready','partial-records','partial-state','bad-columns','unsupported-version']) {
+  const storageDb=createD1({foreignKeys,...(mode==='missing'?{migrationsUpTo:'0007_password_reset_tokens.sql'}:{})});const id=`storage-${mode}`;const now='2026-10-09T00:00:00.000Z';const sessionToken=`storage-local-${mode}`;
+  storageDb.raw.prepare('INSERT INTO users (id,email,password_hash,password_salt,created_at) VALUES (?,?,?,?,?)').run(id,`${id}@example.test`,'h','s',now);
+  storageDb.raw.prepare('INSERT INTO auth_sessions (id,user_id,token_hash,created_at,expires_at) VALUES (?,?,?,?,?)').run(`auth-${id}`,id,await tokenDigest(sessionToken),now,'2099-01-01');
+  storageDb.raw.prepare("INSERT INTO oauth_accounts (provider,provider_subject,user_id,email,created_at,last_login_at,refresh_token_ciphertext,refresh_token_updated_at) VALUES ('apple',?,?,?,?,?,?,?)").run(`subject-${id}`,id,`${id}@example.test`,now,now,await sealProviderToken({privateKey:applePrivateKey},'apple',`subject-${id}`,`refresh-${id}`),now);
+  storageDb.raw.prepare("INSERT INTO import_jobs (id,user_id,status,source_json,normalized_document_json,openai_response_id,created_at,updated_at) VALUES (?,?,'done','{}','{}',?,?,?)").run(`job-${id}`,id,`response-${id}`,now,now);
+  storageDb.raw.prepare('INSERT INTO user_data (user_id,payload_json,sync_version,updated_at) VALUES (?,?,0,?)').run(id,'{"keep":"personal"}',now);
+  if(mode!=='missing'){
+    storageDb.raw.prepare("INSERT INTO sync_account_state (user_id,storage_schema_version,revision,write_token,updated_at) VALUES (?,?,1,'fixture',?)").run(id,mode==='unsupported-version'?99:1,now);
+    // Valid SQL JSON, deliberately not a complete record codec: deletion must inspect only state/schema.
+    storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'metadata','meta',0,?,'null',1,1)").run(id,JSON.stringify({field:'sessions',collection:true}));
+    storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'session','session',0,?,'{}',1,1)").run(id,JSON.stringify({sets:'absent'}));
+    if(mode==='partial-records')storageDb.raw.exec('DROP TABLE sync_records');
+    if(mode==='partial-state')storageDb.raw.exec('DROP TABLE sync_account_state');
+    if(mode==='bad-columns')storageDb.raw.exec('DROP TABLE sync_records; CREATE TABLE sync_records (user_id TEXT)');
+  }
+  const storageEnv={...env,DB:storageDb};const tables=storageDb.rows("SELECT name FROM sqlite_master WHERE type='table'").map(row=>row.name);const dump=()=>JSON.stringify(tables.map(table=>storageDb.rows(`SELECT * FROM ${table}`)));const before=dump();const revokes=net.revokes.length;const openaiDeletes=net.openaiDeletes.length;storageDb.resetMetrics();
+  // Confirmation failure still precedes the new gate and every external operation.
+  const unconfirmed=await call('/api/auth/delete',deleteRequest(sessionToken,{}),storageEnv);assert.equal(unconfirmed.status,400);assert.equal(storageDb.metrics.writes,0);assert.equal(net.revokes.length,revokes);assert.equal(net.openaiDeletes.length,openaiDeletes);
+  const result=await call('/api/auth/delete',deleteRequest(sessionToken,{confirm:'DELETE'}),storageEnv);
+  if(mode==='missing'||mode==='ready'){
+    assert.equal(result.status,200,`${mode}: supported deletion`);assert.equal(net.revokes.length,revokes+1);assert.equal(net.openaiDeletes.length,openaiDeletes+1);assert.ok(tables.every(table=>storageDb.rows(`SELECT * FROM ${table}`).length===0),`${mode}: explicit cleanup all tables with FK ${foreignKeys}`);
+  }else{
+    assert.deepEqual([result.status,(await result.json()).code],[503,'SYNC_STORAGE_SCHEMA_UNSUPPORTED']);assert.equal(storageDb.metrics.writes,0,`${mode}: zero DB delete`);assert.equal(dump(),before);assert.equal(net.revokes.length,revokes,`${mode}: zero Apple revoke`);assert.equal(net.openaiDeletes.length,openaiDeletes,`${mode}: zero OpenAI delete`);
+  }
 }
 
 // ---- 11. Web Apple sign-in (cookie session, no mobile client) also stores the token; IVs are random; a re-pasted

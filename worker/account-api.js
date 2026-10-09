@@ -1,6 +1,6 @@
+import { recordPull, recordPush, recordCapabilities, storageCleanupMode } from './record-sync-storage.js';
 const encoder = new TextEncoder();
 const SESSION_DAYS = 30;
-const MAX_SYNC_BYTES = 4_000_000;
 const OAUTH_STATE_COOKIE = 'aks_oauth_state';
 const OAUTH_NONCE_COOKIE = 'aks_oauth_nonce';
 const OAUTH_CLIENT_COOKIE = 'aks_oauth_client';
@@ -27,6 +27,7 @@ export async function handleAccountRequest(request, env, pathname) {
   if (pathname === '/api/me') return me(request, env);
   if (pathname === '/api/sync/pull') return pull(request, env);
   if (pathname === '/api/sync/push') return push(request, env);
+  if (pathname === '/api/sync/capabilities') return capabilities(request, env);
   return null;
 }
 
@@ -254,34 +255,20 @@ async function me(request, env) {
 async function pull(request, env) {
   if (request.method !== 'GET') return error('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
   const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
-  const row = await env.DB.prepare('SELECT payload_json, sync_version, updated_at FROM user_data WHERE user_id = ?').bind(user.id).first();
-  return json({ data: row ? JSON.parse(row.payload_json) : null, syncVersion: row?.sync_version || 0, updatedAt: row?.updated_at || null });
+  return recordPull(env, user.id);
+}
+
+async function capabilities(request, env) {
+  if (request.method !== 'GET') return error('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
+  const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
+  return recordCapabilities(env, user.id);
 }
 
 async function push(request, env) {
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
   const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
-  const payload = await body(request); const serialized = JSON.stringify(payload?.data);
-  if (!payload?.data || bytes(serialized) > MAX_SYNC_BYTES) return error('SYNC_PAYLOAD_INVALID', 413);
-  const now = new Date().toISOString();
-  const existing = await env.DB.prepare('SELECT sync_version FROM user_data WHERE user_id = ?').bind(user.id).first();
-  const expectedVersion = Number(payload.syncVersion || 0);
-  if (existing && expectedVersion !== Number(existing.sync_version)) return error('SYNC_CONFLICT', 409, { 'X-Sync-Version': String(existing.sync_version) });
-  const version = Number(existing?.sync_version || 0) + 1;
-  const records = materializeRecords(env.DB, user.id, payload.data, now);
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO user_data (user_id, payload_json, sync_version, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET payload_json = excluded.payload_json, sync_version = excluded.sync_version, updated_at = excluded.updated_at').bind(user.id, serialized, version, now),
-    env.DB.prepare('INSERT INTO user_settings (user_id, payload_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at').bind(user.id, JSON.stringify(payload.data.settings || {}), now),
-    env.DB.prepare('INSERT INTO sync_metadata (user_id, sync_version, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET sync_version = excluded.sync_version, updated_at = excluded.updated_at').bind(user.id, version, now),
-    env.DB.prepare('DELETE FROM programs WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM workout_sessions WHERE user_id = ?').bind(user.id),
-    env.DB.prepare('DELETE FROM workout_sets WHERE user_id = ?').bind(user.id),
-    ...records.programs,
-    ...records.sessions,
-    ...records.sets
-  ]);
-  return json({ ok: true, syncVersion: version, updatedAt: now });
+  return recordPush(request, env, user.id);
 }
 
 // ---- Apple re-authorization for account deletion (legacy Apple users without a stored token).
@@ -342,6 +329,10 @@ async function deleteAccount(request, env) {
   if (!context) return error('AUTH_REQUIRED', 401);
   if (context.requiresPassword && !(validPassword(password) && constantEqual(await passwordDigest(password, context.passwordSalt), context.passwordHash))) return error('AUTH_INVALID_CREDENTIALS', 401);
 
+  let cleanupMode;
+  try { cleanupMode = await storageCleanupMode(env.DB,user.id); }
+  catch (cause) { return error(cause.code || 'SYNC_STORAGE_UNAVAILABLE',cause.status || 503); }
+
   // Sign in with Apple: revoke every linked authorization before any data is removed.
   if (context.apple.length) {
     const config = oauthConfig(env, 'apple');
@@ -363,7 +354,7 @@ async function deleteAccount(request, env) {
   await deleteStoredImportResponses(env, user.id);
 
   try {
-    await env.DB.batch(ACCOUNT_TABLES.map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
+    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
       .concat(env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id)));
   } catch (cause) {
     console.error(JSON.stringify({ event: 'account_delete_failed', stage: 'database', message: String(cause?.message || cause) }));
@@ -373,8 +364,9 @@ async function deleteAccount(request, env) {
   return json({ ok: true }, 200, { 'Set-Cookie': clearCookie() });
 }
 
-// Every table with a user_id column (migrations 0001–0007). `users` is deleted last, in the same batch.
-const ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
+// Every table with a user_id column (migrations 0001–0008). `users` is deleted last, in the same batch.
+const LEGACY_ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
+const ACCOUNT_TABLES = ['sync_records','sync_account_state',...LEGACY_ACCOUNT_TABLES];
 
 async function deletionContext(env, userId) {
   const user = await env.DB.prepare('SELECT id, password_hash, password_salt, created_at FROM users WHERE id = ? AND deleted_at IS NULL').bind(userId).first();
@@ -497,15 +489,6 @@ function sessionCookie(token, expires) { return `aks_session=${token}; Path=/; H
 function clearCookie() { return 'aks_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'; }
 function shortCookie(name, value) { return `${name}=${value}; Path=/api/auth/oauth/; HttpOnly; Secure; SameSite=None; Max-Age=600`; }
 function clearNamedCookie(name) { return `${name}=; Path=/api/auth/oauth/; HttpOnly; Secure; SameSite=None; Max-Age=0`; }
-function bytes(value) { return encoder.encode(value).byteLength; }
-function materializeRecords(db, userId, data, now) {
-  const programs = (data.programs || []).filter(item => item?.id).map(item => sqlRecord(db, 'programs', userId, item.id, item, now));
-  const sessions = (data.sessions || []).filter(item => item?.id).map(item => sqlRecord(db, 'workout_sessions', userId, item.id, item, now));
-  const sets = (data.sessions || []).flatMap(session => Object.entries(session?.sets || {}).flatMap(([exerciseId, entries]) => Object.entries(entries || {}).map(([setNumber, entry]) => sqlSet(db, userId, `${session.id}:${exerciseId}:${setNumber}`, session.id, { exerciseId, setNumber: Number(setNumber), ...entry }, now))));
-  return { programs, sessions, sets };
-}
-function sqlRecord(db, table, userId, id, payload, now) { return db.prepare(`INSERT INTO ${table} (id, user_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`).bind(id, userId, JSON.stringify(payload), payload.createdAt || now, payload.updatedAt || now); }
-function sqlSet(db, userId, id, sessionId, payload, now) { return db.prepare('INSERT INTO workout_sets (id, user_id, session_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, sessionId, JSON.stringify(payload), now, now); }
 export function json(value, status = 200, headers = {}) {
   const responseHeaders = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   Object.entries(headers).forEach(([key, value]) => {
