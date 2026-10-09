@@ -58,7 +58,7 @@ for(const mode of ['missing','receipt-missing','bad-receipt','bad-state','versio
   const status=['missing','receipt-missing','bad-receipt','bad-state','version','disabled'].includes(mode)?503:mode==='deleted'?401:409;
   await zero(f,()=>f.call('records'),[status,code]);await zero(f,()=>f.mutation({}),[status,code]);
   if(mode==='deleted')continue;
-  f.db.resetMetrics();const caps=await ok(await f.call('capabilities'));assert.equal(caps.recordPaging,false);assert.equal(caps.rootDeltaSync,false);assert.equal(caps.personalRestoreProtocol,false);assert.ok(f.db.metrics.queries<=3);assert.equal(f.db.metrics.payloadRows,0);
+  f.db.resetMetrics();const caps=await ok(await f.call('capabilities'));assert.equal(caps.recordPaging,false);assert.equal(caps.rootDeltaSync,false);assert.equal(caps.personalRestoreProtocol,['receipt-missing','bad-receipt','legacy','disabled'].includes(mode)?1:false);assert.ok(f.db.metrics.queries<=3);assert.equal(f.db.metrics.payloadRows,0);
 }
 {
   const f=await fixture();await f.push(base());f.db.raw.exec('DELETE FROM auth_sessions');await zero(f,()=>f.call('records'),[401,'AUTH_REQUIRED']);await zero(f,()=>f.mutation({}),[401,'AUTH_REQUIRED']);
@@ -67,7 +67,7 @@ for(const mode of ['missing','receipt-missing','bad-receipt','bad-state','versio
 const big=await fixture();const large={schemaVersion:8,programs:[{id:'large-p',days:[]}],sessions:Array.from({length:5000},(_,i)=>session(`s${String(i).padStart(5,'0')}`,{group:Object.fromEntries(Array.from({length:13},(_,j)=>[`key${j}`,{id:`raw-${j}`,exerciseId:'unchanged',setNumber:j,weight:'80',reps:'8',note:'α'.repeat(20),completed:false}]))})),measurements:[],settings:{opaque:{keep:true}}};
 assert.ok(Buffer.byteLength(JSON.stringify(large))>10_000_000);seed(big,large);
 const all=await collect(big);assert.ok(all.rows.length>60_000);assert.deepEqual(assembleRecordData(all.rows),large);
-big.db.resetMetrics();const caps=await ok(await big.call('capabilities'));assert.equal(caps.recordPaging,true);assert.equal(caps.rootDeltaSync,true);assert.equal(caps.personalRestoreProtocol,false);assert.equal(big.db.metrics.queries,3);assert.equal(big.db.metrics.payloadRows,0);
+big.db.resetMetrics();const caps=await ok(await big.call('capabilities'));assert.equal(caps.recordPaging,true);assert.equal(caps.rootDeltaSync,true);assert.equal(caps.personalRestoreProtocol,1);assert.equal(caps.stagedRecordPublisher,1);assert.equal(big.db.metrics.queries,3);assert.equal(big.db.metrics.payloadRows,0);
 big.db.resetMetrics();const edited=structuredClone(large.sessions[2500]);edited.title='changed-middle';edited.sets.group.key6.weight='85';const receipt=await ok(await big.mutation({upserts:{sessions:[edited]}},1,'big-edit'));limits(big);assert.ok(big.db.metrics.payloadRows<=20);assert.ok(big.db.trace.every(entry=>!entry.sql.includes("'record' AS source")));assert.equal(receipt.ordinals[0].ordinal,2500);assert.equal(big.db.metrics.orderOnlyRows,0);console.log(`Single-root edit metrics: ${JSON.stringify(big.db.metrics)}`);
 const expected=structuredClone(large);expected.sessions[2500]=edited;assert.deepEqual(assembleRecordData((await collect(big)).rows),expected);
 console.log(`Large account: ${all.rows.length} records, ${Buffer.byteLength(JSON.stringify(large))} bytes; page max ${all.maxBytes} bytes/${all.maxQueries} queries; touched edit bounded <=20 payload rows.`);
@@ -228,8 +228,14 @@ for(const foreignKeys of [true,false]){
 {
   const f=await fixture({migrationsUpTo:'0008_record_sync_storage.sql'});f.db.resetMetrics();await cleanupMutationReceipts(f.env);assert.equal(f.db.metrics.queries,1);assert.equal(f.db.metrics.writes,0);
 }
+// A's legacy-client delta previously synthesized schemaVersion8; restored9 must fail before publication.
+{
+ const f=await fixture();seed(f,{...base(),schemaVersion:9});
+ await zero(f,()=>f.mutation({upserts:{sessions:[{...base().sessions[0],title:'unsafe downgrade'}]}}),[409,'SYNC_CLIENT_UPGRADE_REQUIRED']);
+ assert.equal(f.db.rows('SELECT COUNT(*)AS n FROM sync_mutation_receipts')[0].n,0);
+}
 // Five critical semantic mutants fail observable invariants using the same SQLite rather than source assertions.
-let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replace("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href));
+let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replaceAll("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href));
 async function mutant(from,to){assert.ok(source.includes(from));return import(`data:text/javascript;base64,${Buffer.from(source.replace(from,to)).toString('base64')}`);}
 const direct=(m,f,change={},rev=1)=>m.recordMutation(new Request(`${ORIGIN}/api/sync/records/mutations`,{method:'POST',body:JSON.stringify({mutationId:'mutant',baseRevision:rev,clientSchemaVersion:8,...change})}),f.env,f.id);
 {

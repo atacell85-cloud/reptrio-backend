@@ -1,3 +1,4 @@
+import { cleanupPersonalOperations } from './personal-restore-api.js';
 import { cleanupMutationReceipts } from './record-sync-transport.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
 import { handlePasswordResetRequest } from './password-reset.js';
@@ -6,7 +7,7 @@ const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 export default {
-  async scheduled(event,env,ctx) { ctx.waitUntil(cleanupMutationReceipts(env)); },
+  async scheduled(event,env,ctx) { ctx.waitUntil(Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)])); },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/runtime-config.js') return runtimeConfig(request);

@@ -1,10 +1,11 @@
+import { storageJSON } from './record-sync-storage.js';
 import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (obj,key) => Object.hasOwn(obj,key);
 const fail = (code,status=409) => { throw Object.assign(new Error(code),{code,status}); };
-const json = (value,status=200) => new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
+const json = (value,status=200) => new Response(storageJSON(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 const reject = cause => json({code:typeof cause.code==='string' && cause.code.startsWith('SYNC_') ? cause.code : 'SYNC_STORAGE_UNAVAILABLE'},cause.status || 503);
 const fields = { programs:'program',sessions:'session',measurements:'measurement' };
 const rootKinds = Object.values(fields);
@@ -204,6 +205,7 @@ export async function recordMutation(request,env,userId) {
     const metadataFields=new Set(['schemaVersion',...touched.map(item=>item.field),...Object.keys(p.metadata || {})]);
     const oldRows=await touchedRows(db,userId,touched,[...metadataFields].map(idKey),state);
     const previous=assembleRecordData(oldRows);
+    if(previous.schemaVersion===9)fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     // Schema 5 cannot edit an account containing any mobile-only root, even if that root is untouched.
     const maxima=(await db.prepare(`SELECT kind,MAX(ordinal) AS maximum,COUNT(*) AS count,MAX(CASE WHEN tombstone=0 AND ((kind='session' AND COALESCE(json_extract(address_json,'$.container'),'absent')<>'array') OR (kind='program' AND COALESCE(json_extract(payload_json,'$.schemaVersion'),'absent')<>'1.0')) THEN 1 ELSE 0 END) AS pwa_incompatible FROM sync_records WHERE user_id=? GROUP BY kind`).bind(userId).all()).results;
     if (p.clientSchemaVersion===5 && (previous.schemaVersion!==5 || maxima.some(row=>row.pwa_incompatible) || touched.some(item=>item.kind==='measurement'))) fail('SYNC_CLIENT_UPGRADE_REQUIRED');

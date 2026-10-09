@@ -74,7 +74,7 @@ const env = {
 const call = (path, init = {}, overrideEnv = env) => worker.fetch(new Request(`${ORIGIN}${path}`, init), overrideEnv, { waitUntil() {} });
 const authed = (token, init = {}) => ({ ...init, headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile', Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
 const deleteRequest = (token, payload) => authed(token, { method: 'POST', body: JSON.stringify(payload) });
-const USER_TABLES = ['sync_mutation_receipts', 'sync_records', 'sync_account_state', 'import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
+const USER_TABLES = ['personal_restore_identity_journal','personal_restore_records','personal_restore_roots','personal_restore_chunks','personal_restore_operations','sync_mutation_receipts', 'sync_records', 'sync_account_state', 'import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
 const footprint = userId => Object.fromEntries([...USER_TABLES.map(table => [table, db.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`, userId)[0].n]), ['users', db.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', userId)[0].n]]);
 const empty = Object.fromEntries([...USER_TABLES, 'users'].map(table => [table, 0]));
 
@@ -372,7 +372,7 @@ const bystanderFootprint = footprint(bystander.id);
 
 // Storage compatibility gate runs before Apple/OpenAI external cleanup. Legacy-only databases use the
 // original table list; partial/unsupported schema/version cannot partially revoke or delete a user's data.
-for (const mode of ['missing','receipt-missing','ready','bad-receipt','partial-records','partial-state','bad-columns','unsupported-version']) {
+for (const mode of ['missing','receipt-missing','ready','bad-receipt','partial-records','partial-state','bad-columns','unsupported-version','partial-personal','bad-personal','missing-personal-index','personal-ready-missing-receipts']) {
   const storageDb=createD1({foreignKeys,...(mode==='missing'?{migrationsUpTo:'0007_password_reset_tokens.sql'}:mode==='receipt-missing'?{migrationsUpTo:'0008_record_sync_storage.sql'}:{})});const id=`storage-${mode}`;const now='2026-10-09T00:00:00.000Z';const sessionToken=`storage-local-${mode}`;
   storageDb.raw.prepare('INSERT INTO users (id,email,password_hash,password_salt,created_at) VALUES (?,?,?,?,?)').run(id,`${id}@example.test`,'h','s',now);
   storageDb.raw.prepare('INSERT INTO auth_sessions (id,user_id,token_hash,created_at,expires_at) VALUES (?,?,?,?,?)').run(`auth-${id}`,id,await tokenDigest(sessionToken),now,'2099-01-01');
@@ -385,9 +385,13 @@ for (const mode of ['missing','receipt-missing','ready','bad-receipt','partial-r
     storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'metadata','meta',0,?,'null',1,1)").run(id,JSON.stringify({field:'sessions',collection:true}));
     storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'session','session',0,?,'{}',1,1)").run(id,JSON.stringify({sets:'absent'}));
     if(mode==='ready')storageDb.raw.prepare("INSERT INTO sync_mutation_receipts VALUES (?,'fixture','h','p',0,1,'{}',?,'2099-01-01')").run(id,now);
+    if(mode==='personal-ready-missing-receipts')storageDb.raw.exec('DROP TABLE sync_mutation_receipts');
     if(mode==='bad-receipt')storageDb.raw.exec('DROP TABLE sync_mutation_receipts; CREATE TABLE sync_mutation_receipts (user_id TEXT)');
     if(mode==='partial-records')storageDb.raw.exec('DROP TABLE sync_records');
     if(mode==='partial-state')storageDb.raw.exec('DROP TABLE sync_account_state');
+    if(mode==='partial-personal')storageDb.raw.exec('DROP TABLE personal_restore_chunks');
+    if(mode==='bad-personal')storageDb.raw.exec('DROP TABLE personal_restore_identity_journal; CREATE TABLE personal_restore_identity_journal(user_id TEXT)');
+    if(mode==='missing-personal-index')storageDb.raw.exec('DROP INDEX personal_restore_journal_target');
     if(mode==='bad-columns')storageDb.raw.exec('DROP TABLE sync_records; CREATE TABLE sync_records (user_id TEXT)');
   }
   const storageEnv={...env,DB:storageDb};const tables=storageDb.rows("SELECT name FROM sqlite_master WHERE type='table'").map(row=>row.name);const dump=()=>JSON.stringify(tables.map(table=>storageDb.rows(`SELECT * FROM ${table}`)));const before=dump();const revokes=net.revokes.length;const openaiDeletes=net.openaiDeletes.length;storageDb.resetMetrics();
@@ -395,7 +399,7 @@ for (const mode of ['missing','receipt-missing','ready','bad-receipt','partial-r
   const unconfirmed=await call('/api/auth/delete',deleteRequest(sessionToken,{}),storageEnv);assert.equal(unconfirmed.status,400);assert.equal(storageDb.metrics.writes,0);assert.equal(net.revokes.length,revokes);assert.equal(net.openaiDeletes.length,openaiDeletes);
   storageDb.resetMetrics();
   const result=await call('/api/auth/delete',deleteRequest(sessionToken,{confirm:'DELETE'}),storageEnv);
-  assert.ok(storageDb.metrics.queries<=24,`${mode}: deletion invocation budget`);
+  assert.ok(storageDb.metrics.queries<=29,`${mode}: deletion invocation budget`);
   if(mode==='missing'||mode==='receipt-missing'||mode==='ready'){
     assert.equal(result.status,200,`${mode}: supported deletion`);assert.equal(net.revokes.length,revokes+1);assert.equal(net.openaiDeletes.length,openaiDeletes+1);assert.ok(tables.every(table=>storageDb.rows(`SELECT * FROM ${table}`).length===0),`${mode}: explicit cleanup all tables with FK ${foreignKeys}`);
   }else{
