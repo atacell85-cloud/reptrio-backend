@@ -32,7 +32,7 @@ export function createD1(options = {}) {
     metrics.maxReturnedBytes = Math.max(metrics.maxReturnedBytes,Buffer.byteLength(encoded));
     for (const row of rows) { metrics.maxReturnedRowBytes=Math.max(metrics.maxReturnedRowBytes,Buffer.byteLength(JSON.stringify(row))); if (row?.payload_json!==null && row?.payload_json!==undefined) metrics.payloadRows++; }
   };
-  const check = sql => { if (failOn && failOn.test(sql)) throw new Error(`D1_INJECTED_FAILURE: ${sql}`); };
+  const check = sql => { options.beforeStatement?.(sql); if (failOn && failOn.test(sql)) throw new Error(`D1_INJECTED_FAILURE: ${sql}`); };
   const statement = (sql, values = []) => ({
     sql,
     values,

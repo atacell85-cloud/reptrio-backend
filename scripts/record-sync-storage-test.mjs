@@ -234,10 +234,23 @@ for (const hero of ['female','male',{privateFuture:'keep'},'future-choice']) {
   assert.throws(()=>splitData({sessions:[{id:'s',sets:{x:null}}]}),/SYNC_SET_CONTAINER_UNSUPPORTED/);
   await assert.rejects(f.db.prepare('SELECT ?').bind('x'.repeat(2_000_001)).first(),/D1_LIMIT_EXCEEDED/);
 }
+// B personal staging uses the same raw serializer and additive schema gates without changing record authority.
+{
+  const {storageJSON,personalRestoreSchemaStatus,storageTables}=await import('../worker/record-sync-storage.js');
+  const f=await fixture();assert.equal(personalRestoreSchemaStatus(await storageTables(f.db)),'ready');
+  assert.equal(storageJSON({b:-0,a:[null,-0]}),'\x7b"b":-0,"a":[null,-0]}');
+  f.db.exec('DROP INDEX personal_restore_record_target');
+  await assert.rejects(()=>storageTables(f.db),e=>e.code==='SYNC_STORAGE_SCHEMA_UNSUPPORTED');
+}
+// A legacy schema8 snapshot may not stamp a restored portable-provenance9 account down to8.
+{
+ const f=await fixture(),d={...data(),schemaVersion:9};f.seedLegacy(d,0);
+ await noWrite(f,()=>f.push({...d,schemaVersion:8},0),[409,'SYNC_CLIENT_UPGRADE_REQUIRED']);
+}
 // Critical semantic mutants execute against the same real SQL adapter. A mutant is killed only when its altered
 // behavior violates an observable invariant; a source-string presence check is not the result.
 const moduleSource=readFileSync(new URL('../worker/record-sync-storage.js',import.meta.url),'utf8');
-async function mutant(from,to) { assert.ok(moduleSource.includes(from));return import(`data:text/javascript;base64,${Buffer.from(moduleSource.replace(from,to)).toString('base64')}`); }
+async function mutant(from,to) { assert.ok(moduleSource.includes(from));return import(`data:text/javascript;base64,${Buffer.from(moduleSource.replace(from,to).replace(/from '(\.\/[^']+)'/g,(_,path)=>`from '${new URL(path,new URL('../worker/record-sync-storage.js',import.meta.url))}'`)).toString('base64')}`); }
 const direct=(module,f,d,rev=0)=>module.recordPush(new Request(`${ORIGIN}/api/sync/push`,{method:'POST',body:JSON.stringify({data:d,syncVersion:rev})}),{DB:f.db},f.id);
 let killed=0;
 {

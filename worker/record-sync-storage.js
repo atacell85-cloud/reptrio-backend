@@ -1,4 +1,11 @@
+import {WIRE_RULES} from './personal-backup-contract.js';
 // The wire AppData remains raw JSON. This adapter owns storage, not client normalization/export projection.
+// Preserve validated raw scalar signs without changing A's canonical request/receipt hashes.
+export function storageJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(item => storageJSON(item) ?? 'null').join(',')}]`;
+  if (value !== null && typeof value === 'object') return `{${Object.keys(value).filter(key => value[key] !== undefined).map(key=>`${JSON.stringify(key)}:${storageJSON(value[key])}`).join(',')}}`;
+  return typeof value === 'number' && Object.is(value,-0) ? '-0' : JSON.stringify(value);
+}
 const encoder = new TextEncoder();
 export const STORAGE_SCHEMA_VERSION = 1;
 export const LIMITS = Object.freeze({ dataBytes: 4_000_000, envelopeBytes: 4_100_000, rowBytes: 1_800_000, chunkBytes: 1_800_000, depth: 64, nodes: 200_000, records: 25_000, queries: 50 });
@@ -7,15 +14,16 @@ const size = value => encoder.encode(value).byteLength;
 const own = (obj, key) => Object.hasOwn(obj, key);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const fail = (code, status = 409) => { throw Object.assign(new Error(code), { code, status }); };
-const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+const response = (body, status = 200) => new Response(storageJSON(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 const rejection = cause => response({ code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }, cause.status || 503);
 const identity = (kind, key) => JSON.stringify([kind, key]);
 
 export async function storageTables(db) {
-  return (await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('sync_account_state','sync_records','sync_mutation_receipts')").all()).results || [];
+  const tables=(await db.prepare("SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') AND name IN ('personal_restore_record_target','personal_restore_journal_target','sync_account_state','sync_records','sync_mutation_receipts','personal_restore_operations','personal_restore_roots','personal_restore_records','personal_restore_chunks','personal_restore_identity_journal')").all()).results || [];
+  if(personalRestoreSchemaStatus(tables)==='unsupported')fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);return tables;
 }
 export function recordSchemaStatus(tables) {
-  const rows = tables.filter(row => row.name !== 'sync_mutation_receipts');
+  const rows = tables.filter(row => ['sync_account_state','sync_records'].includes(row.name));
   if (!rows?.length) return 'missing';
   const required = { sync_account_state: ['user_id', 'storage_schema_version', 'revision', 'write_token', 'write_status', 'updated_at'], sync_records: ['user_id','kind','record_key','parent_key','ordinal','address_json','payload_json','created_revision','modified_revision','tombstone','deleted_revision'] };
   if (rows.length !== 2 || rows.some(row => required[row.name].some(column => !new RegExp(`\\b${column}\\b`).test(row.sql)))) return 'unsupported';
@@ -26,6 +34,15 @@ export function receiptSchemaStatus(tables) {
   const row = tables.find(row => row.name === 'sync_mutation_receipts');
   if (!row) return 'missing';
   return ['user_id','mutation_id','request_hash','plan_hash','base_revision','committed_revision','outcome_json','created_at','expires_at'].every(column => new RegExp(`\\b${column}\\b`).test(row.sql)) ? 'ready' : 'unsupported';
+}
+export const PERSONAL_RESTORE_TABLES=Object.freeze(['personal_restore_identity_journal','personal_restore_records','personal_restore_roots','personal_restore_chunks','personal_restore_operations']);
+export function personalRestoreSchemaStatus(tables) {
+ const required={personal_restore_operations:['user_id','operation_id','purpose','protocol','source_namespace','archive_retry_hash','local_binding','data_schema_version','expected_chunks','expected_counts_json','base_revision','state','expires_at','created_at','semantic_hash','preview_hash','selection_hash','confirm_hash','progress_json','generation_id','generation_version','pinned_revision','pinned_token','committed_revision','undo_revision','outcome_json','updated_at'],personal_restore_roots:['user_id','operation_id','root_id','root_kind','source_tuple','source_ordinal','portable_hash','counts_json','classification','selected'],personal_restore_records:['user_id','operation_id','root_id','item_ordinal','kind','record_key','parent_key','ordinal','address_json','payload_json','source_tuple','portable_hash','address_hash','container_json','publish_kind','target_ordinal','classification','selected'],personal_restore_chunks:['user_id','operation_id','chunk_index','chunk_hash','roots','records','counts_json','byte_count'],personal_restore_identity_journal:['user_id','source_namespace','kind','source_tuple','target_kind','target_key','target_path','operation_id','import_hash','address_hash','container_json','target_ordinal','added_revision','disposition','state']};
+ const rows=tables.filter(row=>PERSONAL_RESTORE_TABLES.includes(row.name));
+ if(!rows.length)return 'missing';
+ const indexes={personal_restore_record_target:['personal_restore_records','user_id','operation_id','publish_kind','record_key'],personal_restore_journal_target:['personal_restore_identity_journal','user_id','operation_id','target_kind','target_key','disposition','state']};
+ const indexed=Object.entries(indexes).every(([name,columns])=>{const row=tables.find(row=>row.name===name);return row&&columns.every(column=>new RegExp(`\\b${column}\\b`).test(row.sql));});
+ return indexed&&rows.length===5 && rows.every(row=>required[row.name].every(column=>new RegExp(`\\b${column}\\b`).test(row.sql)))?'ready':'unsupported';
 }
 // Lightweight state only; the internal token never crosses a response boundary.
 export async function readRecordState(db,userId,mutationId=undefined) {
@@ -42,12 +59,14 @@ export async function storageCleanupMode(db,userId) {
   const tables = await storageTables(db);
   const readiness = recordSchemaStatus(tables);
   const receipts = receiptSchemaStatus(tables);
+  const personal=personalRestoreSchemaStatus(tables);
+  if(personal==='unsupported'||personal==='ready'&&(readiness!=='ready'||receipts!=='ready'))fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   if (receipts === 'unsupported' || (receipts === 'ready' && readiness !== 'ready')) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   if (readiness === 'missing') return 'legacy';
   if (readiness !== 'ready') fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   const state = await db.prepare('SELECT storage_schema_version FROM sync_account_state WHERE user_id = ?').bind(userId).first();
   if (state && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
-  return receipts === 'ready' ? 'receipts' : 'records';
+  return personal==='ready'?'personal':receipts === 'ready' ? 'receipts' : 'records';
 }
 
 // One SQL statement observes state and records (or only legacy fallback) in one read snapshot. No account-wide
@@ -88,7 +107,7 @@ export async function recordCapabilities(env, userId) {
     const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
     if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false, code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
     const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:false });
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -114,7 +133,7 @@ export function inspect(value) {
 }
 function domainId(item) { if (!object(item) || typeof item.id !== 'string' || !item.id.length) fail('SYNC_RECORD_ID_INVALID', 400); return item.id; }
 function row(kind, key, parent, ordinal, address, payload) {
-  const result = { kind, record_key: key, parent_key: parent, ordinal, address_json: JSON.stringify(address), payload_json: JSON.stringify(payload) };
+  const result = { kind, record_key: key, parent_key: parent, ordinal, address_json: storageJSON(address), payload_json: storageJSON(payload) };
   // Conservatively include all text twice plus fixed SQL/value overhead. A legal JSON payload can still exceed
   // D1's per-row budget due to a very long identity/address. Such a plan must not partially commit.
   if (size(JSON.stringify(result)) + 256 > LIMITS.rowBytes) fail('SYNC_RECORD_TOO_LARGE', 413);
@@ -308,6 +327,7 @@ export function compatible(previous, submitted) {
   const next = Object.keys(previous).every(key => own(submitted,key)) ? Object.fromEntries(Object.entries(submitted)) : Object.fromEntries(Object.keys(previous).map(key => [key, own(submitted,key) ? submitted[key] : previous[key]]));
   for (const [key,value] of Object.entries(submitted)) if (!own(next,key)) Object.defineProperty(next,key,{value,enumerable:true,writable:true,configurable:true});
   const schemaVersion = submitted.schemaVersion;
+  if(previous.schemaVersion===9&&[5,8].includes(schemaVersion))fail('SYNC_CLIENT_UPGRADE_REQUIRED');
   if (schemaVersion !== 5 && schemaVersion !== 8) {
     if (JSON.stringify(previous) !== JSON.stringify(next)) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     return next;
@@ -415,4 +435,52 @@ export async function recordPush(request, env, userId) {
     }
     return response({ ok: true, syncVersion: version, updatedAt: now });
   } catch (cause) { return rejection(cause); }
+}
+
+// B's staged normal publisher uses the same compatibility rules on bounded storage rows, without
+// assembling an account. A's digest/receipt protocol and the underlying loss-coverage rules stay unchanged.
+// Portable-provenance RAW9 is a separate staged writer mode, not a legacy schema8 client.
+// Reuse loss detection with frozen V1 personal deletion coverage; no draft/preview/retention omissions.
+const v1Coverage=rules=>Object.fromEntries(Object.entries(rules).map(([field,rule])=>[field,typeof rule==='string'?rule.replace(/[?~]/g,'')==='strings'?[true]:rule.replace(/[?~]/g,'')==='sets'?{'*':{'*':v1Coverage(WIRE_RULES.fields.set)}}:true:rule.fields?v1Coverage(rule.fields):[v1Coverage(rule.array)]]));
+function rawV1Loss(previous,next,coverage=null){
+ noFieldLoss(previous,next,coverage);
+ if(Array.isArray(previous)&&Array.isArray(next)){
+  // Unrecognized scalar/reference arrays never gain legacy retention/clear privileges.
+  if(!coverage&&next.length<previous.length)fail('SYNC_SCHEMA_LOSS_RISK');
+  const identities=previous.every(v=>object(v)&&typeof v.id==='string');
+  for(let i=0;i<Math.min(previous.length,next.length);i++)if(!identities)rawV1Loss(previous[i],next[i],Array.isArray(coverage)?coverage[0]:null);
+ }else if(object(previous)&&object(next))for(const [field,value]of Object.entries(previous))rawV1Loss(value,next[field],coverage&&(coverage[field]||coverage['*']));
+}
+function compatibleRawV1Row(before,after){
+ const previous=JSON.parse(before.payload_json),next=after?JSON.parse(after.payload_json):undefined;
+ const field=before.kind==='metadata'?JSON.parse(before.address_json).field:before.kind;
+ const coverage=field==='importHistory'?[v1Coverage(WIRE_RULES.fields.importHistory)]:WIRE_RULES.fields[field]?v1Coverage(WIRE_RULES.fields[field]):null;
+ if(!after){if(before.kind==='metadata')return previous;if(!knownShape(previous,coverage))fail('SYNC_SCHEMA_LOSS_RISK');return undefined;}
+ if(before.kind==='session'){
+  const old=JSON.parse(before.address_json),updated=JSON.parse(after.address_json);
+  if(old.sets!==updated.sets||old.container!==updated.container||old.container!=='object')fail('SYNC_CLIENT_UPGRADE_REQUIRED');
+ }
+ rawV1Loss(previous,next,coverage);return next;
+}
+export function compatibleStorageRow(before,after,clientSchemaVersion) {
+  if(clientSchemaVersion===9)return compatibleRawV1Row(before,after);
+  if(![5,8].includes(clientSchemaVersion))fail('SYNC_CLIENT_UPGRADE_REQUIRED');
+  const previous=JSON.parse(before.payload_json),next=after?JSON.parse(after.payload_json):undefined;
+  if(before.kind==='set'){
+    if(after){noFieldLoss(previous,next);return next;}
+    if(!knownShape(previous,clientSchemaVersion===5?pwaSetShape:setShape))fail('SYNC_SCHEMA_LOSS_RISK');return undefined;
+  }
+  if(before.kind==='metadata'){
+    if(!after)return previous;const field=JSON.parse(before.address_json).field;
+    return compatible({schemaVersion:clientSchemaVersion,[field]:previous},{schemaVersion:clientSchemaVersion,[field]:next})[field];
+  }
+  const field={session:'sessions',program:'programs',measurement:'measurements'}[before.kind];if(!field)fail('SYNC_SCHEMA_LOSS_RISK');
+  if(before.kind==='session'){
+    const oldDescriptor=JSON.parse(before.address_json),newDescriptor=after?JSON.parse(after.address_json):null;
+    if(after&&(oldDescriptor.sets!==newDescriptor.sets||oldDescriptor.container!==newDescriptor.container))fail('SYNC_CLIENT_UPGRADE_REQUIRED');
+    const sets=oldDescriptor.container==='array'?[]:{};
+    const result=compatible({schemaVersion:clientSchemaVersion,[field]:[{...previous,...(oldDescriptor.sets==='present'?{sets}:{})}]},{schemaVersion:clientSchemaVersion,[field]:after?[{...next,...(newDescriptor.sets==='present'?{sets}:{})}]:[]})[field][0];
+    if(!after)return undefined;const value={...result};delete value.sets;return value;
+  }
+  const result=compatible({schemaVersion:clientSchemaVersion,[field]:[previous]},{schemaVersion:clientSchemaVersion,[field]:after?[next]:[]})[field];return result[0];
 }

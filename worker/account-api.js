@@ -1,5 +1,6 @@
+import { personalRestoreRequest } from './personal-restore-api.js';
 import { recordPage, recordMutation } from './record-sync-transport.js';
-import { recordPull, recordPush, recordCapabilities, storageCleanupMode } from './record-sync-storage.js';
+import { recordPull, recordPush, recordCapabilities, storageCleanupMode, PERSONAL_RESTORE_TABLES } from './record-sync-storage.js';
 const encoder = new TextEncoder();
 const SESSION_DAYS = 30;
 const OAUTH_STATE_COOKIE = 'aks_oauth_state';
@@ -28,6 +29,8 @@ export async function handleAccountRequest(request, env, pathname) {
   if (pathname === '/api/me') return me(request, env);
   if (pathname === '/api/sync/pull') return pull(request, env);
   if (pathname === '/api/sync/push') return push(request, env);
+  const personal=pathname.match(/^\/api\/(backup\/restore|sync\/records)\/operations(?:\/([^/]+)(?:\/(chunks|finalize|preview|commit|receipt|cancel|undo-preview|undo))?)?$/);
+  if(personal)return personalOperations(request,env,personal);
   if (pathname === '/api/sync/records') return records(request,env);
   if (pathname === '/api/sync/records/mutations') return mutations(request,env);
   if (pathname === '/api/sync/capabilities') return capabilities(request, env);
@@ -369,7 +372,7 @@ async function deleteAccount(request, env) {
   await deleteStoredImportResponses(env, user.id);
 
   try {
-    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : cleanupMode === 'receipts' ? ['sync_mutation_receipts',...ACCOUNT_TABLES] : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
+    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : cleanupMode === 'personal' ? [...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES] : cleanupMode === 'receipts' ? ['sync_mutation_receipts',...ACCOUNT_TABLES] : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
       .concat(env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id)));
   } catch (cause) {
     console.error(JSON.stringify({ event: 'account_delete_failed', stage: 'database', message: String(cause?.message || cause) }));
@@ -596,3 +599,12 @@ function base64UrlJson(value) { return base64Url(encoder.encode(JSON.stringify(v
 function asArray(value) { return Array.isArray(value) ? value.filter(Boolean) : value ? [value] : []; }
 function mapOAuthTokenError(code) { return code === 'invalid_client' ? 'OAUTH_CLIENT_INVALID' : code === 'invalid_grant' ? 'OAUTH_CODE_INVALID' : 'OAUTH_TOKEN_EXCHANGE_FAILED'; }
 function coded(code) { return Object.assign(new Error(code), { code }); }
+
+async function personalOperations(request,env,match){
+ const purpose=match[1]==='backup/restore'?'RESTORE':'SYNC',id=match[2],action=id?match[3]:'start';
+ if(!action||id&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)||purpose==='SYNC'&&['preview','undo-preview','undo'].includes(action))return error('RESTORE_ROUTE_INVALID',404);
+ if(action==='receipt'){if(request.method!=='GET')return error('METHOD_NOT_ALLOWED',405,{Allow:'GET'});}
+ else {if(!isJsonPost(request))return methodOrTypeError(request);if(!sameOrigin(request))return error('AUTH_ORIGIN_INVALID',403);}
+ const user=await currentUser(request,env);if(!user)return error('AUTH_REQUIRED',401);
+ return personalRestoreRequest(request,env,user.id,purpose,id,action);
+}
