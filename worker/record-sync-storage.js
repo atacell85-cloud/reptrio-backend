@@ -11,22 +11,43 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), { st
 const rejection = cause => response({ code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }, cause.status || 503);
 const identity = (kind, key) => JSON.stringify([kind, key]);
 
-export async function storageSchema(db) {
-  const rows = (await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('sync_account_state','sync_records')").all()).results;
+export async function storageTables(db) {
+  return (await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('sync_account_state','sync_records','sync_mutation_receipts')").all()).results || [];
+}
+export function recordSchemaStatus(tables) {
+  const rows = tables.filter(row => row.name !== 'sync_mutation_receipts');
   if (!rows?.length) return 'missing';
   const required = { sync_account_state: ['user_id', 'storage_schema_version', 'revision', 'write_token', 'write_status', 'updated_at'], sync_records: ['user_id','kind','record_key','parent_key','ordinal','address_json','payload_json','created_revision','modified_revision','tombstone','deleted_revision'] };
   if (rows.length !== 2 || rows.some(row => required[row.name].some(column => !new RegExp(`\\b${column}\\b`).test(row.sql)))) return 'unsupported';
   return 'ready';
 }
+export async function storageSchema(db) { return recordSchemaStatus(await storageTables(db)); }
+export function receiptSchemaStatus(tables) {
+  const row = tables.find(row => row.name === 'sync_mutation_receipts');
+  if (!row) return 'missing';
+  return ['user_id','mutation_id','request_hash','plan_hash','base_revision','committed_revision','outcome_json','created_at','expires_at'].every(column => new RegExp(`\\b${column}\\b`).test(row.sql)) ? 'ready' : 'unsupported';
+}
+// Lightweight state only; the internal token never crosses a response boundary.
+export async function readRecordState(db,userId,mutationId=undefined) {
+  const state = await db.prepare(`SELECT u.deleted_at, s.storage_schema_version, s.revision, s.write_token, s.write_status, s.updated_at,
+    COALESCE(s.revision,d.sync_version,0) AS sync_version ${mutationId === undefined ? '' : ',m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision'} FROM users u LEFT JOIN sync_account_state s ON s.user_id=u.id LEFT JOIN user_data d ON d.user_id=u.id ${mutationId === undefined ? '' : 'LEFT JOIN sync_mutation_receipts m ON m.user_id=u.id AND m.mutation_id=?'}
+    WHERE u.id=?`).bind(...(mutationId === undefined ? [userId] : [mutationId,userId])).first();
+  if (!state || state.deleted_at !== null || (state.write_status && state.write_status !== 'ACTIVE')) fail('SYNC_ACCOUNT_BLOCKED');
+  if (state.storage_schema_version !== null && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
+  return state;
+}
 
 // Account deletion needs only schema/state version before external cleanup, never account payload assembly.
 export async function storageCleanupMode(db,userId) {
-  const readiness = await storageSchema(db);
+  const tables = await storageTables(db);
+  const readiness = recordSchemaStatus(tables);
+  const receipts = receiptSchemaStatus(tables);
+  if (receipts === 'unsupported' || (receipts === 'ready' && readiness !== 'ready')) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   if (readiness === 'missing') return 'legacy';
   if (readiness !== 'ready') fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   const state = await db.prepare('SELECT storage_schema_version FROM sync_account_state WHERE user_id = ?').bind(userId).first();
   if (state && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
-  return 'records';
+  return receipts === 'ready' ? 'receipts' : 'records';
 }
 
 // One SQL statement observes state and records (or only legacy fallback) in one read snapshot. No account-wide
@@ -63,14 +84,15 @@ export async function recordPull(env, userId) {
 }
 export async function recordCapabilities(env, userId) {
   try {
-    const readiness = await storageSchema(env.DB);
-    if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
-    const result = await readRecordSnapshot(env.DB, userId, readiness);
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, authority: result.state ? 'records' : 'legacy', syncVersion: result.syncVersion });
-  } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
+    const tables = await storageTables(env.DB); const readiness = recordSchemaStatus(tables);
+    const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
+    if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false, code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
+    const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:false });
+  } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
-async function boundedBody(request) {
+export async function boundedBody(request) {
   const reader = request.body?.getReader();
   if (!reader) fail('SYNC_PAYLOAD_INVALID', 400);
   const chunks = []; let length = 0;
@@ -82,7 +104,7 @@ async function boundedBody(request) {
   try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
   catch { fail('SYNC_PAYLOAD_INVALID', 400); }
 }
-function inspect(value) {
+export function inspect(value) {
   let nodes = 0; const stack = [[value, 0]];
   while (stack.length) {
     const [item, depth] = stack.pop();
@@ -280,7 +302,7 @@ function noFieldLoss(previous, next, clearCoverage = null, context = null) {
     }
   } else if (previous && typeof previous === 'object' && previous !== next) fail('SYNC_SCHEMA_LOSS_RISK');
 }
-function compatible(previous, submitted) {
+export function compatible(previous, submitted) {
   if (!previous) return submitted;
   // Preserve omitted top-level fields, including measurements absent from PWA. Explicit null is still presence.
   const next = Object.keys(previous).every(key => own(submitted,key)) ? Object.fromEntries(Object.entries(submitted)) : Object.fromEntries(Object.keys(previous).map(key => [key, own(submitted,key) ? submitted[key] : previous[key]]));

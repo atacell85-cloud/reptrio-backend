@@ -1,3 +1,4 @@
+import { recordPage, recordMutation } from './record-sync-transport.js';
 import { recordPull, recordPush, recordCapabilities, storageCleanupMode } from './record-sync-storage.js';
 const encoder = new TextEncoder();
 const SESSION_DAYS = 30;
@@ -27,6 +28,8 @@ export async function handleAccountRequest(request, env, pathname) {
   if (pathname === '/api/me') return me(request, env);
   if (pathname === '/api/sync/pull') return pull(request, env);
   if (pathname === '/api/sync/push') return push(request, env);
+  if (pathname === '/api/sync/records') return records(request,env);
+  if (pathname === '/api/sync/records/mutations') return mutations(request,env);
   if (pathname === '/api/sync/capabilities') return capabilities(request, env);
   return null;
 }
@@ -264,6 +267,18 @@ async function capabilities(request, env) {
   return recordCapabilities(env, user.id);
 }
 
+async function records(request,env) {
+  if (request.method !== 'GET') return error('METHOD_NOT_ALLOWED',405,{Allow:'GET'});
+  const user=await currentUser(request,env); if (!user) return error('AUTH_REQUIRED',401);
+  return recordPage(request,env,user.id);
+}
+async function mutations(request,env) {
+  if (!isJsonPost(request)) return methodOrTypeError(request);
+  if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID',403);
+  const user=await currentUser(request,env); if (!user) return error('AUTH_REQUIRED',401);
+  return recordMutation(request,env,user.id);
+}
+
 async function push(request, env) {
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
@@ -354,7 +369,7 @@ async function deleteAccount(request, env) {
   await deleteStoredImportResponses(env, user.id);
 
   try {
-    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
+    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : cleanupMode === 'receipts' ? ['sync_mutation_receipts',...ACCOUNT_TABLES] : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
       .concat(env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id)));
   } catch (cause) {
     console.error(JSON.stringify({ event: 'account_delete_failed', stage: 'database', message: String(cause?.message || cause) }));

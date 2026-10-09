@@ -1,8 +1,9 @@
 -- Account deletion used to only mark users.deleted_at and left oauth_accounts, import_jobs and mobile OAuth codes
 -- behind. Those users asked for deletion: remove every row still linked to them, then the user rows themselves.
 -- Irreversible; applies only to users that already completed the in-app deletion. NOT a migration (migrations apply
--- automatically): run once, only with explicit owner approval, after the 0005, 0007 and 0008 migrations:
+-- automatically): run once, only with explicit owner approval, after the 0005, 0007, 0008 and 0009 migrations:
 --   npx wrangler d1 execute a2-workout-pilot --remote --file scripts/maintenance/purge-soft-deleted-accounts.sql
+DELETE FROM sync_mutation_receipts WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL);
 DELETE FROM sync_records WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL);
 DELETE FROM sync_account_state WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL);
 DELETE FROM oauth_reauth_tickets WHERE user_id IN (SELECT id FROM users WHERE deleted_at IS NOT NULL);
