@@ -206,7 +206,7 @@ async function upsertOAuthUser(env, provider, subject, email, emailVerified, ema
   const salt = randomToken(16);
   const passwordHash = await passwordDigest(randomToken(32), salt);
   await env.DB.batch([
-    env.DB.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, email, passwordHash, salt, now),
+    await newUserInsert(env, id, email, passwordHash, salt, now),
     link(id),
   ]);
   return { id, email };
@@ -231,7 +231,7 @@ async function register(request, env) {
   if (exists) return error('AUTH_EMAIL_IN_USE', 409);
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   const salt = randomToken(16); const passwordHash = await passwordDigest(password, salt);
-  await env.DB.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, normalizedEmail, passwordHash, salt, now).run();
+  await (await newUserInsert(env, id, normalizedEmail, passwordHash, salt, now)).run();
   return issueSession(env, id, normalizedEmail, 201, mobileClient(request) ? { 'X-Reptrio-Client': 'mobile' } : {});
 }
 
@@ -255,7 +255,7 @@ async function logout(request, env) {
 async function me(request, env) {
   if (request.method !== 'GET') return error('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
   const user = await currentUser(request, env);
-  return user ? json({ user: { id: user.id, email: user.email } }) : error('AUTH_REQUIRED', 401);
+  return user ? json({ user: await publicUser(env, user.id, user.email) }) : error('AUTH_REQUIRED', 401);
 }
 
 async function pull(request, env) {
@@ -460,13 +460,36 @@ export async function openProviderToken(config, provider, subject, sealed) {
   }
 }
 
+// Auth-only capability probe: an absent column is rechecked after rollout. Database errors propagate.
+async function hasOnboardingEligibility(env) {
+  const { results } = await env.DB.prepare('PRAGMA table_info(users)').all();
+  return results.some(column => column.name === 'onboarding_eligible');
+}
+
+async function newUserInsert(env, id, email, passwordHash, salt, now) {
+  const eligible = await hasOnboardingEligibility(env);
+  return env.DB.prepare(eligible
+    ? 'INSERT INTO users (id, email, password_hash, password_salt, created_at, onboarding_eligible) VALUES (?, ?, ?, ?, ?, 1)'
+    : 'INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).bind(id, email, passwordHash, salt, now);
+}
+
+async function publicUser(env, id, email) {
+  let onboardingEligible = false;
+  if (await hasOnboardingEligibility(env)) {
+    const row = await env.DB.prepare('SELECT onboarding_eligible FROM users WHERE id = ? AND deleted_at IS NULL').bind(id).first();
+    onboardingEligible = row?.onboarding_eligible === 1;
+  }
+  return { id, email, onboardingEligible };
+}
+
 async function issueSession(env, id, email, status = 201, extraHeaders = {}) {
   const token = randomToken(32); const now = new Date(); const expires = new Date(now.getTime() + SESSION_DAYS * 86400000);
   await env.DB.prepare('INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').bind(crypto.randomUUID(), id, await tokenDigest(token), now.toISOString(), expires.toISOString()).run();
   const mobile = extraHeaders['X-Reptrio-Client'] === 'mobile';
   const publicHeaders = { ...extraHeaders };
   delete publicHeaders['X-Reptrio-Client'];
-  return json({ user: { id, email }, ...(mobile ? { sessionToken: token, expiresAt: expires.toISOString() } : {}) }, status, { ...publicHeaders, 'Set-Cookie': [sessionCookie(token, expires), ...asArray(publicHeaders['Set-Cookie'])] });
+  return json({ user: await publicUser(env, id, email), ...(mobile ? { sessionToken: token, expiresAt: expires.toISOString() } : {}) }, status, { ...publicHeaders, 'Set-Cookie': [sessionCookie(token, expires), ...asArray(publicHeaders['Set-Cookie'])] });
 }
 
 async function issueMobileOAuthCode(env, userId, redirectUri, cookies = []) {

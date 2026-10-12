@@ -35,6 +35,7 @@ const providersReadyBody = await providersReady.json();
 const mobileDb = mockAccountDb();
 const mobileRegister = await worker.fetch(new Request('https://a2.example/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ email: 'mobile@example.test', password: 'password123' }) }), { ...baseEnv, DB: mobileDb });
 const mobileRegisterBody = await mobileRegister.json();
+if (mobileRegisterBody.user.onboardingEligible !== false) throw new Error('Legacy auth schema must expose false eligibility');
 const mobileMe = await worker.fetch(new Request('https://a2.example/api/me', { headers: { Authorization: `Bearer ${mobileRegisterBody.sessionToken || ''}` } }), { ...baseEnv, DB: mobileDb });
 const mobileMeBody = await mobileMe.json();
 const sourceReference = { page: null, sheet: null, cellRange: null, text: null };
@@ -116,6 +117,7 @@ function mockAccountDb() {
   const state = { users: [], sessions: [] };
   return {
     prepare(sql) {
+      if (sql === 'PRAGMA table_info(users)') return { all: async () => ({ results: [{ name: 'id' }, { name: 'email' }] }) };
       return {
         bind(...values) {
           return {
