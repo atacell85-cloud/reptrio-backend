@@ -1,3 +1,4 @@
+import { validatePortableRootV2, V2_SETTINGS_FIELDS } from './personal-backup-v2-contract.js';
 import {storageTables,recordSchemaStatus,personalRestoreSchemaStatus,readRecordState,splitData,storageJSON,assembleRecordData,compatible,compatibleStorageRow,recordChunks,inspect,RECORD_WRITE_GATE_SQL} from './record-sync-storage.js';
 import {portableBody,portableHash,byteHash,WIRE_RULES,canonicalPortable,portableBytes,portableFail as fail,object,own,exactFields,validatePortableRoot,parsePortable} from './personal-backup-contract.js';
 export const RESTORE_LIMITS=Object.freeze({ttl:3_600_000,pageRows:256,pageBytes:1_800_000,pages:8,queries:50,roots:128,chunks:10000});
@@ -38,7 +39,8 @@ export async function personalRestoreRequest(request,env,userId,purpose,id,actio
  }catch(e){return reject(e);}
 }
 async function start(db,userId,purpose,state,p){
- exactFields(p,['sourceNamespace','archiveRetryHash','localBinding','dataSchemaVersion','expectedChunks','expectedCounts','baseRevision']);
+ exactFields(p,['sourceNamespace','archiveRetryHash','localBinding','dataSchemaVersion','expectedChunks','expectedCounts','baseRevision',...(purpose==='RESTORE'?['backupSchemaVersion']:[])]);
+ const protocol=own(p,'backupSchemaVersion')?p.backupSchemaVersion:1;if(protocol!==1&&protocol!==2)fail('BACKUP_VERSION_INVALID');
  if(typeof p.sourceNamespace==='string'&&new TextDecoder().decode(new TextEncoder().encode(p.sourceNamespace))!==p.sourceNamespace||typeof p.localBinding==='string'&&new TextDecoder().decode(new TextEncoder().encode(p.localBinding))!==p.localBinding)fail('START_INVALID');
  if(purpose==='SYNC'&&![5,8,9].includes(p.dataSchemaVersion))fail('SYNC_SCHEMA_INVALID');
  if(typeof p.sourceNamespace!=='string'||!p.sourceNamespace.length||p.sourceNamespace.length>128||typeof p.archiveRetryHash!=='string'||!/^[a-f0-9]{64}$/.test(p.archiveRetryHash)||typeof p.localBinding!=='string'||!p.localBinding.length||p.localBinding.length>256||!int(p.dataSchemaVersion)||!int(p.expectedChunks)||p.expectedChunks<1||p.expectedChunks>RESTORE_LIMITS.chunks||!int(p.baseRevision))fail('START_INVALID');counts(p.expectedCounts);
@@ -49,9 +51,9 @@ async function start(db,userId,purpose,state,p){
  }
 
  const id=crypto.randomUUID(),created=now(),expiry=new Date(Date.now()+RESTORE_LIMITS.ttl).toISOString();
- await db.prepare(`INSERT INTO personal_restore_operations(user_id,operation_id,purpose,source_namespace,archive_retry_hash,local_binding,data_schema_version,expected_chunks,expected_counts_json,base_revision,state,expires_at,created_at,updated_at)
- SELECT ?,?,?,?,?,?,?,?,?,?,'UPLOADING',?,?,? WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL)`).bind(userId,id,purpose,p.sourceNamespace,p.archiveRetryHash,p.localBinding,p.dataSchemaVersion,p.expectedChunks,storageJSON(p.expectedCounts),p.baseRevision,expiry,created,created,userId).run();
- return {operationId:id,purpose,protocol:1,status:'UPLOADING',expiresAt:expiry,limits:RESTORE_LIMITS};
+ await db.prepare(`INSERT INTO personal_restore_operations(user_id,operation_id,purpose,protocol,source_namespace,archive_retry_hash,local_binding,data_schema_version,expected_chunks,expected_counts_json,base_revision,state,expires_at,created_at,updated_at)
+ SELECT ?,?,?,?,?,?,?,?,?,?,?,'UPLOADING',?,?,? WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL)`).bind(userId,id,purpose,protocol,p.sourceNamespace,p.archiveRetryHash,p.localBinding,p.dataSchemaVersion,p.expectedChunks,storageJSON(p.expectedCounts),p.baseRevision,expiry,created,created,userId).run();
+ return {operationId:id,purpose,protocol,status:'UPLOADING',expiresAt:expiry,limits:RESTORE_LIMITS};
 }
 function metadataItems(v){const out=[];for(const [field,value]of Object.entries(v)){if(field==='heroPreference')continue;if(field==='profile'){for(const [leaf,val]of Object.entries(value))out.push({path:['profile',leaf],value:val});}else if(field==='gyms'){for(const gym of value)out.push({path:['gyms',gym.id],value:gym});}else if(field==='legacyWeightUnit'||field==='legacyWeightUnitCapturedAt'){if(field==='legacyWeightUnit')out.push({path:['legacyUnitContext'],value:{legacyWeightUnit:v.legacyWeightUnit,legacyWeightUnitCapturedAt:v.legacyWeightUnitCapturedAt}});}else out.push({path:[field],value});}return out;}
 async function derive(root){
@@ -75,7 +77,7 @@ async function chunk(db,userId,op,p){
  if(op.state!=='UPLOADING')fail('STAGE_FROZEN');
  const rootRows=[],recordRows=[],total=zero();
  for(let i=0;i<p.roots.length;i++){
-  const root=op.purpose==='RESTORE'?validatePortableRoot(p.roots[i]):validateSyncRoot(p.roots[i]),derived=await derive(root),rootId=p.index*128+i;
+  const root=op.purpose==='RESTORE'?(op.protocol===2?validatePortableRootV2:validatePortableRoot)(p.roots[i]):validateSyncRoot(p.roots[i]),derived=await derive(root),rootId=p.index*128+i;
   rootRows.push({root_id:rootId,root_kind:root.kind,source_tuple:derived.source,source_ordinal:rootId,portable_hash:derived.hash,counts_json:storageJSON(derived.count)});sum(total,derived.count);
   derived.records.forEach((r,j)=>recordRows.push({...r,root_id:rootId,item_ordinal:j}));
  }
@@ -98,7 +100,7 @@ async function saveProgress(db,userId,op,progress,fields={}){
 }
 function pinMatches(op,state){return op.pinned_revision===state.sync_version&&(op.pinned_token||'')===(state.write_token||'');}
 async function beginProgress(db,userId,op,state,phase,fields={}){
- const generation=crypto.randomUUID(),progress={phase,last:-1,item:-1,processed:0,counts:zero(),chain:await portableHash(['reptrio-personal-stage-v1',phase,op.operation_id,op.source_namespace,op.data_schema_version]),selection:fields.selection_hash||null};
+ const generation=crypto.randomUUID(),progress={phase,last:-1,item:-1,processed:0,counts:zero(),chain:await portableHash(['reptrio-personal-stage-v1',phase,op.operation_id,op.source_namespace,op.data_schema_version,...(op.protocol===2?['backupSchemaVersion',2]:[])]),selection:fields.selection_hash||null};
  const assigns=['generation_id=?','generation_version=generation_version+1','pinned_revision=?','pinned_token=?','progress_json=?','updated_at=?'],vals=[generation,state.sync_version,state.write_token||'',storageJSON(progress),now()];
  for(const [field,value]of Object.entries(fields)){assigns.push(`${field}=?`);vals.push(value);}
  const result=await db.prepare(`UPDATE personal_restore_operations SET ${assigns.join(',')} WHERE user_id=? AND operation_id=? AND generation_version=? AND(expires_at>? OR state='COMMITTED') AND ${pinnedGate}`).bind(...vals,userId,op.operation_id,op.generation_version,now(),userId,state.sync_version,state.write_token||'').run();if(result.meta.changes!==1)fail('GENERATION_CHANGED');return {...op,...fields,generation_id:generation,generation_version:op.generation_version+1,pinned_revision:state.sync_version,pinned_token:state.write_token||'',progress_json:storageJSON(progress)};
@@ -289,8 +291,10 @@ async function dependencyClosure(db,userId,op){
  const availableProgram=id=>`NOT EXISTS(SELECT 1 FROM personal_restore_roots t WHERE t.user_id=r.user_id AND t.operation_id=r.operation_id AND t.root_kind='program' AND t.source_tuple=json_array(${id}) AND NOT(t.classification='SAME' OR(t.classification='NEW' AND t.selected=1)))`;
  const availableGym=id=>`NOT EXISTS(SELECT 1 FROM personal_restore_records g WHERE g.user_id=r.user_id AND g.operation_id=r.operation_id AND g.kind='metadataPath' AND g.record_key='["settings"]' AND json_extract(g.address_json,'$[0]')='gyms' AND json_extract(g.address_json,'$[1]')=${id} AND NOT(g.classification='SAME' OR(g.classification='NEW' AND EXISTS(SELECT 1 FROM personal_restore_roots t WHERE t.user_id=g.user_id AND t.operation_id=g.operation_id AND t.root_id=g.root_id AND t.selected=1))))`;
  const program=`CASE WHEN r.kind='session' THEN json_extract(r.payload_json,'$.programId') WHEN r.kind='metadataPath' AND json_extract(r.address_json,'$[0]')='activeProgramId' THEN json_extract(r.payload_json,'$') WHEN r.kind='metadataPath' AND r.record_key='["importHistory"]' THEN json_extract(r.payload_json,'$.finalProgramId') END`;
+ const measurement=op.protocol===2?`CASE WHEN r.kind='metadataPath' AND r.record_key='["settings"]' AND r.address_json='["profile","onboarding"]' THEN json_extract(r.payload_json,'$.initialWeight.id') END`:'NULL';
+ const availableMeasurement=`NOT EXISTS(SELECT 1 FROM personal_restore_roots t WHERE t.user_id=r.user_id AND t.operation_id=r.operation_id AND t.root_kind='measurement' AND t.source_tuple=json_array(${measurement}) AND NOT(t.classification='SAME' OR(t.classification='NEW' AND t.selected=1)))`;
  const gym=`CASE WHEN r.kind='session' THEN json_extract(r.payload_json,'$.gymId') WHEN r.kind='metadataPath' AND json_extract(r.address_json,'$[0]')='defaultGymId' THEN json_extract(r.payload_json,'$') END`;
- await db.prepare(`UPDATE personal_restore_records AS r SET classification='DEPENDENCY' WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.classification IN('NEW','SAME') AND (NOT(${availableProgram(program)}) OR NOT(${availableGym(gym)})) AND ${statementGate} AND ${pinnedGate}`).bind(userId,op.operation_id,userId,op.operation_id,op.generation_version,op.state,now(),userId,op.pinned_revision,op.pinned_token||'').run();
+ await db.prepare(`UPDATE personal_restore_records AS r SET classification='DEPENDENCY' WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.classification IN('NEW','SAME') AND (NOT(${availableProgram(program)}) OR NOT(${availableGym(gym)}) OR NOT(${availableMeasurement})) AND ${statementGate} AND ${pinnedGate}`).bind(userId,op.operation_id,userId,op.operation_id,op.generation_version,op.state,now(),userId,op.pinned_revision,op.pinned_token||'').run();
  await db.prepare(`UPDATE personal_restore_records AS r SET classification='DEPENDENCY' WHERE r.user_id=? AND r.operation_id=? AND r.kind='session' AND r.root_id>=0 AND r.classification IN('NEW','SAME') AND json_extract(r.payload_json,'$.weightUnit')IS NULL AND NOT EXISTS(SELECT 1 FROM personal_restore_records context JOIN personal_restore_roots t ON t.user_id=context.user_id AND t.operation_id=context.operation_id AND t.root_id=context.root_id WHERE context.user_id=r.user_id AND context.operation_id=r.operation_id AND context.kind='metadataPath' AND json_extract(context.address_json,'$[0]')='legacyUnitContext' AND json_extract(context.payload_json,'$.legacyWeightUnit')IN('kg','lb') AND json_type(context.payload_json,'$.legacyWeightUnitCapturedAt')='text' AND(context.classification='SAME' OR(context.classification='NEW' AND t.selected=1))) AND ${statementGate} AND ${pinnedGate}`).bind(userId,op.operation_id,userId,op.operation_id,op.generation_version,op.state,now(),userId,op.pinned_revision,op.pinned_token||'').run();
  // Session/program indivisibility includes child identity conflicts and dependency failures.
  await db.prepare(`UPDATE personal_restore_roots SET classification='CONFLICT' WHERE user_id=? AND operation_id=? AND root_id>=0 AND root_kind IN('session','program') AND EXISTS(SELECT 1 FROM personal_restore_records r WHERE r.user_id=personal_restore_roots.user_id AND r.operation_id=personal_restore_roots.operation_id AND r.root_id=personal_restore_roots.root_id AND r.classification NOT IN('NEW','SAME')) AND ${statementGate} AND ${pinnedGate}`).bind(userId,op.operation_id,userId,op.operation_id,op.generation_version,op.state,now(),userId,op.pinned_revision,op.pinned_token||'').run();
@@ -301,18 +305,19 @@ async function historicalWarnings(db,userId,op){
  const sql=`WITH refs AS(SELECT r.kind,r.record_key,json_extract(r.payload_json,'$.programId')AS program,
  j.key AS alias,j.value AS id,CASE WHEN j.key IN('programId','activeProgramId','finalProgramId')THEN 'program' WHEN j.key IN('gymId','defaultGymId')THEN 'gym' ELSE 'day' END AS target
  FROM personal_restore_records r,json_each(r.payload_json)j WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.selected=1 AND r.classification='NEW' AND r.kind IN('session','metadataPath') AND j.type='text' AND j.key IN('programId','finalProgramId','gymId','dayId','workoutDayId')
- UNION ALL SELECT r.kind,r.record_key,NULL,json_extract(r.address_json,'$[0]'),json_extract(r.payload_json,'$'),CASE json_extract(r.address_json,'$[0]')WHEN 'activeProgramId'THEN 'program' ELSE 'gym' END FROM personal_restore_records r WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.selected=1 AND r.classification='NEW' AND r.kind='metadataPath' AND json_type(r.payload_json,'$')='text' AND json_extract(r.address_json,'$[0]')IN('activeProgramId','defaultGymId'))
- SELECT COUNT(*)AS count FROM refs f WHERE NOT EXISTS(SELECT 1 FROM personal_restore_records t WHERE t.user_id=? AND t.operation_id=? AND((f.target IN('program','day')AND t.kind='program' AND t.record_key=json_array(CASE WHEN f.target='program'THEN f.id ELSE f.program END) AND(f.target='program' OR EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.days')d WHERE json_extract(d.value,'$.id')=f.id)))OR(f.target='gym' AND((t.kind='metadataPath' AND json_extract(t.address_json,'$[0]')='gyms' AND json_extract(t.address_json,'$[1]')=f.id)OR(t.root_id=-1 AND t.kind='metadata' AND t.record_key='["settings"]' AND EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.gyms')g WHERE json_extract(g.value,'$.id')=f.id))))))
- AND NOT EXISTS(SELECT 1 FROM sync_records t WHERE t.user_id=? AND t.tombstone=0 AND((f.target IN('program','day')AND t.kind='program' AND t.record_key=json_array(CASE WHEN f.target='program'THEN f.id ELSE f.program END) AND(f.target='program' OR EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.days')d WHERE json_extract(d.value,'$.id')=f.id)))OR(f.target='gym' AND t.kind='metadata' AND t.record_key='["settings"]' AND EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.gyms')g WHERE json_extract(g.value,'$.id')=f.id))))`;
- return {historicalReferences:(await db.prepare(sql).bind(userId,op.operation_id,userId,op.operation_id,userId,op.operation_id,userId).first()).count};
+ UNION ALL SELECT r.kind,r.record_key,NULL,json_extract(r.address_json,'$[0]'),json_extract(r.payload_json,'$'),CASE json_extract(r.address_json,'$[0]')WHEN 'activeProgramId'THEN 'program' ELSE 'gym' END FROM personal_restore_records r WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.selected=1 AND r.classification='NEW' AND r.kind='metadataPath' AND json_type(r.payload_json,'$')='text' AND json_extract(r.address_json,'$[0]')IN('activeProgramId','defaultGymId')
+ ${op.protocol===2?`UNION ALL SELECT r.kind,r.record_key,NULL,'initialWeight',json_extract(r.payload_json,'$.initialWeight.id'),'measurement' FROM personal_restore_records r WHERE r.user_id=? AND r.operation_id=? AND r.root_id>=0 AND r.selected=1 AND r.classification='NEW' AND r.kind='metadataPath' AND r.record_key='["settings"]' AND r.address_json='["profile","onboarding"]' AND json_type(r.payload_json,'$.initialWeight.id')='text'`:''})
+ SELECT COUNT(*)AS count FROM refs f WHERE NOT EXISTS(SELECT 1 FROM personal_restore_records t WHERE t.user_id=? AND t.operation_id=? AND((f.target='measurement' AND t.kind='measurement' AND t.record_key=json_array(f.id))OR(f.target IN('program','day')AND t.kind='program' AND t.record_key=json_array(CASE WHEN f.target='program'THEN f.id ELSE f.program END) AND(f.target='program' OR EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.days')d WHERE json_extract(d.value,'$.id')=f.id)))OR(f.target='gym' AND((t.kind='metadataPath' AND json_extract(t.address_json,'$[0]')='gyms' AND json_extract(t.address_json,'$[1]')=f.id)OR(t.root_id=-1 AND t.kind='metadata' AND t.record_key='["settings"]' AND EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.gyms')g WHERE json_extract(g.value,'$.id')=f.id))))))
+ AND NOT EXISTS(SELECT 1 FROM sync_records t WHERE t.user_id=? AND t.tombstone=0 AND((f.target='measurement' AND t.kind='measurement' AND t.record_key=json_array(f.id))OR(f.target IN('program','day')AND t.kind='program' AND t.record_key=json_array(CASE WHEN f.target='program'THEN f.id ELSE f.program END) AND(f.target='program' OR EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.days')d WHERE json_extract(d.value,'$.id')=f.id)))OR(f.target='gym' AND t.kind='metadata' AND t.record_key='["settings"]' AND EXISTS(SELECT 1 FROM json_each(t.payload_json,'$.gyms')g WHERE json_extract(g.value,'$.id')=f.id))))`;
+ return {historicalReferences:(await db.prepare(sql).bind(userId,op.operation_id,userId,op.operation_id,...(op.protocol===2?[userId,op.operation_id]:[]),userId,op.operation_id,userId).first()).count};
 }
 const referenceKeys=Object.freeze({programId:'program',activeProgramId:'program',finalProgramId:'program',gymId:'gym',defaultGymId:'gym',sessionId:'session',exportedSessionIds:'session',deletedSessionIds:'session',closedWorkoutIds:'session',dayId:'day',workoutDayId:'day',sectionId:'section'});
-function references(value,owner){
+function references(value,owner,protocol=1){
  const found=[];const walk=(node,path,context)=>{
   if(!object(node)&&!Array.isArray(node))return;
   const program=object(node)&&typeof node.programId==='string'?node.programId:context.program;
   for(const [field,v]of Object.entries(node)){
-   const next=[...path,field],kind=referenceKeys[field];
+   const next=[...path,field],kind=protocol===2&&owner.kind==='metadata'&&owner.record_key==='["settings"]'&&storageJSON(next)==='["profile","onboarding","initialWeight","id"]'?'measurement':referenceKeys[field];
    const add=(raw,at)=>{if(typeof raw!=='string'||!raw.length)return;const tuple=['day','section'].includes(kind)?[typeof program==='string'?program:null,raw]:[raw];found.push({kind,tuple:storageJSON(tuple),ownerKind:owner.kind,ownerKey:owner.record_key,path:at,value:raw});};
    if(kind){if(Array.isArray(v))v.forEach((raw,i)=>add(raw,[...next,String(i)]));else add(v,next);}
    if(object(v)||Array.isArray(v))walk(v,next,{program:owner.kind==='program'?JSON.parse(owner.record_key)[0]:program});
@@ -320,7 +325,7 @@ function references(value,owner){
  };
  walk(value,[],{program:owner.kind==='program'?JSON.parse(owner.record_key)[0]:undefined});return found;
 }
-function opaqueFields(value,rules){
+function opaqueFields(value,rules,protocol=1){
  if(!object(value))return {malformed:value};const out={};
  for(const [field,v]of Object.entries(value)){
   if(!own(rules,field)){out[field]=v;continue;}
@@ -328,22 +333,22 @@ function opaqueFields(value,rules){
    const base=rule.replace(/[?~]/g,'');if(v===null&&rule.includes('~'))continue;const scalarType=['unit','date','completion','version','exercise','theme','hero','density','avatar'].includes(base)?'string':base;
    if(base!=='sets'&&base!=='strings'&&(typeof v!==scalarType||scalarType==='number'&&!Number.isFinite(v))||base==='strings'&&(!Array.isArray(v)||v.some(x=>typeof x!=='string'))||base==='sets'&&!object(v)){out[field]={malformed:v};continue;}
    if(base==='sets'&&object(v)){const groups={};for(const [g,sets]of Object.entries(v)){if(!object(sets)){groups[g]={malformed:sets};continue;}const children={};for(const [k,set]of Object.entries(sets)){const unknown=opaqueFields(set,WIRE_RULES.fields.set);if(Object.keys(unknown).length)children[k]=unknown;}if(Object.keys(children).length)groups[g]=children;}if(Object.keys(groups).length)out[field]=groups;}
-  }else {if(v===null){if(!WIRE_RULES.nullableObjectFields.includes(field))out[field]={malformed:null};continue;}if(rule.fields){const unknown=opaqueFields(v,rule.fields);if(Object.keys(unknown).length)out[field]=unknown;}else if(rule.array){if(!Array.isArray(v)){out[field]={malformed:v};continue;}const unknown=v.map((child,i)=>({index:i,id:child?.id??null,opaque:opaqueFields(child,rule.array)})).filter(child=>Object.keys(child.opaque).length);if(unknown.length)out[field]=unknown;}}
+  }else {if(v===null){if(!WIRE_RULES.nullableObjectFields.includes(field)&&!(protocol===2&&field==='initialWeight'))out[field]={malformed:null};continue;}if(rule.fields){const unknown=opaqueFields(v,rule.fields,protocol);if(Object.keys(unknown).length)out[field]=unknown;}else if(rule.array){if(!Array.isArray(v)){out[field]={malformed:v};continue;}const unknown=v.map((child,i)=>({index:i,id:child?.id??null,opaque:opaqueFields(child,rule.array)})).filter(child=>Object.keys(child.opaque).length);if(unknown.length)out[field]=unknown;}}
  }
  return Object.keys(out).length?{fields:out,rawKeyOrder:Object.keys(value)}:out;
 }
-function opaqueScope(row,payload){
+function opaqueScope(row,payload,protocol=1){
  if(['session','program','measurement','set'].includes(row.kind))return opaqueFields(payload,WIRE_RULES.fields[row.kind]);
  if(row.kind==='metadata'){
   const field=JSON.parse(row.address_json).field;
   if(['sessions','programs','measurements','schemaVersion'].includes(field))return {};
-  if(field==='settings')return opaqueFields(payload,WIRE_RULES.fields.settings);
+  if(field==='settings')return opaqueFields(payload,protocol===2?V2_SETTINGS_FIELDS:WIRE_RULES.fields.settings,protocol);
   if(field==='importHistory'){if(!Array.isArray(payload))return {malformed:payload};const entries=payload.map((v,i)=>({index:i,id:v?.importId??null,opaque:opaqueFields(v,WIRE_RULES.fields.importHistory)})).filter(v=>Object.keys(v.opaque).length);return entries.length?{entries}:{};}
   return {raw:payload};
  }
  return {raw:payload};
 }
-const proofSeed=async op=>({version:2,lastKind:'',lastKey:'',processed:0,incoming:0,opaque:0,chain:await portableHash(['reptrio-personal-reversal-baseline-v2',op.operation_id])});
+const proofSeed=async op=>({version:2,lastKind:'',lastKey:'',processed:0,incoming:0,opaque:0,chain:await portableHash(['reptrio-personal-reversal-baseline-v2',op.operation_id,...(op.protocol===2?['backupSchemaVersion',2]:[])])});
 async function currentPage(db,userId,op,proof){
  const fields=['kind','record_key','parent_key','ordinal','address_json','payload_json','created_revision','modified_revision','tombstone','parent_address'];
  const expressions=fields.map(f=>`'${f}',${f}`).join(',');
@@ -367,7 +372,7 @@ async function scanProof(db,userId,op,progress,undoMode=false){
    const journals=owned.filter(j=>j.target_kind===row.kind&&j.target_key===row.record_key);let payload=JSON.parse(row.payload_json),skip=false;
    if(undoMode&&journals.some(j=>j.kind!=='metadataPath'))skip=true;
    if(!skip&&undoMode&&row.kind==='metadata'&&journals.length){const subtracted=subtractOwnedMetadata(row,payload,journals);payload=subtracted.value;skip=!subtracted.present;}
-   if(!skip){const opaque=opaqueScope(row,payload),rowRefs=references(payload,row),childContexts=rowRefs.filter(ref=>['day','section'].includes(ref.kind));if(childContexts.length)opaque.referenceCoverage=childContexts;if(row.kind==='session')opaque.storageOrder=JSON.parse(row.address_json);if(row.kind==='set'&&Object.keys(opaque).length)opaque.storageOrder={address:JSON.parse(row.address_json),ordinal:row.ordinal,parent:row.parent_address===null?null:JSON.parse(row.parent_address)};descriptors.push({kind:row.kind,key:row.record_key,opaque});refs.push(...rowRefs);}
+   if(!skip){const opaque=opaqueScope(row,payload,op.protocol),rowRefs=references(payload,row,op.protocol),childContexts=rowRefs.filter(ref=>['day','section'].includes(ref.kind));if(childContexts.length)opaque.referenceCoverage=childContexts;if(row.kind==='session')opaque.storageOrder=JSON.parse(row.address_json);if(row.kind==='set'&&Object.keys(opaque).length)opaque.storageOrder={address:JSON.parse(row.address_json),ordinal:row.ordinal,parent:row.parent_address===null?null:JSON.parse(row.parent_address)};descriptors.push({kind:row.kind,key:row.record_key,opaque});refs.push(...rowRefs);}
    progress.proof.lastKind=row.kind;progress.proof.lastKey=row.record_key;progress.proof.processed++;
   }
   const incoming=await matchReferences(db,userId,op,refs,undoMode);

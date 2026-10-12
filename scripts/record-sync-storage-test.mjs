@@ -83,7 +83,7 @@ for (const hard of [false,true]) {
 }
 // Missing additive migration is readable legacy-only; writes fail closed and capabilities is actionable.
 {
-  const f=await fixture({migrationsUpTo:'0007_password_reset_tokens.sql'});const d=data();f.seedLegacy(d,3);f.db.resetMetrics();assert.deepEqual((await f.pull()).data,d);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await code(await f.push(d,3)),[503,'SYNC_STORAGE_MIGRATION_REQUIRED']);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await (await f.call('capabilities')).json(),{storageSchemaVersion:1,writable:false,recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,code:'SYNC_STORAGE_MIGRATION_REQUIRED'});
+  const f=await fixture({migrationsUpTo:'0007_password_reset_tokens.sql'});const d=data();f.seedLegacy(d,3);f.db.resetMetrics();assert.deepEqual((await f.pull()).data,d);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await code(await f.push(d,3)),[503,'SYNC_STORAGE_MIGRATION_REQUIRED']);assert.equal(f.db.metrics.writes,0);assert.deepEqual(await (await f.call('capabilities')).json(),{storageSchemaVersion:1,writable:false,recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code:'SYNC_STORAGE_MIGRATION_REQUIRED'});
 }
 {
   const f=await fixture();f.db.raw.exec('DROP TABLE sync_records');f.db.resetMetrics();assert.deepEqual(await code(await f.push(data())),[503,'SYNC_STORAGE_SCHEMA_UNSUPPORTED']);assert.equal(f.db.metrics.writes,0);
@@ -271,3 +271,10 @@ let killed=0;
 }
 assert.equal(killed,5);
 console.log('Record sync storage PASS: real SQLite CAS/bootstrap races, rollback, >2MB roundtrip, opaque identity/container/order, tombstones, schema-loss guards, auth/deletion races, additive migration fallback, request/row/depth/node/count/bind budgets; 5 critical semantic mutants killed.');
+
+// V2 archive support requires enabled restore and the existing schema; no writer change.
+{
+ const f=await fixture();const ready=await(await f.call('capabilities')).json();assert.equal(ready.personalRestoreProtocol,1);assert.deepEqual(ready.personalBackupVersions,[1,2]);
+ const response=await worker.fetch(new Request(`${ORIGIN}/api/sync/capabilities`,{headers:{Authorization:`Bearer ${f.token}`}}),{DB:f.db,PERSONAL_RESTORE_ENABLED:'false'},{waitUntil(){}});const disabled=await response.json();assert.equal(disabled.personalRestoreProtocol,false);assert.deepEqual(disabled.personalBackupVersions,[]);
+ const missing=await fixture({migrationsUpTo:'0009_record_transport_indexes.sql'});assert.deepEqual((await(await missing.call('capabilities')).json()).personalBackupVersions,[]);
+}
