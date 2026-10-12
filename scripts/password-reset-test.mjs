@@ -56,6 +56,7 @@ async function register(email, password = 'password123') {
   const response = await post('/api/auth/register', { email, password });
   assert.equal(response.status, 201);
   const body = await response.json();
+  assert.equal(body.user.onboardingEligible, true, 'migrated auth fixture: new registration eligibility');
   return { id: body.user.id, email, token: body.sessionToken };
 }
 // The shape `upsertOAuthUser` writes: the user and its first provider link share created_at (generated password).

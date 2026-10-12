@@ -144,6 +144,7 @@ const me = async token => (await call('/api/me', authed(token))).status;
 
 // A bystander account that must survive every deletion below.
 const bystander = await register('bystander@example.test');
+assert.equal(db.rows('SELECT onboarding_eligible FROM users WHERE id = ?', bystander.id)[0].onboarding_eligible, 1, 'additive auth schema preserves deletion fixture');
 await seed(bystander, 'bystander');
 const bystanderFootprint = footprint(bystander.id);
 

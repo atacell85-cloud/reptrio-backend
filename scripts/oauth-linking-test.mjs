@@ -100,6 +100,7 @@ assert.deepEqual([providerEmailTrusted('apple', { email_verified: 'true' }, 'x@s
   // G1: a new verified identity creates an account; the same provider + sub signs in to it.
   const first = await signIn('google', { sub: 'g-1', email: 'g1@example.test', verified: true });
   assert.ok(first.id);
+  assert.equal(db.rows('SELECT onboarding_eligible FROM users WHERE id = ?', first.id)[0].onboarding_eligible, 1, 'new OAuth fixture uses migrated schema');
   assert.equal((await signIn('google', { sub: 'g-1', email: 'g1@example.test', verified: true })).id, first.id, 'G1: provider + sub → same account');
   // G2: same sub, changed email (even unverified now) → the same account; the email never re-routes it.
   const decoy = await register('g1-new@example.test');

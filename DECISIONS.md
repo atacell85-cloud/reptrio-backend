@@ -76,3 +76,20 @@ Fresh independent FULL HIGH Guardian: **GEÇTİ**, corrected 21-file freeze SHA2
 Evidence: corrected deletion suite and independent lifetime receipt/ALL undo/UNDONE replay/cross-account controls PASS. Existing 24 focus groups/six safety mutants and full 5,101 sessions/66,313 sets evidence assessed proportionately; broad run predates final unit/empty guards, later focus covers them. Mechanical backend Guardian NOT_AVAILABLE. No runtime changes after reviewed freeze. Commit/push permitted for this backend scope only.
 
 Build44 overall **PARTIAL**: native operation boundary, account-scoped pending reconciliation, Watch ownership/custody approval and implementation, ZIP UI/restore application/statistics integration and cross-device end-to-end verification remain. No production migration/deploy, iOS build/TestFlight or real user deletion performed or authorized. B45 external imports PLAN_ONLY.
+
+## 2026-10-12 — B44-06 server onboarding eligibility local slice
+
+Approved additive auth contract: `users.onboarding_eligible INTEGER NOT NULL DEFAULT 0`; genuine new email or provider account INSERT sets 1 only when the column exists. Existing account login/provider linking never promotes eligibility. Public sessions and authenticated `/api/me` return server-read `onboardingEligible`; private `currentUser` and all record sync/transport/personal restore queries are unchanged. Eligibility is not completion or persisted progress.
+
+Auth-local uncached `PRAGMA table_info(users)` retains old-schema auth with false eligibility and detects later migration on the same binding; unrelated database failures propagate. Migration 0011 is a new local file only. Accounts created before its application remain false with no backfill. Rollback: revert backend code to `1599f49a2e83f965c2d46951a7629d8cf9d267a3` while retaining the unused additive column; no destructive downmigration.
+
+Local implementation pending independent HIGH review; no commit/push, production D1 migration/deploy, build, mobile/Watch or real user data writes. Entire Build 44 remains PARTIAL. Exact ten-file map, test evidence and frozen hashes are in workspace `task-notes/B44_ELIGIBILITY_IMPLEMENTATION.md` and `B44_ELIGIBILITY_FREEZE.json`.
+
+Verification: focused onboarding eligibility and full npm suite EXIT 0, including unchanged default 5,101-session / 66,313-set scale, existing OAuth/reset/deletion and storage/transport/personal restore regressions. Local logs `/private/tmp/b44-eligibility-focus.log` and `/private/tmp/b44-eligibility-full.log`; independent HIGH review remains pending.
+
+
+## 2026-10-12 — B44-06 eligibility independently accepted
+
+Independent HIGH Guardian GEÇTİ on exact ten-file freeze based on `1599f49a2e83f965c2d46951a7629d8cf9d267a3`; parent verified all hashes before this documentation-only append. Real routed SQLite scenarios and six isolated meaningful runtime mutations passed/caught; public web cookie and wrong-account controls, forged Google signature, wrong Apple nonce, strict flag value and capability failure guards checked independently. Focus and full npm EXIT0, unchanged 5,101 sessions/66,313 sets and complete ALL undo; unrelated full tests were not repeated by Guardian. Private currentUser and record storage/transport/restore remain unchanged. Backend mechanical Guardian unavailable, not claimed.
+
+Accepted only server onboarding eligibility contract. Eight-question native onboarding and complete Build44 remain pending. Migration0011 exists as a file only; no production migration/deploy, build or real account changes. Accounts created before rollout remain false; no inferred backfill. Commit/push permitted for this scope. Evidence retained in project task-notes/B44_ELIGIBILITY_IMPLEMENTATION.md, B44_ELIGIBILITY_FREEZE.json and B44_ELIGIBILITY_GUARDIAN.md.
