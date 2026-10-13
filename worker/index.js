@@ -29,7 +29,7 @@ export default {
 
   async queue(batch, env) {
     for (const message of batch.messages) {
-      await processImportJob(env, message.body?.jobId);
+      await processImportJob(env, message.body?.jobId, message.body?.userId);
       message.ack();
     }
   }
@@ -119,7 +119,7 @@ async function createImportJob(request, env, ctx) {
       return apiError(code, statusFor(code));
     }
   }
-  await enqueueImportJob(env, ctx, body.importId);
+  await enqueueImportJob(env, ctx, body.importId, user.id);
   return json({ importId: body.importId, status: 'queued' }, 202);
 }
 
@@ -133,11 +133,11 @@ async function handleImportJob(request, env, ctx, importId, retry) {
     const row = await env.DB.prepare('SELECT id FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
     if (!row) return apiError('IMPORT_JOB_NOT_FOUND', 404);
     await env.DB.prepare("UPDATE import_jobs SET status = 'queued', error_code = NULL, updated_at = ? WHERE user_id = ? AND id = ?").bind(new Date().toISOString(), user.id, importId).run();
-    await enqueueImportJob(env, ctx, importId);
+    await enqueueImportJob(env, ctx, importId, user.id);
     return json({ importId, status: 'queued' }, 202);
   }
   if (request.method !== 'GET') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
-  let row = await env.DB.prepare('SELECT id, status, error_code, source_json, normalized_document_json, preview_json, observability_json, openai_response_id, attempts, created_at, updated_at, completed_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
+  let row = await env.DB.prepare('SELECT user_id, id, status, error_code, source_json, normalized_document_json, preview_json, observability_json, openai_response_id, attempts, created_at, updated_at, completed_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
   if (!row) return apiError('IMPORT_JOB_NOT_FOUND', 404);
   if (row.status === 'processing' && row.openai_response_id) {
     if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
@@ -157,14 +157,15 @@ async function handleImportJob(request, env, ctx, importId, retry) {
   });
 }
 
-async function enqueueImportJob(env, ctx, jobId) {
-  if (env.IMPORT_QUEUE) await env.IMPORT_QUEUE.send({ jobId });
-  else ctx?.waitUntil?.(processImportJob(env, jobId));
+async function enqueueImportJob(env, ctx, jobId, userId) {
+  if (!jobId || !userId) return; // Old queue messages cannot acquire a different account's document.
+  if (env.IMPORT_QUEUE) await env.IMPORT_QUEUE.send({ jobId, userId });
+  else ctx?.waitUntil?.(processImportJob(env, jobId, userId));
 }
 
-async function processImportJob(env, jobId) {
-  if (!jobId) return;
-  const job = await env.DB.prepare('SELECT * FROM import_jobs WHERE id = ?').bind(jobId).first();
+async function processImportJob(env, jobId, userId) {
+  if (!jobId || !userId) return;
+  const job = await env.DB.prepare('SELECT * FROM import_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId).first();
   if (!job || !['queued', 'failed'].includes(job.status)) return;
   // A queued job grants no continuing permission: check owner again at execution time.
   if (!(await hasAiImportConsent(env, job.user_id))) {
