@@ -100,8 +100,8 @@ export async function handleAiConsentRequest(request, env, pathname) {
 }
 
 /** Deletion code must not leave consent/audit rows on installations using FK OFF. */
-export async function aiConsentDeletionTables(env) {
-  const rows = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ai_import_consents','ai_import_consent_events')").all()).results || [];
+export async function aiConsentDeletionTables(env,schemaRows=null) {
+  const rows = schemaRows ? schemaRows.filter(row=>row.type==='table'&&['ai_import_consents','ai_import_consent_events'].includes(row.name)) : (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ai_import_consents','ai_import_consent_events')").all()).results || [];
   const found = new Set(rows.map(row => row.name));
   if (found.size === 0) return [];
   if (found.size !== 2) throw Object.assign(new Error(unavailableCode), { code: unavailableCode, status: 503 });

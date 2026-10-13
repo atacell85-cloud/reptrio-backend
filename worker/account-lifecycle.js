@@ -27,9 +27,12 @@ export async function activeAccountDB(db,userId){
 export async function lifecycleReady(db){
  const cols=(await db.prepare('PRAGMA table_info(users)').all()).results||[];
  const required=['account_status','credential_origin','email_verified_at','deletion_requested_at','purge_at','purge_lease','purge_lease_until','purge_attempts','purge_retry_at','purge_error'];
- const w=await db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='account_lifecycle_work'").first();
+ const schema=(await db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name IN ('account_lifecycle_work','account_lifecycle_credentials','oauth_reauth_tickets')").all()).results||[];
+ const w=schema.find(row=>row.name==='account_lifecycle_work');
  if(!w||!['id','user_id','state','response_id','created_at','expires_at','last_error'].every(c=>new RegExp(`\\b${c}\\b`).test(w.sql)))throw Object.assign(new Error('ACCOUNT_LIFECYCLE_UNAVAILABLE'),{code:'ACCOUNT_LIFECYCLE_UNAVAILABLE',status:503});
- const t=await db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='account_lifecycle_credentials'").first();
+ const t=schema.find(row=>row.name==='account_lifecycle_credentials');
+ const tickets=schema.find(row=>row.name==='oauth_reauth_tickets');
+ if(!tickets||!['id','user_id','ticket_hash','created_at','expires_at','used_at','provider','session_hash'].every(c=>new RegExp(`\\b${c}\\b`).test(tickets.sql)))throw Object.assign(new Error('ACCOUNT_LIFECYCLE_UNAVAILABLE'),{code:'ACCOUNT_LIFECYCLE_UNAVAILABLE',status:503});
  if(!required.every(c=>cols.some(x=>x.name===c))||!t||!['id','user_id','token_hash','session_hash','purpose','created_at','expires_at','ownership_verified_at','used_at'].every(c=>new RegExp(`\\b${c}\\b`).test(t.sql)))throw Object.assign(new Error('ACCOUNT_LIFECYCLE_UNAVAILABLE'),{code:'ACCOUNT_LIFECYCLE_UNAVAILABLE',status:503});
 }
 async function rate(request,env){
@@ -119,12 +122,12 @@ export async function handleLifecycleRequest(request,env,path){
   env.DB.prepare(`UPDATE import_jobs SET status='failed',error_code='ACCOUNT_PENDING_DELETION',updated_at=? WHERE user_id=? AND status IN ('queued','processing') AND ${guard}`).bind(confirmedAt,user.id,user.id,marker)
  ]);
  if(results[0].meta.changes!==1)return error('ACCOUNT_DELETE_PROOF_INVALID',401);
- if(method==='DELETE_NOW')return await executePurge(env,user.id,true);
+ if(method==='DELETE_NOW')return await executePurge(env,user.id,true,null,true);
  return json({ok:true,accountStatus:'PENDING_DELETION',deletionRequestedAt:confirmedAt,purgeAt:deadline},200,{'Set-Cookie':'aks_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});
  }catch(cause){return error(cause.code||'ACCOUNT_LIFECYCLE_FAILED',cause.status||503);}
 }
-export async function executePurge(env,userId,immediate=false,recoveryCredentialId=null){
- await lifecycleReady(env.DB);await purgeAccountData(env,userId,{preflight:true});
+export async function executePurge(env,userId,immediate=false,recoveryCredentialId=null,submissionPreflightDone=false){
+ await lifecycleReady(env.DB);if(!submissionPreflightDone)await purgeAccountData(env,userId,{preflight:true});
  const stamp=new Date(),now=stamp.toISOString(),lease=randomToken(24);
  const acquired=await env.DB.prepare(`UPDATE users SET account_status='PURGING',purge_lease=?,purge_lease_until=?,purge_attempts=purge_attempts+1 WHERE id=? AND deleted_at IS NULL AND ((account_status='PENDING_DELETION' AND (purge_at<=? OR ?=1)) OR (account_status='PURGING' AND (purge_lease_until IS NULL OR purge_lease_until<=?))) AND (purge_retry_at IS NULL OR purge_retry_at<=? OR ?=1) AND (? IS NULL OR EXISTS(SELECT 1 FROM account_lifecycle_credentials WHERE id=? AND user_id=users.id AND purpose='RECOVERY' AND used_at IS NULL AND expires_at>? AND ownership_verified_at IS NOT NULL))`).bind(lease,new Date(stamp.getTime()+120000).toISOString(),userId,now,immediate?1:0,now,now,immediate?1:0,recoveryCredentialId,recoveryCredentialId,now).run();
  if(acquired.meta.changes!==1)return error('ACCOUNT_PURGE_BUSY',409);
@@ -139,7 +142,8 @@ export async function purgeDueAccounts(env){
  try{
  await lifecycleReady(env.DB);const now=new Date().toISOString();
  await env.DB.prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='WORKER_INTERRUPTED' WHERE state='RUNNING' AND expires_at<=?").bind(now).run();
- const rows=(await env.DB.prepare(`SELECT id FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=? AND (purge_retry_at IS NULL OR purge_retry_at<=?) AND (purge_lease_until IS NULL OR purge_lease_until<=?) ORDER BY purge_at LIMIT 8`).bind(now,now,now).all()).results||[];
+ // One owner per invocation leaves room for complete guarded cleanup on the smallest D1 allowance.
+ const rows=(await env.DB.prepare(`SELECT id FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=? AND (purge_retry_at IS NULL OR purge_retry_at<=?) AND (purge_lease_until IS NULL OR purge_lease_until<=?) ORDER BY purge_at LIMIT 1`).bind(now,now,now).all()).results||[];
  for(const row of rows)await executePurge(env,row.id);
  const overdue=await env.DB.prepare(`SELECT COUNT(*) AS count FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=?`).bind(new Date(Date.now()-3600000).toISOString()).first();
  if(overdue.count)console.warn(JSON.stringify({event:'account_purge_overdue',count:overdue.count}));

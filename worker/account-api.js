@@ -371,11 +371,14 @@ async function deleteAccount(request,env){return error('ACCOUNT_LIFECYCLE_UNAVAI
 
 export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
  const context=await deletionContext(env,userId);if(!context)throw coded('AUTH_REQUIRED');
- const cleanupMode=await storageCleanupMode(env.DB,userId),consentTables=await aiConsentDeletionTables(env);
- const lifecycle=(await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='account_lifecycle_credentials'").all()).results.length?['account_lifecycle_work','account_lifecycle_credentials']:[];
+ // One bounded current snapshot feeds existing schema validators; never cache readiness across requests/effects.
+ const schemaNames=[...ACCOUNT_TABLES,...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts','ai_import_consents','ai_import_consent_events','account_lifecycle_work','account_lifecycle_credentials','personal_restore_record_target','personal_restore_journal_target'];
+ const schemaRows=(await env.DB.prepare(`SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','index') AND name IN (${schemaNames.map(()=>'?').join(',')})`).bind(...schemaNames).all()).results||[];
+ const cleanupMode=await storageCleanupMode(env.DB,userId,schemaRows),consentTables=await aiConsentDeletionTables(env,schemaRows);
+ const lifecycle=schemaRows.some(row=>row.type==='table'&&row.name==='account_lifecycle_credentials')?['account_lifecycle_work','account_lifecycle_credentials']:[];
  const tables=[...consentTables,...(cleanupMode==='legacy'?LEGACY_ACCOUNT_TABLES:cleanupMode==='personal'?[...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES]:cleanupMode==='receipts'?['sync_mutation_receipts',...ACCOUNT_TABLES]:ACCOUNT_TABLES),...lifecycle];
  // Check every cleanup table/owner column before external side effects, including legacy tables.
- for(const table of tables){const cols=(await env.DB.prepare(`PRAGMA table_info(${table})`).all()).results;if(!cols.some(c=>c.name==='user_id'))throw Object.assign(coded('ACCOUNT_CLEANUP_SCHEMA_UNSUPPORTED'),{status:503});}
+ for(const table of tables){const row=schemaRows.find(row=>row.type==='table'&&row.name===table);if(!row?.sql||!/(?:\(|,)\s*["`\[]?user_id["`\]]?\s+(?:TEXT|INTEGER|BLOB|REAL|NUMERIC)\b/i.test(row.sql))throw Object.assign(coded('ACCOUNT_CLEANUP_SCHEMA_UNSUPPORTED'),{status:503});}
  if(preflight)return;
  const work=(await env.DB.prepare("SELECT id,state,response_id FROM account_lifecycle_work WHERE user_id=? AND state<>'RESOLVED'").bind(userId).all()).results||[];
  if(work.some(row=>row.state==='RUNNING'||row.state==='UNKNOWN'))throw Object.assign(coded('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED'),{status:503});

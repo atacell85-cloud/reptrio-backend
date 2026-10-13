@@ -57,8 +57,8 @@ export async function readRecordState(db,userId,mutationId=undefined) {
 }
 
 // Account deletion needs only schema/state version before external cleanup, never account payload assembly.
-export async function storageCleanupMode(db,userId) {
-  const tables = await storageTables(db);
+export async function storageCleanupMode(db,userId,schemaRows=null) {
+  const tables = schemaRows || await storageTables(db);
   const readiness = recordSchemaStatus(tables);
   const receipts = receiptSchemaStatus(tables);
   const personal=personalRestoreSchemaStatus(tables);

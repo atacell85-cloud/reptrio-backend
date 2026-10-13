@@ -9,7 +9,12 @@ const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 export default {
-  async scheduled(event,env,ctx) { ctx.waitUntil(Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env),purgeDueAccounts(env)])); },
+  async scheduled(event,env,ctx) {
+    // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
+    ctx.waitUntil(event.cron === '*/15 * * * *'
+      ? Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)])
+      : purgeDueAccounts(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/runtime-config.js') return runtimeConfig(request);
