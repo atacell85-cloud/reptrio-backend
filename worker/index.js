@@ -66,7 +66,7 @@ async function parseImport(request, env) {
     if (bytes(JSON.stringify(body.normalizedDocument)) > config.maxInputBytes) throw coded('DOCUMENT_TOO_LARGE');
 
     await assertAiImportConsent(env, user.id);
-    const { payload, upstream, attempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: body, requestId });
+    const { payload, upstream, attempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: body, requestId, beforeAttempt: () => assertAiImportConsent(env, user.id) });
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, body.importId, body.normalizedDocument);
@@ -184,7 +184,7 @@ async function processImportJob(env, jobId, userId) {
     const requestId = crypto.randomUUID();
     const started = Date.now();
     await assertAiImportConsent(env, job.user_id);
-    const { payload, upstream, attempts: upstreamAttempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: { importId: job.id, normalizedDocument }, requestId });
+    const { payload, upstream, attempts: upstreamAttempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: { importId: job.id, normalizedDocument }, requestId, beforeAttempt: () => assertAiImportConsent(env, job.user_id) });
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, job.id, normalizedDocument);
@@ -222,12 +222,14 @@ async function searchYouTube(request, env, url) {
   }
 }
 
-export async function requestOpenAI({ apiKey, config, input, requestId, fetchImpl = fetch, sleep = delay }) {
+export async function requestOpenAI({ apiKey, config, input, requestId, fetchImpl = fetch, sleep = delay, beforeAttempt = async () => {} }) {
   let attempts = 0;
   let lastError;
   while (attempts <= config.maxRetries) {
     attempts += 1;
     try {
+      // Revocation during rate-limit backoff must stop the NEXT OpenAI request, not only the first.
+      await beforeAttempt();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), config.timeoutMs);
       let upstream;
