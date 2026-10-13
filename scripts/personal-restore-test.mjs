@@ -175,7 +175,7 @@ await test('auth ACTIVE bootstrap byte-first stage TTL receipt cleanup and parti
  const f=environment();const noAuth=await f.call('start',{},undefined,'RESTORE','invalid');assert.equal(noAuth.response.status,401);assert.equal(f.DB.metrics.payloadRows,0);assert.equal(f.DB.metrics.writes,0);
  const op=await start(f,expectedFor([simpleSession('a')]));const other=environment();const foreign=await other.call('receipt',{},op.operationId);assert.equal(foreign.response.status,404);
  await ok(f.call('chunks',{localBinding:'local-7',index:0,roots:[simpleSession('a')]},op.operationId));f.DB.raw.prepare("UPDATE personal_restore_operations SET expires_at='2000-01-01'").run();const expired=await f.call('finalize',{localBinding:'local-7'},op.operationId);assert.equal(expired.body.code,'RESTORE_EXPIRED');await cleanupPersonalOperations(f.env);assert.equal(f.DB.rows('SELECT COUNT(*) AS n FROM personal_restore_records')[0].n,0);
- for(const mode of ['blocked','deleted','partial','legacy-oversized']){const g=environment();if(mode==='partial')g.DB.exec('DROP INDEX personal_restore_record_target');if(mode==='blocked')g.DB.raw.prepare("INSERT INTO sync_account_state VALUES(?,1,0,'blocked','BLOCKED','now')").run(g.id);if(mode==='deleted')g.DB.raw.prepare("UPDATE users SET deleted_at='now'").run();if(mode==='legacy-oversized')seedLegacy(g,{opaque:'\\'.repeat(900000)});
+ for(const mode of ['pending','purging','blocked','deleted','partial','legacy-oversized']){const g=environment();if(['pending','purging'].includes(mode))g.DB.raw.prepare('UPDATE users SET account_status=?').run(mode==='pending'?'PENDING_DELETION':'PURGING');if(mode==='partial')g.DB.exec('DROP INDEX personal_restore_record_target');if(mode==='blocked')g.DB.raw.prepare("INSERT INTO sync_account_state VALUES(?,1,0,'blocked','BLOCKED','now')").run(g.id);if(mode==='deleted')g.DB.raw.prepare("UPDATE users SET deleted_at='now'").run();if(mode==='legacy-oversized')seedLegacy(g,{opaque:'\\'.repeat(900000)});
   if(mode==='legacy-oversized'){const uploaded=await upload(g,[simpleSession('a')]);const result=await g.call('preview',{localBinding:'local-7'},uploaded.operation.operationId);assert.equal(result.body.code,'RESTORE_LEGACY_UNSUPPORTED');assert.equal(g.DB.metrics.payloadRows,0);assert.equal(g.DB.trace.filter(t=>t.sql.includes("CASE WHEN length(CAST(json_object('data_json'")).at(-1).returnedBytes,20);}
   else{const result=await g.call('start',{sourceNamespace:'source',archiveRetryHash:'a'.repeat(64),localBinding:'local-7',dataSchemaVersion:9,expectedChunks:1,expectedCounts:expectedFor([simpleSession('a')]),baseRevision:0});assert.notEqual(result.response.status,200);assert.equal(g.DB.metrics.writes,0);assert.equal(g.DB.metrics.payloadRows,0);}
  }
@@ -189,9 +189,9 @@ await test('continuation selection revision generation drift invalidates old con
 
 
 await test('one-batch restore CAS writer BLOCKED deletion races and durable replay identity never resurrect',async()=>{
- for(const mode of ['writer','blocked','deleted']){
+ for(const mode of ['writer','pending','purging','blocked','deleted']){
   const f=environment(),initial=await restore(f,[simpleSession('original')]),ready=await prepared(f,[simpleSession('later')],1);let raced;
-  f.DB.setBeforeBatch(()=>{f.DB.setBeforeBatch(null);if(mode==='writer')f.DB.raw.prepare("UPDATE sync_account_state SET revision=2,write_token='race'").run();if(mode==='blocked')f.DB.raw.prepare("UPDATE sync_account_state SET write_status='BLOCKED'").run();if(mode==='deleted')f.DB.raw.prepare("UPDATE users SET deleted_at='now'").run();raced=accountDump(f);});
+  f.DB.setBeforeBatch(()=>{f.DB.setBeforeBatch(null);if(['pending','purging'].includes(mode))f.DB.raw.prepare('UPDATE users SET account_status=?').run(mode==='pending'?'PENDING_DELETION':'PURGING');if(mode==='writer')f.DB.raw.prepare("UPDATE sync_account_state SET revision=2,write_token='race'").run();if(mode==='blocked')f.DB.raw.prepare("UPDATE sync_account_state SET write_status='BLOCKED'").run();if(mode==='deleted')f.DB.raw.prepare("UPDATE users SET deleted_at='now'").run();raced=accountDump(f);});
   const result=await f.call('commit',ready.input,ready.operation.operationId);assert.notEqual(result.response.status,200,mode);assert.equal(accountDump(f),raced,mode);assert.ok(!currentData(f).sessions.some(v=>v.id==='later'));assert.equal(f.DB.rows('SELECT state FROM personal_restore_operations WHERE operation_id=?',ready.operation.operationId)[0].state,'READY');assert.equal(initial.outcome.status,'COMMITTED');
  }
  const f=environment(),first=await restore(f,[simpleSession('original')]),duplicate=await restore(f,[simpleSession('original')],9,1);assert.equal(currentData(f).sessions.length,1);assert.ok(duplicate.outcome.counts.every(c=>c.classification==='SAME'));await undoAll(f,duplicate);assert.equal(currentData(f).sessions.length,1);await undoAll(f,first);assert.equal((currentData(f).sessions||[]).length,0);
@@ -262,6 +262,13 @@ await test('critical proof mutants expose target qualifier RAW order malformed s
  assert.equal(killed,4);console.log('PERSONAL_RESTORE_PROOF_MUTANTS_KILLED',killed);
 });
 
+await test('late lifecycle closure blocks complete ALL undo after authentication before atomic CAS',async()=>{
+ for(const status of ['PENDING_DELETION','PURGING']){
+  const f=environment(),imported=await restore(f,[simpleSession('undo-original')]),preview=await readyUndo(f,imported.operation.operationId);assert.equal(preview.response.status,200);
+  let baseline;f.DB.setBeforeBatch(()=>{f.DB.setBeforeBatch(null);f.DB.raw.prepare('UPDATE users SET account_status=? WHERE id=?').run(status,f.id);baseline=accountDump(f);});
+  const result=await f.call('undo',{localBinding:'local-7',confirm:true,undoDigest:preview.body.undoDigest,baseRevision:preview.body.baseRevision},imported.operation.operationId);assert.notEqual(result.response.status,200);assert.equal(accountDump(f),baseline);assert.equal(f.DB.rows('SELECT state FROM personal_restore_operations WHERE operation_id=?',imported.operation.operationId)[0].state,'UNDO_READY');
+ }
+});
 await test('unit-context and empty-selection semantic guard mutants reveal unsafe authorization',async()=>{
  const source=readFileSync(new URL('../worker/personal-restore-api.js',import.meta.url),'utf8');let killed=0;
  const mutants=[['unit',"AND json_extract(r.payload_json,'$.weightUnit')IS NULL AND NOT EXISTS", "AND json_extract(r.payload_json,'$.weightUnit')IS NULL AND EXISTS(SELECT 1 FROM personal_restore_records child WHERE child.user_id=r.user_id AND child.operation_id=r.operation_id AND child.root_id=r.root_id AND child.kind='set' AND json_extract(child.payload_json,'$.weightUnit')IS NULL) AND NOT EXISTS"],['empty',"if(!counts.length)fail('EMPTY_SELECTION',409);","if(false)fail('EMPTY_SELECTION',409);"]];

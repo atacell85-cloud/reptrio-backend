@@ -194,7 +194,7 @@ assert.deepEqual([providerEmailTrusted('apple', { email_verified: 'true' }, 'x@s
   const cookies = start.headers.getSetCookie().map(value => value.split(';')[0]);
   Object.assign(net, { nonce: cookies.find(v => v.startsWith('aks_oauth_nonce=')).split('=')[1], subject: 'a-raw', email: 'raw-token@privaterelay.appleid.com', verified: 'true' });
   const reauth = await call('/api/auth/oauth/apple/callback', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookies.join('; ') }, body: new URLSearchParams({ code: 'c', state: cookies.find(v => v.startsWith('aks_oauth_state=')).split('=')[1] }) });
-  assert.equal(new URL(reauth.headers.get('Location')).searchParams.get('auth_error'), 'APPLE_REAUTH_MISMATCH', 'A10: a different Apple sub is rejected');
+  assert.equal(new URL(reauth.headers.get('Location')).searchParams.get('auth_error'), 'OAUTH_REAUTH_MISMATCH', 'A10: a different Apple sub is rejected');
 }
 
 // ======== Cross-account takeover, then account deletion ========
@@ -220,9 +220,9 @@ assert.deepEqual([providerEmailTrusted('apple', { email_verified: 'true' }, 'x@s
   // The attacker's own verified identity (own email) gets its own account, and deleting it touches only that one.
   const attacker = await signIn('google', { sub: 'g-attacker-own', email: 'attacker@example.test', verified: true });
   assert.notEqual(attacker.id, victim.id);
-  assert.equal((await call('/api/auth/delete', authed(attacker.token, { method: 'POST', body: JSON.stringify({ confirm: 'DELETE', userId: victim.id }) }))).status, 200);
+  assert.equal((await call('/api/auth/delete', authed(attacker.token, { method: 'POST', body: JSON.stringify({ confirm: 'DELETE', userId: victim.id }) }))).status, 401);
   assert.equal(count('SELECT COUNT(*) AS n FROM users WHERE id = ?', victim.id), 1, 'victim survives');
-  assert.equal(count('SELECT COUNT(*) AS n FROM users WHERE id = ?', attacker.id), 0);
+  assert.equal(count('SELECT COUNT(*) AS n FROM users WHERE id = ?', attacker.id), 1,'session alone cannot delete');
 }
 
 // ======== Proof of the account's email (HIGH 2 / MEDIUM 3) ========
@@ -244,6 +244,11 @@ assert.deepEqual([providerEmailTrusted('apple', { email_verified: 'true' }, 'x@s
   const later = new Date(Date.now() + 5000).toISOString();
   db.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, email_trusted, created_at, last_login_at) VALUES ('apple', 'a-later', ?, 'pw-linked@site.example', 1, ?, ?)").run(pw.id, later, later);
   assert.equal((await link('g-pw-later', 'pw-linked@site.example')).error, LINK_ERROR, 'non-creating trusted link → not proven');
+  db.raw.prepare("UPDATE users SET email_verified_at=? WHERE id=?").run(new Date().toISOString(),pw.id);
+  const created=db.rows('SELECT created_at FROM users WHERE id=?',pw.id)[0].created_at;db.raw.prepare("UPDATE oauth_accounts SET created_at=? WHERE user_id=?").run(created,pw.id);
+  assert.equal((await link('g-pw-collision','pw-linked@site.example')).error,LINK_ERROR,'verified password + trusted timestamp-colliding provider never authorizes auto-link');
+  const skew=await signIn('apple',{sub:'a-skew',email:'skew@site.example',verified:'true'});db.raw.prepare("UPDATE oauth_accounts SET created_at='2000-01-01' WHERE user_id=?").run(skew.id);assert.equal((await link('g-skew','skew@site.example')).id,skew.id,'explicit creating provider survives timestamp skew');
+  const unknown=await signIn('apple',{sub:'a-unknown',email:'unknown@site.example',verified:'true'});db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(unknown.id);assert.equal((await link('g-unknown','unknown@site.example')).error,LINK_ERROR,'UNKNOWN not inferred from matching timestamps or verified email');
   // The creating identity's provider email changed: the account's old address is no longer proven by it.
   const moved = await signIn('apple', { sub: 'a-moved', email: 'old-address@site.example', verified: 'true' });
   assert.equal((await signIn('apple', { sub: 'a-moved', email: 'new-address@site.example', verified: 'true' })).id, moved.id);

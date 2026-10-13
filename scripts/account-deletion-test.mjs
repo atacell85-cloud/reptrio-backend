@@ -1,3 +1,4 @@
+import {purgeDueAccounts} from '../worker/account-lifecycle.js';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -29,10 +30,12 @@ async function idToken(claims) {
 }
 
 // ---- Provider network mock.
+let mailLink='';
 const net = { nonce: null, subject: null, email: null, appleRefreshToken: null, revokeMode: 'ok', revokes: [], openaiDeletes: [], openaiRequests: [] };
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init = {}) => {
   const target = String(url);
+  if(target==='https://cpaas.zoho.eu/v1.1/email'){mailLink=/#token=([\w-]{43})/.exec(JSON.parse(init.body).textbody)[1];return new Response('{}');}
   const ok = value => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
   if (target === 'https://www.googleapis.com/oauth2/v3/certs' || target === 'https://appleid.apple.com/auth/keys') return ok({ keys: [jwk] });
   if (target === 'https://oauth2.googleapis.com/token' || target === 'https://appleid.apple.com/auth/token') {
@@ -65,7 +68,7 @@ globalThis.fetch = async (url, init = {}) => {
 const foreignKeys = process.env.D1_FOREIGN_KEYS !== 'off';
 const db = createD1({ foreignKeys });
 const env = {
-  DB: db,
+  DB: db, ZEPTOMAIL_API_KEY:'fixture',
   ASSETS: { fetch: async () => new Response('ok') },
   GOOGLE_OAUTH_CLIENT_ID: 'google-client', GOOGLE_OAUTH_CLIENT_SECRET: 'google-secret',
   APPLE_OAUTH_CLIENT_ID: 'com.reptrio.signin', APPLE_OAUTH_TEAM_ID: 'TEAM123456', APPLE_OAUTH_KEY_ID: 'KEY1234567', APPLE_OAUTH_PRIVATE_KEY: applePrivateKey,
@@ -74,7 +77,7 @@ const env = {
 const call = (path, init = {}, overrideEnv = env) => worker.fetch(new Request(`${ORIGIN}${path}`, init), overrideEnv, { waitUntil() {} });
 const authed = (token, init = {}) => ({ ...init, headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile', Authorization: `Bearer ${token}`, ...(init.headers || {}) } });
 const deleteRequest = (token, payload) => authed(token, { method: 'POST', body: JSON.stringify(payload) });
-const USER_TABLES = ['ai_import_consent_events','ai_import_consents','personal_restore_identity_journal','personal_restore_records','personal_restore_roots','personal_restore_chunks','personal_restore_operations','sync_mutation_receipts', 'sync_records', 'sync_account_state', 'import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
+const USER_TABLES = ['account_lifecycle_work','account_lifecycle_credentials','ai_import_consent_events','ai_import_consents','personal_restore_identity_journal','personal_restore_records','personal_restore_roots','personal_restore_chunks','personal_restore_operations','sync_mutation_receipts', 'sync_records', 'sync_account_state', 'import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
 const footprint = userId => Object.fromEntries([...USER_TABLES.map(table => [table, db.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`, userId)[0].n]), ['users', db.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', userId)[0].n]]);
 const empty = Object.fromEntries([...USER_TABLES, 'users'].map(table => [table, 0]));
 
@@ -82,7 +85,7 @@ async function register(email, password = 'password123') {
   const response = await call('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ email, password }) });
   assert.equal(response.status, 201);
   const body = await response.json();
-  return { id: body.user.id, token: body.sessionToken, email };
+  return { id: body.user?.id, token: body.sessionToken||body.recoveryToken, email };
 }
 
 async function oauthLogin(provider, subject, email, appleRefreshToken = null) {
@@ -101,7 +104,7 @@ async function oauthLogin(provider, subject, email, appleRefreshToken = null) {
   const exchange = await call('/api/auth/oauth/mobile/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ code: location.searchParams.get('code') }) });
   assert.equal(exchange.status, 201);
   const body = await exchange.json();
-  return { id: body.user.id, token: body.sessionToken, email };
+  return { id: body.user?.id, token: body.sessionToken||body.recoveryToken, email };
 }
 
 // Apple re-authorization for deletion: ticket from the signed-in app, Apple sign-in with `reauth=<ticket>`; returns the
@@ -136,302 +139,81 @@ async function seed(user, tag) {
   db.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, openai_response_id, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?, ?)").run(`job-${tag}`, user.id, `resp_${tag}`, now, now);
   db.raw.prepare('INSERT INTO mobile_oauth_codes (id, user_id, code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`code-${tag}`, user.id, `hash-${tag}`, now, now);
   db.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${tag}`, user.id, `reset-hash-${tag}`, now, now);
+  // Populate every new account-scoped table, so FK-OFF verifies actual explicit cleanup rather than empty schemas.
+  db.raw.prepare("INSERT INTO ai_import_consents VALUES(?, 'ai_import_openai_document_v1', ?,NULL,?)").run(user.id,now,now);
+  db.raw.prepare("INSERT INTO ai_import_consent_events VALUES(?,?,'grant','ai_import_openai_document_v1',?)").run('consent-'+tag,user.id,now);
+  db.raw.prepare("INSERT INTO sync_mutation_receipts VALUES(?,?,'h','p',0,1,'{}',?,?)").run(user.id,'receipt-'+tag,now,now);
+  const op='restore-'+tag;
+  db.raw.prepare("INSERT INTO personal_restore_operations(user_id,operation_id,purpose,source_namespace,archive_retry_hash,local_binding,data_schema_version,expected_chunks,expected_counts_json,base_revision,state,expires_at,created_at,updated_at)VALUES(?,?,'RESTORE','source','archive','binding',8,1,'{}',0,'READY',?,?,?)").run(user.id,op,now,now,now);
+  db.raw.prepare("INSERT INTO personal_restore_roots(user_id,operation_id,root_id,root_kind,source_tuple,source_ordinal,portable_hash,counts_json)VALUES(?,?,0,'session','[\"source\"]',0,'h','{}')").run(user.id,op);
+  db.raw.prepare("INSERT INTO personal_restore_records(user_id,operation_id,root_id,item_ordinal,kind,record_key,ordinal,address_json,payload_json,source_tuple,portable_hash)VALUES(?,?,0,0,'session','[\"source\"]',0,'{}','{}','[\"source\"]','h')").run(user.id,op);
+  db.raw.prepare("INSERT INTO personal_restore_chunks VALUES(?,?,0,'h',1,1,'{}',2)").run(user.id,op);
+  db.raw.prepare("INSERT INTO personal_restore_identity_journal(user_id,source_namespace,kind,source_tuple,target_kind,target_key,target_path,operation_id,import_hash,address_hash,target_ordinal,added_revision,disposition,state)VALUES(?,'source','session','[\"source\"]','session','[\"source\"]','[]',?,'h','h',0,1,'ADDED','LIVE')").run(user.id,op);
+  db.raw.prepare("INSERT INTO account_lifecycle_work VALUES(?,?,'RESOLVED',NULL,?,?,NULL)").run('work-'+tag,user.id,now,now);
+  db.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES(?,?,?,?,'RECOVERY',?,?)").run('lifecycle-'+tag,user.id,'credential-'+tag,'session-'+tag,now,new Date(Date.now()+600000).toISOString());
+  db.raw.prepare('INSERT INTO oauth_reauth_tickets(id,user_id,ticket_hash,created_at,expires_at)VALUES(?,?,?,?,?)').run('ticket-'+tag,user.id,'ticket-hash-'+tag,now,new Date(Date.now()+600000).toISOString());
+
 }
 
-const info = async token => { const response = await call('/api/auth/delete', authed(token)); return { status: response.status, body: await response.json() }; };
-const remove = async (token, payload = { confirm: 'DELETE' }) => { const response = await call('/api/auth/delete', deleteRequest(token, payload)); return { status: response.status, body: await response.json(), cookie: response.headers.get('Set-Cookie') }; };
-const me = async token => (await call('/api/me', authed(token))).status;
 
-// A bystander account that must survive every deletion below.
-const bystander = await register('bystander@example.test');
-assert.equal(db.rows('SELECT onboarding_eligible FROM users WHERE id = ?', bystander.id)[0].onboarding_eligible, 1, 'additive auth schema preserves deletion fixture');
-await seed(bystander, 'bystander');
-const bystanderFootprint = footprint(bystander.id);
-
-// ---- 1. Email / password: the real password is still required.
-{
-  const user = await register('email@example.test', 'correct-horse-1');
-  await seed(user, 'email');
-  assert.deepEqual((await info(user.token)).body, { requiresPassword: true, providers: [], appleReauthRequired: false });
-  assert.deepEqual(await remove(user.token, { confirm: 'DELETE', password: 'wrong-password' }).then(r => [r.status, r.body.code]), [401, 'AUTH_INVALID_CREDENTIALS']);
-  assert.deepEqual(await remove(user.token, { confirm: 'DELETE' }).then(r => [r.status, r.body.code]), [401, 'AUTH_INVALID_CREDENTIALS'], 'no password → rejected');
-  assert.notDeepEqual(footprint(user.id), empty, 'a rejected request deletes nothing');
-  const done = await remove(user.token, { confirm: 'DELETE', password: 'correct-horse-1' });
-  assert.equal(done.status, 200);
-  assert.match(done.cookie, /aks_session=;.*Max-Age=0/);
-  assert.deepEqual(footprint(user.id), empty, 'every linked row and the user row are gone');
-  assert.equal(await me(user.token), 401, 'the session no longer authenticates');
-  const login = await call('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'email@example.test', password: 'correct-horse-1' }) });
-  assert.equal(login.status, 401, 'cannot log in after deletion');
-  assert.deepEqual(net.openaiDeletes, ['resp_email'], 'stored OpenAI import response deleted');
+const info=async user=>{const r=await call('/api/auth/delete',authed(user.token));assert.equal(r.status,200);return r.json();};
+async function proof(user){
+ db.raw.prepare("DELETE FROM account_lifecycle_credentials WHERE user_id=? AND purpose='DELETE_LINK'").run(user.id);
+ assert.equal((await call('/api/auth/delete/request-link',deleteRequest(user.token,{}))).status,202);
+ const r=await call('/api/auth/delete/verify-link',deleteRequest(user.token,{token:mailLink}));assert.equal(r.status,200);return(await r.json()).proof;
 }
-
-// ---- 2. Google: no password; the generated password is never asked for.
-{
-  const user = await oauthLogin('google', 'google-sub-1', 'google@example.test');
-  await seed(user, 'google');
-  assert.deepEqual((await info(user.token)).body, { requiresPassword: false, providers: ['google'], appleReauthRequired: false });
-  const done = await remove(user.token);
-  assert.equal(done.status, 200);
-  assert.deepEqual(footprint(user.id), empty);
-  assert.equal(net.revokes.length, 0, 'no Apple call for a Google account');
-  // Signing in with Google again creates a fresh, empty account (nothing was retained).
-  const again = await oauthLogin('google', 'google-sub-1', 'google@example.test');
-  assert.notEqual(again.id, user.id);
-  assert.equal(db.rows('SELECT COUNT(*) AS n FROM user_data WHERE user_id = ?', again.id)[0].n, 0);
-  assert.equal((await remove(again.token)).status, 200);
+async function remove(user,extra={},override=env){const r=await call('/api/auth/delete',deleteRequest(user.token,{proof:await proof(user),confirm:'DELETE',method:'DELETE_NOW',...extra}),override);return {status:r.status,body:await r.json()};}
+const bystander=await register('bystander@example.test');await seed(bystander,'bystander');const before=footprint(bystander.id);
+for(const provider of ['password','google','apple']){
+ const u=provider==='password'?await register('password@example.test'):await oauthLogin(provider,provider+'-sub',provider+'@example.test',provider==='apple'?'refresh':null);
+ await seed(u,provider);const metadata=await info(u);assert.equal(metadata.requiresPassword,false);assert.equal(metadata.contractVersion,2);
+ assert.equal((await call('/api/auth/delete',deleteRequest(u.token,{confirm:'DELETE',password:'password123'}))).status,401,'password/session alone never deletes');
+ const r=await remove(u,{userId:bystander.id});assert.equal(r.status,200);assert.equal(r.body.accountStatus,'DELETED');assert.deepEqual(footprint(u.id),empty);assert.deepEqual(footprint(bystander.id),before);
 }
-
-// ---- 3. Apple: refresh token stored encrypted at sign-in, revoked at Apple on deletion.
-{
-  const user = await oauthLogin('apple', 'apple-sub-1', 'relay@privaterelay.appleid.com', 'apple-refresh-1');
-  await seed(user, 'apple');
-  const [row] = db.rows("SELECT refresh_token_ciphertext AS sealed FROM oauth_accounts WHERE provider = 'apple' AND provider_subject = 'apple-sub-1'");
-  assert.ok(row.sealed.startsWith('v1.') && !row.sealed.includes('apple-refresh-1'), 'token stored encrypted, never in plain text');
-  const appleConfig = { privateKey: applePrivateKey };
-  assert.equal(await openProviderToken(appleConfig, 'apple', 'apple-sub-1', row.sealed), 'apple-refresh-1');
-  assert.equal(await openProviderToken(appleConfig, 'apple', 'other-sub', row.sealed), null, 'ciphertext bound to its subject');
-  assert.equal(await openProviderToken({ privateKey: 'another key' }, 'apple', 'apple-sub-1', row.sealed), null, 'another key cannot open it');
-  assert.deepEqual((await info(user.token)).body, { requiresPassword: false, providers: ['apple'], appleReauthRequired: false });
-  net.revokes = [];
-  const done = await remove(user.token);
-  assert.equal(done.status, 200);
-  assert.equal(net.revokes.length, 1);
-  const revoke = net.revokes[0];
-  assert.deepEqual([revoke.client_id, revoke.token, revoke.token_type_hint], ['com.reptrio.signin', 'apple-refresh-1', 'refresh_token']);
-  const [header, payload] = revoke.client_secret.split('.').slice(0, 2).map(part => JSON.parse(Buffer.from(part, 'base64url').toString()));
-  assert.deepEqual([header.alg, header.kid, payload.iss, payload.sub, payload.aud], ['ES256', 'KEY1234567', 'TEAM123456', 'com.reptrio.signin', 'https://appleid.apple.com']);
-  assert.deepEqual(footprint(user.id), empty);
+// Exact linked provider proof, state/nonce checks, mismatch never links/creates/switches account.
+const owner=await oauthLogin('apple','legacy-apple','legacy@example.test',null);
+db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN',email_verified_at=NULL WHERE id=?").run(owner.id);
+assert.equal((await info(owner)).requiresPassword,false);const countBefore=db.rows('SELECT COUNT(*) AS n FROM users')[0].n;
+const mismatch=await appleReauth(owner.token,'wrong-sub','wrong@example.test','wrong-refresh');assert.equal(mismatch.location.searchParams.get('auth_error'),'OAUTH_REAUTH_MISMATCH');assert.equal(db.rows('SELECT COUNT(*) AS n FROM users')[0].n,countBefore);
+const good=await appleReauth(owner.token,'legacy-apple','legacy@example.test','legacy-refresh');const providerProof=new URLSearchParams(good.location.hash.slice(1)).get('proof');assert.ok(providerProof);assert.equal(good.location.searchParams.get('code'),null);
+const providerDelete=await call('/api/auth/delete',deleteRequest(owner.token,{confirm:'DELETE',proof:providerProof,method:'DELETE_NOW'}));assert.equal(providerDelete.status,200);assert.deepEqual(footprint(owner.id),empty);
+// Provider dependency preflight never knowingly schedules missing/corrupt/unreadable Apple material.
+for(const mode of ['missing','corrupt','rotated','config']){
+ const u=await oauthLogin('apple','prerequisite-'+mode,mode+'-prerequisite@example.test','original-'+mode);await seed(u,'prerequisite-'+mode);const p=await proof(u);
+ if(mode==='missing')db.raw.prepare("UPDATE oauth_accounts SET refresh_token_ciphertext=NULL WHERE user_id=?").run(u.id);
+ if(mode==='corrupt')db.raw.prepare("UPDATE oauth_accounts SET refresh_token_ciphertext='v1.invalid.invalid' WHERE user_id=?").run(u.id);
+ const e=mode==='rotated'?{...env,APPLE_OAUTH_PRIVATE_KEY:'changed-key'}:mode==='config'?{...env,APPLE_OAUTH_TEAM_ID:''}:env;
+ assert.equal((await(await call('/api/auth/delete',authed(u.token),e)).json()).appleReauthRequired,true);
+ const before=JSON.stringify(Object.fromEntries([...USER_TABLES.map(table=>[table,db.rows(`SELECT * FROM ${table} WHERE user_id=?`,u.id)]),['users',db.rows('SELECT * FROM users WHERE id=?',u.id)]])),revokes=net.revokes.length;
+ db.resetMetrics();const blocked=await call('/api/auth/delete',deleteRequest(u.token,{proof:p,confirm:'DELETE'}),e);assert.equal(blocked.status,mode==='config'?503:409);assert.equal((await blocked.json()).code,mode==='config'?'APPLE_REVOKE_UNAVAILABLE':'APPLE_REAUTH_REQUIRED');assert.equal(db.metrics.writes,0);assert.equal(net.revokes.length,revokes);assert.equal(JSON.stringify(Object.fromEntries([...USER_TABLES.map(table=>[table,db.rows(`SELECT * FROM ${table} WHERE user_id=?`,u.id)]),['users',db.rows('SELECT * FROM users WHERE id=?',u.id)]])),before);
+ const reauth=await appleReauth(u.token,'prerequisite-'+mode,mode+'-prerequisite@example.test','fresh-'+mode);assert.ok(new URLSearchParams(reauth.location.hash.slice(1)).get('proof'));
+ const scheduled=await call('/api/auth/delete',deleteRequest(u.token,{proof:p,confirm:'DELETE'}));assert.equal(scheduled.status,200);assert.equal(net.revokes.length,revokes,'no revoke at scheduling');assert.ok(db.rows('SELECT refresh_token_ciphertext FROM oauth_accounts WHERE user_id=?',u.id)[0].refresh_token_ciphertext);
+ db.raw.prepare('UPDATE users SET purge_at=? WHERE id=?').run(new Date(Date.now()-1).toISOString(),u.id);
+ if(mode==='config'){net.revokeMode='server';await purgeDueAccounts(env);assert.equal(db.rows('SELECT account_status,purge_error FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.ok(db.rows('SELECT purge_retry_at FROM users WHERE id=?',u.id)[0].purge_retry_at);net.revokeMode='ok';db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.id);}
+ await purgeDueAccounts(env);assert.deepEqual(footprint(u.id),empty,'deadline revoke and complete cleanup');
 }
-
-// ---- 4. Unauthenticated / unconfirmed / wrong method.
-{
-  assert.equal((await call('/api/auth/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: 'DELETE' }) })).status, 401);
-  assert.equal((await call('/api/auth/delete', { headers: {} })).status, 401, 'info requires a session');
-  const user = await register('confirm@example.test');
-  assert.deepEqual(await remove(user.token, { password: 'password123' }).then(r => [r.status, r.body.code]), [400, 'ACCOUNT_DELETE_CONFIRMATION_REQUIRED']);
-  assert.equal((await call('/api/auth/delete', authed(user.token, { method: 'PUT', body: '{}' }))).status, 405);
-  assert.equal((await call('/api/auth/delete', { ...deleteRequest(user.token, { confirm: 'DELETE', password: 'password123' }), headers: { ...deleteRequest(user.token, {}).headers, Origin: 'https://evil.example' } })).status, 403, 'cross-origin rejected');
-  assert.equal((await remove(user.token, { confirm: 'DELETE', password: 'password123' })).status, 200);
+// External failure blocks final success and preserves personal rows in PURGING. Scoped OAuth recovery allows retry.
+for(const mode of ['network','server','invalid_client','invalid_grant']){
+ const u=await oauthLogin('apple','failure-'+mode,mode+'@example.test','refresh-'+mode);await seed(u,'failure-'+mode);net.revokeMode=mode;
+ const r=await remove(u);assert.notEqual(r.status,200);assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.equal(footprint(u.id).user_data,1);assert.equal(footprint(u.id).auth_sessions,0);
+ net.revokeMode='ok';const rec=await oauthLogin('apple','failure-'+mode,mode==='invalid_grant'?null:mode+'@example.test','refresh-'+mode);
+ const scoped=await(await call('/api/auth/account/status',authed(rec.token))).json();assert.equal(scoped.user.id,u.id);assert.deepEqual(scoped.providers,['apple']);assert.equal(scoped.ownershipVerificationRequired,true);assert.equal((await call('/api/auth/account/purge-now',deleteRequest(rec.token,{confirm:'DELETE'}))).status,401,'provider login alone cannot finalize without new ticket proof');
+ // helper returns recovery auth below; explicit purge retries same owner and leaves no data.
+ assert.equal((await appleReauth(rec.token,'failure-'+mode,mode+'@example.test','refresh-'+mode)).location.searchParams.get('reauth'),'ok');
+ const result=await call('/api/auth/account/purge-now',deleteRequest(rec.token,{confirm:'DELETE'}));assert.equal(result.status,200);assert.deepEqual(footprint(u.id),empty);
 }
-
-// ---- 5. Another user's id in the body is ignored: only the session's own account is deleted.
-{
-  const attacker = await oauthLogin('google', 'google-sub-attacker', 'attacker@example.test');
-  const done = await remove(attacker.token, { confirm: 'DELETE', userId: bystander.id, user_id: bystander.id, id: bystander.id });
-  assert.equal(done.status, 200);
-  assert.deepEqual(footprint(attacker.id), empty);
-  assert.deepEqual(footprint(bystander.id), bystanderFootprint, 'the bystander is untouched');
-  assert.equal(await me(bystander.token), 200);
+// Partial cleanup schema is rejected before state/external mutation. SQL exceptions rollback full cleanup.
+for(const table of ['sync_mutation_receipts','personal_restore_records','ai_import_consents']){
+ const local=createD1({foreignKeys:false}),e={...env,DB:local};const id='partial-'+table,now=new Date().toISOString(),token='fixture-session-'+table,p='P'.repeat(43);
+ local.raw.prepare("INSERT INTO users(id,email,password_hash,password_salt,created_at,credential_origin)VALUES(?,?,?,? ,?,'PASSWORD')").run(id,id+'@example.test','hash','salt',now);
+ local.raw.prepare('INSERT INTO auth_sessions(id,user_id,token_hash,created_at,expires_at)VALUES(?,?,?,?,?)').run('s',id,await tokenDigest(token),now,new Date(Date.now()+600000).toISOString());
+ local.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES('p',?,?,?,'DELETE_PROOF',?,?)").run(id,await tokenDigest(p),await tokenDigest(token),now,new Date(Date.now()+600000).toISOString());
+ local.exec(`DROP TABLE ${table}`);const revokes=net.revokes.length;local.resetMetrics();const response=await call('/api/auth/delete',deleteRequest(token,{confirm:'DELETE',proof:p,method:'DELETE_NOW'}),e);assert.equal(response.status,503);assert.equal(local.metrics.writes,0);assert.equal(net.revokes.length,revokes);assert.equal(local.rows('SELECT account_status FROM users')[0].account_status,'ACTIVE');
 }
-
-// ---- 6. A password account that already has a Google link (legacy data, linked by email before issue #12) keeps its
-// password requirement. Since #12 such a link is no longer created at sign-in, so the row is seeded directly.
-{
-  const user = await register('linked@example.test', 'linked-pass-1');
-  const later = new Date(Date.now() + 1000).toISOString();
-  db.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES ('google', 'google-sub-linked', ?, 'linked@example.test', ?, ?)").run(user.id, later, later);
-  const linked = await oauthLogin('google', 'google-sub-linked', 'linked@example.test');
-  assert.equal(linked.id, user.id, 'the existing provider + sub link signs in');
-  assert.deepEqual((await info(linked.token)).body, { requiresPassword: true, providers: ['google'], appleReauthRequired: false });
-  assert.equal((await remove(linked.token)).status, 401);
-  assert.equal((await remove(linked.token, { confirm: 'DELETE', password: 'linked-pass-1' })).status, 200);
-  assert.deepEqual(footprint(user.id), empty);
-}
-
-// ---- 7/8. Apple revoke failures: nothing is deleted; invalid_grant / missing token → Apple re-authorization.
-{
-  const user = await oauthLogin('apple', 'apple-sub-2', 'apple2@example.test', 'apple-refresh-2');
-  await seed(user, 'apple2');
-  const before = footprint(user.id);
-  for (const [mode, status, code] of [['server', 502, 'APPLE_REVOKE_FAILED'], ['invalid_client', 502, 'APPLE_REVOKE_FAILED'], ['network', 502, 'APPLE_REVOKE_FAILED'], ['invalid_grant', 409, 'APPLE_REAUTH_REQUIRED']]) {
-    net.revokeMode = mode;
-    assert.deepEqual(await remove(user.token).then(r => [r.status, r.body.code]), [status, code], mode);
-    assert.deepEqual(footprint(user.id), before, `${mode}: nothing deleted`);
-    assert.equal(await me(user.token), 200, `${mode}: still signed in`);
-  }
-  net.revokeMode = 'ok';
-  // Apple not configured on the server: cannot revoke → refuse.
-  const unconfigured = { ...env, APPLE_OAUTH_PRIVATE_KEY: '' };
-  assert.deepEqual(await call('/api/auth/delete', deleteRequest(user.token, { confirm: 'DELETE' }), unconfigured).then(async r => [r.status, (await r.json()).code]), [503, 'APPLE_REVOKE_UNAVAILABLE']);
-  assert.deepEqual(footprint(user.id), before);
-  // Legacy Apple user (signed in before tokens were stored): re-authorize with Apple, bound to this account, then delete.
-  db.raw.prepare("UPDATE oauth_accounts SET refresh_token_ciphertext = NULL WHERE provider_subject = 'apple-sub-2'").run();
-  assert.equal((await info(user.token)).body.appleReauthRequired, true);
-  assert.deepEqual(await remove(user.token).then(r => [r.status, r.body.code]), [409, 'APPLE_REAUTH_REQUIRED']);
-  assert.deepEqual(footprint(user.id).users, 1);
-  const usersBefore = db.rows('SELECT COUNT(*) AS n FROM users')[0].n;
-  // A different Apple ID cannot satisfy the re-authorization: no account created, linked or switched, no session.
-  const other = await appleReauth(user.token, 'apple-sub-OTHER', 'other@privaterelay.appleid.com', 'apple-refresh-other');
-  assert.equal(other.location.searchParams.get('auth_error'), 'APPLE_REAUTH_MISMATCH');
-  assert.equal(other.location.searchParams.get('code'), null, 'no session code issued');
-  assert.equal(db.rows('SELECT COUNT(*) AS n FROM users')[0].n, usersBefore, 'no account created');
-  assert.equal(db.rows("SELECT COUNT(*) AS n FROM oauth_accounts WHERE provider_subject = 'apple-sub-OTHER'")[0].n, 0, 'nothing linked');
-  assert.equal((await info(user.token)).body.appleReauthRequired, true, 'still no token for this account');
-  // An Apple ID linked to ANOTHER account is rejected too, and that account's stored token is left untouched.
-  const victim = await oauthLogin('apple', 'apple-sub-VICTIM', 'victim@privaterelay.appleid.com', 'apple-refresh-victim');
-  const victimSealed = db.rows("SELECT refresh_token_ciphertext AS s FROM oauth_accounts WHERE provider_subject = 'apple-sub-VICTIM'")[0].s;
-  const cross = await appleReauth(user.token, 'apple-sub-VICTIM', 'victim@privaterelay.appleid.com', 'apple-refresh-attacker');
-  assert.equal(cross.location.searchParams.get('auth_error'), 'APPLE_REAUTH_MISMATCH');
-  assert.equal(db.rows("SELECT refresh_token_ciphertext AS s FROM oauth_accounts WHERE provider_subject = 'apple-sub-VICTIM'")[0].s, victimSealed, "the other account's token is unchanged");
-  assert.equal((await info(user.token)).body.appleReauthRequired, true);
-  assert.equal((await remove(victim.token)).status, 200);
-  // Defense in depth: ticket needs same origin; an expired ticket and a malformed one are rejected; a matching Apple ID
-  // without a refresh token is rejected (not a silent loop).
-  assert.equal((await call('/api/auth/reauth/apple', { ...authed(user.token, { method: 'POST', body: '{}' }), headers: { ...authed(user.token).headers, Origin: 'https://evil.example' } })).status, 403);
-  const expired = await (await call('/api/auth/reauth/apple', authed(user.token, { method: 'POST', body: '{}' }))).json();
-  db.raw.prepare("UPDATE oauth_reauth_tickets SET expires_at = '2000-01-01T00:00:00.000Z' WHERE rowid = (SELECT MAX(rowid) FROM oauth_reauth_tickets)").run(); // only this ticket
-  assert.equal((await appleReauth(user.token, 'apple-sub-2', 'apple2@example.test', 'x', expired.ticket)).location.searchParams.get('auth_error'), 'APPLE_REAUTH_INVALID', 'expired ticket rejected');
-  const malformedStart = await call(`/api/auth/oauth/apple/start?client=mobile&redirect_uri=${encodeURIComponent('reptrio://auth')}&reauth=${encodeURIComponent('bad ticket;')}`);
-  assert.ok(malformedStart.headers.getSetCookie().some(value => value.startsWith('aks_oauth_reauth=;') && value.includes('Max-Age=0')), 'malformed ticket not stored (cookie cleared)');
-  assert.equal((await appleReauth(user.token, 'apple-sub-2', 'apple2@example.test', null)).location.searchParams.get('auth_error'), 'APPLE_REAUTH_INVALID', 'no refresh token → error, not a silent loop');
-  assert.equal((await info(user.token)).body.appleReauthRequired, true);
-  // The ticket is single use and must be valid.
-  assert.equal((await appleReauth(user.token, 'apple-sub-2', 'apple2@example.test', 'x', other.ticket)).location.searchParams.get('auth_error'), 'APPLE_REAUTH_INVALID', 'used ticket rejected');
-  assert.equal((await appleReauth(user.token, 'apple-sub-2', 'apple2@example.test', 'x', 'forged-ticket-value-000000000000')).location.searchParams.get('auth_error'), 'APPLE_REAUTH_INVALID', 'unknown ticket rejected');
-  assert.equal((await call('/api/auth/reauth/apple', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401, 'ticket needs a session');
-  // The linked Apple ID: token stored for this account; no new session; the old session stays valid.
-  const sessionsBefore = db.rows('SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id = ?', user.id)[0].n;
-  const same = await appleReauth(user.token, 'apple-sub-2', 'apple2@example.test', 'apple-refresh-2b');
-  assert.equal(same.location.searchParams.get('reauth'), 'ok');
-  assert.equal(same.location.searchParams.get('code'), null, 'no session code issued');
-  assert.equal(db.rows('SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id = ?', user.id)[0].n, sessionsBefore, 'no new session');
-  assert.equal((await info(user.token)).body.appleReauthRequired, false);
-  net.revokes = [];
-  assert.equal((await remove(user.token)).status, 200);
-  assert.equal(net.revokes[0].token, 'apple-refresh-2b');
-  assert.deepEqual(footprint(user.id), empty);
-  // A cancelled re-authorization (start, no callback) must not affect a later normal Apple login in the same browser:
-  // the next start clears the re-authorization cookie.
-  {
-    const login = await call('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ email: 'jar@example.test', password: 'password123' }) });
-    const jarUser = await login.json();
-    const ticket = (await (await call('/api/auth/reauth/apple', authed(jarUser.sessionToken, { method: 'POST', body: '{}' }))).json()).ticket;
-    const jar = new Map();
-    const remember = response => response.headers.getSetCookie().forEach(value => { const [pair] = value.split(';'); const [name, ...rest] = pair.split('='); if (/Max-Age=0/.test(value)) jar.delete(name); else jar.set(name, rest.join('=')); });
-    const cookieHeader = () => [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
-    remember(await call(`/api/auth/oauth/apple/start?client=mobile&redirect_uri=${encodeURIComponent('reptrio://auth')}&reauth=${ticket}`));
-    assert.ok(jar.has('aks_oauth_reauth'), 'premise: re-authorization cookie set, then the sheet is cancelled');
-    const start = await call(`/api/auth/oauth/apple/start?client=mobile&redirect_uri=${encodeURIComponent('reptrio://auth')}`, { headers: { Cookie: cookieHeader() } });
-    remember(start);
-    assert.ok(!jar.has('aks_oauth_reauth'), 'normal start clears it');
-    net.nonce = jar.get('aks_oauth_nonce'); net.subject = 'apple-sub-jar'; net.email = 'jar-apple@example.test'; net.appleRefreshToken = 'apple-refresh-jar';
-    const callback = await call('/api/auth/oauth/apple/callback', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader() }, body: new URLSearchParams({ code: 'provider-code', state: jar.get('aks_oauth_state') }) });
-    const location = new URL(callback.headers.get('Location'));
-    assert.ok(location.searchParams.get('code') && !location.searchParams.get('auth_error'), `normal Apple login completes: ${location}`);
-  }
-  // A second delete with the old session is rejected (the account and its sessions are gone).
-  assert.equal((await remove(user.token)).status, 401);
-}
-
-// ---- 8b. A new OAuth user and its first link are written atomically: a failing link leaves no orphan user.
-{
-  db.setFailOn(/^INSERT INTO oauth_accounts/);
-  const start = await call(`/api/auth/oauth/google/start?client=mobile&redirect_uri=${encodeURIComponent('reptrio://auth')}`);
-  const cookies = start.headers.getSetCookie().map(value => value.split(';')[0]);
-  net.nonce = cookies.find(value => value.startsWith('aks_oauth_nonce=')).split('=')[1]; net.subject = 'google-sub-orphan'; net.email = 'orphan@example.test';
-  const state = cookies.find(value => value.startsWith('aks_oauth_state=')).split('=')[1];
-  const callback = await call(`/api/auth/oauth/google/callback?code=c&state=${state}`, { headers: { Cookie: cookies.join('; ') } });
-  db.setFailOn(null);
-  assert.ok(new URL(callback.headers.get('Location')).searchParams.get('auth_error'), 'sign-in fails');
-  assert.equal(db.rows("SELECT COUNT(*) AS n FROM users WHERE email = 'orphan@example.test'")[0].n, 0, 'no orphan user without its link');
-}
-
-// ---- 9. Database failure mid-batch: the batch is atomic, nothing is half-deleted, the user can retry.
-{
-  const user = await oauthLogin('google', 'google-sub-partial', 'partial@example.test');
-  await seed(user, 'partial');
-  const before = footprint(user.id);
-  db.setFailOn(/^DELETE FROM users WHERE id/);
-  assert.deepEqual(await remove(user.token).then(r => [r.status, r.body.code]), [500, 'ACCOUNT_DELETE_FAILED']);
-  assert.deepEqual(footprint(user.id), before, 'rolled back: every row still present');
-  assert.equal(await me(user.token), 200);
-  db.setFailOn(null);
-  assert.equal((await remove(user.token)).status, 200, 'retry succeeds');
-  assert.deepEqual(footprint(user.id), empty);
-}
-
-// ---- 10. The maintenance script (not a migration) purges accounts that were only soft-deleted by the old flow; active accounts stay.
-{
-  const legacy = createD1({ foreignKeys });
-  const now = '2026-09-01T00:00:00.000Z';
-  for (const [id, deleted] of [['gone', now], ['kept', null]]) {
-    legacy.raw.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, `${id}@example.test`, 'h', 's', now, deleted);
-    legacy.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, created_at, last_login_at) VALUES ('google', ?, ?, ?, ?, ?)").run(`sub-${id}`, id, `${id}@example.test`, now, now);
-    legacy.raw.prepare("INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, created_at, updated_at) VALUES (?, ?, 'done', '{}', '{}', ?, ?)").run(`job-${id}`, id, now, now);
-    legacy.raw.prepare("INSERT INTO sync_account_state (user_id,storage_schema_version,revision,write_token,updated_at) VALUES (?,1,1,'seed',?)").run(id,now);
-    legacy.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'metadata','seed',0,'{}','null',1,1)").run(id);
-    legacy.raw.prepare('INSERT INTO user_data (user_id, payload_json, updated_at) VALUES (?, ?, ?)').run(id, '{}', now);
-    legacy.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(`reset-${id}`, id, `reset-hash-${id}`, now, now);
-  }
-  const fs = await import('node:fs');
-  assert.ok(!fs.readdirSync(new URL('../migrations/', import.meta.url)).some(file => /purge/i.test(file)), 'the irreversible purge is not an automatic migration');
-  legacy.exec(fs.readFileSync(new URL('./maintenance/purge-soft-deleted-accounts.sql', import.meta.url), 'utf8'));
-  const count = (table, column, id) => legacy.rows(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`, id)[0].n;
-  assert.deepEqual(['users:id', 'oauth_accounts:user_id', 'import_jobs:user_id', 'user_data:user_id', 'password_reset_tokens:user_id','sync_records:user_id','sync_account_state:user_id'].map(spec => { const [table, column] = spec.split(':'); return [count(table, column, 'gone'), count(table, column, 'kept')]; }), [[0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]);
-}
-
-// Storage compatibility gate runs before Apple/OpenAI external cleanup. Legacy-only databases use the
-// original table list; partial/unsupported schema/version cannot partially revoke or delete a user's data.
-for (const mode of ['missing','receipt-missing','ready','bad-receipt','partial-records','partial-state','bad-columns','unsupported-version','partial-personal','bad-personal','missing-personal-index','personal-ready-missing-receipts']) {
-  const storageDb=createD1({foreignKeys,...(mode==='missing'?{migrationsUpTo:'0007_password_reset_tokens.sql'}:mode==='receipt-missing'?{migrationsUpTo:'0008_record_sync_storage.sql'}:{})});const id=`storage-${mode}`;const now='2026-10-09T00:00:00.000Z';const sessionToken=`storage-local-${mode}`;
-  storageDb.raw.prepare('INSERT INTO users (id,email,password_hash,password_salt,created_at) VALUES (?,?,?,?,?)').run(id,`${id}@example.test`,'h','s',now);
-  storageDb.raw.prepare('INSERT INTO auth_sessions (id,user_id,token_hash,created_at,expires_at) VALUES (?,?,?,?,?)').run(`auth-${id}`,id,await tokenDigest(sessionToken),now,'2099-01-01');
-  storageDb.raw.prepare("INSERT INTO oauth_accounts (provider,provider_subject,user_id,email,created_at,last_login_at,refresh_token_ciphertext,refresh_token_updated_at) VALUES ('apple',?,?,?,?,?,?,?)").run(`subject-${id}`,id,`${id}@example.test`,now,now,await sealProviderToken({privateKey:applePrivateKey},'apple',`subject-${id}`,`refresh-${id}`),now);
-  storageDb.raw.prepare("INSERT INTO import_jobs (id,user_id,status,source_json,normalized_document_json,openai_response_id,created_at,updated_at) VALUES (?,?,'done','{}','{}',?,?,?)").run(`job-${id}`,id,`response-${id}`,now,now);
-  storageDb.raw.prepare('INSERT INTO user_data (user_id,payload_json,sync_version,updated_at) VALUES (?,?,0,?)').run(id,'{"keep":"personal"}',now);
-  if(mode!=='missing'){
-    storageDb.raw.prepare("INSERT INTO sync_account_state (user_id,storage_schema_version,revision,write_token,updated_at) VALUES (?,?,1,'fixture',?)").run(id,mode==='unsupported-version'?99:1,now);
-    // Valid SQL JSON, deliberately not a complete record codec: deletion must inspect only state/schema.
-    storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'metadata','meta',0,?,'null',1,1)").run(id,JSON.stringify({field:'sessions',collection:true}));
-    storageDb.raw.prepare("INSERT INTO sync_records (user_id,kind,record_key,ordinal,address_json,payload_json,created_revision,modified_revision) VALUES (?,'session','session',0,?,'{}',1,1)").run(id,JSON.stringify({sets:'absent'}));
-    if(mode==='ready')storageDb.raw.prepare("INSERT INTO sync_mutation_receipts VALUES (?,'fixture','h','p',0,1,'{}',?,'2099-01-01')").run(id,now);
-    if(mode==='personal-ready-missing-receipts')storageDb.raw.exec('DROP TABLE sync_mutation_receipts');
-    if(mode==='bad-receipt')storageDb.raw.exec('DROP TABLE sync_mutation_receipts; CREATE TABLE sync_mutation_receipts (user_id TEXT)');
-    if(mode==='partial-records')storageDb.raw.exec('DROP TABLE sync_records');
-    if(mode==='partial-state')storageDb.raw.exec('DROP TABLE sync_account_state');
-    if(mode==='partial-personal')storageDb.raw.exec('DROP TABLE personal_restore_chunks');
-    if(mode==='bad-personal')storageDb.raw.exec('DROP TABLE personal_restore_identity_journal; CREATE TABLE personal_restore_identity_journal(user_id TEXT)');
-    if(mode==='missing-personal-index')storageDb.raw.exec('DROP INDEX personal_restore_journal_target');
-    if(mode==='bad-columns')storageDb.raw.exec('DROP TABLE sync_records; CREATE TABLE sync_records (user_id TEXT)');
-  }
-  const storageEnv={...env,DB:storageDb};const tables=storageDb.rows("SELECT name FROM sqlite_master WHERE type='table'").map(row=>row.name);const dump=()=>JSON.stringify(tables.map(table=>storageDb.rows(`SELECT * FROM ${table}`)));const before=dump();const revokes=net.revokes.length;const openaiDeletes=net.openaiDeletes.length;storageDb.resetMetrics();
-  // Confirmation failure still precedes the new gate and every external operation.
-  const unconfirmed=await call('/api/auth/delete',deleteRequest(sessionToken,{}),storageEnv);assert.equal(unconfirmed.status,400);assert.equal(storageDb.metrics.writes,0);assert.equal(net.revokes.length,revokes);assert.equal(net.openaiDeletes.length,openaiDeletes);
-  storageDb.resetMetrics();
-  const result=await call('/api/auth/delete',deleteRequest(sessionToken,{confirm:'DELETE'}),storageEnv);
-  assert.ok(storageDb.metrics.queries<=29,`${mode}: deletion invocation budget`);
-  if(mode==='missing'||mode==='receipt-missing'||mode==='ready'){
-    assert.equal(result.status,200,`${mode}: supported deletion`);assert.equal(net.revokes.length,revokes+1);assert.equal(net.openaiDeletes.length,openaiDeletes+1);assert.ok(tables.every(table=>storageDb.rows(`SELECT * FROM ${table}`).length===0),`${mode}: explicit cleanup all tables with FK ${foreignKeys}`);
-  }else{
-    assert.deepEqual([result.status,(await result.json()).code],[503,'SYNC_STORAGE_SCHEMA_UNSUPPORTED']);assert.equal(storageDb.metrics.writes,0,`${mode}: zero DB delete`);assert.equal(dump(),before);assert.equal(net.revokes.length,revokes,`${mode}: zero Apple revoke`);assert.equal(net.openaiDeletes.length,openaiDeletes,`${mode}: zero OpenAI delete`);
-  }
-}
-
-// ---- 11. Web Apple sign-in (cookie session, no mobile client) also stores the token; IVs are random; a re-pasted
-// PEM with other line breaks still opens stored tokens; synchronous OpenAI import requests are not stored.
-{
-  const start = await call('/api/auth/oauth/apple/start');
-  const cookies = start.headers.getSetCookie().map(value => value.split(';')[0]);
-  const state = cookies.find(value => value.startsWith('aks_oauth_state=')).split('=')[1];
-  net.nonce = cookies.find(value => value.startsWith('aks_oauth_nonce=')).split('=')[1];
-  net.subject = 'apple-sub-web'; net.email = 'web@example.test'; net.appleRefreshToken = 'apple-refresh-web';
-  const callback = await call('/api/auth/oauth/apple/callback', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookies.join('; ') }, body: new URLSearchParams({ code: 'provider-code', state }) });
-  assert.equal(callback.status, 303);
-  assert.equal(new URL(callback.headers.get('Location')).pathname, '/');
-  const [row] = db.rows("SELECT refresh_token_ciphertext AS sealed FROM oauth_accounts WHERE provider_subject = 'apple-sub-web'");
-  assert.equal(await openProviderToken({ privateKey: applePrivateKey }, 'apple', 'apple-sub-web', row.sealed), 'apple-refresh-web', 'web sign-in stores the token');
-  const repasted = applePrivateKey.replace(/\n/g, '\r\n').replace('-----END', '\n-----END');
-  assert.equal(await openProviderToken({ privateKey: repasted }, 'apple', 'apple-sub-web', row.sealed), 'apple-refresh-web', 're-pasted PEM opens the token');
-  const { sealProviderToken } = await import('../worker/account-api.js');
-  const [a, b] = [await sealProviderToken({ privateKey: applePrivateKey }, 'apple', 's', 't'), await sealProviderToken({ privateKey: applePrivateKey }, 'apple', 's', 't')];
-  assert.notEqual(a.split('.')[1], b.split('.')[1], 'random IV per seal');
-  const parse = await call('/api/import/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importId: 'imp-1', normalizedDocument: { blocks: [{ type: 'paragraph', text: 'Squat 3x5' }] } }) });
-  assert.notEqual(parse.status, 200);
-  assert.ok(net.openaiRequests.length >= 1 && net.openaiRequests.every(request => request.store === false && request.background === false), 'synchronous import requests are not stored at OpenAI');
-}
-
-assert.deepEqual(footprint(bystander.id), bystanderFootprint, 'the bystander survived every deletion');
-globalThis.fetch = realFetch;
-if (foreignKeys) execFileSync(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, D1_FOREIGN_KEYS: 'off' }, stdio: ['ignore', 'ignore', 'inherit'] });
-console.log('Account deletion (foreign keys on and off): email/password (password kept), Google and Apple (no generated password), Apple refresh token encrypted at rest and revoked (form + ES256 client secret), revoke failures and legacy Apple re-authorization delete nothing, no cross-account deletion, every user table emptied atomically with rollback on failure, OpenAI import responses deleted, login impossible afterwards, legacy soft-delete purge migration.');
+// Legacy soft-delete maintenance is explicit only; pending accounts have no deleted_at and survive this script.
+const fs=await import('node:fs');const maintenance=fs.readFileSync(new URL('./maintenance/purge-soft-deleted-accounts.sql',import.meta.url),'utf8');
+const pendingUser=await register('pending-maintenance@example.test');const pendingProof=await proof(pendingUser);assert.equal((await call('/api/auth/delete',deleteRequest(pendingUser.token,{proof:pendingProof,confirm:'DELETE'}))).status,200);db.exec(maintenance);assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',pendingUser.id)[0].account_status,'PENDING_DELETION');
+assert.deepEqual(footprint(bystander.id),before);
+globalThis.fetch=realFetch;
+console.log(`Account deletion PASS FK=${foreignKeys}: all related tables, password/Google/Apple routes, encrypted token binding, fresh linked proof/mismatch, upstream retry, preflight partial schema, explicit legacy maintenance.`);
+if(foreignKeys)execFileSync(process.execPath,[fileURLToPath(import.meta.url)],{stdio:'inherit',env:{...process.env,D1_FOREIGN_KEYS:'off'}});

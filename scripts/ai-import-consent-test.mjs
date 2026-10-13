@@ -1,3 +1,4 @@
+import {tokenDigest} from '../worker/account-api.js';
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
@@ -114,7 +115,10 @@ try {
   const deletionEnv = { ...env, DB: noFk };
   const ex = await register('ai-remove@example.test', deletionEnv);
   assert.equal((await call('/api/privacy/ai-import/consent', auth(ex.token, 'POST', consent('grant')), deletionEnv)).status, 200);
-  const deleted = await call('/api/auth/delete', auth(ex.token, 'POST', { confirm: 'DELETE', password: 'password123' }), deletionEnv);
+  const deletionProof='P'.repeat(43),stamp=new Date().toISOString();
+  const seedProof=async(d,u)=>d.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES('proof',?,?,?,'DELETE_PROOF',?,?)").run(u.id,await tokenDigest(deletionProof),await tokenDigest(u.token),stamp,new Date(Date.now()+600000).toISOString());
+  await seedProof(noFk,ex);
+  const deleted = await call('/api/auth/delete', auth(ex.token, 'POST', { confirm: 'DELETE', proof:deletionProof,method:'DELETE_NOW' }), deletionEnv);
   assert.equal(deleted.status, 200, 'account deletion succeeds with AI consent tables installed');
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consents WHERE user_id = ?', ex.id)[0].n, 0);
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consent_events WHERE user_id = ?', ex.id)[0].n, 0);
@@ -122,8 +126,9 @@ try {
   const partialDb = createD1({ foreignKeys: false });
   const partialEnv = { ...env, DB: partialDb };
   const partialUser = await register('ai-partial@example.test', partialEnv);
+  await seedProof(partialDb,partialUser);
   partialDb.exec('DROP TABLE ai_import_consent_events');
-  const rejectedDelete = await call('/api/auth/delete', auth(partialUser.token, 'POST', { confirm: 'DELETE', password: 'password123' }), partialEnv);
+  const rejectedDelete = await call('/api/auth/delete', auth(partialUser.token, 'POST', { confirm: 'DELETE', proof:deletionProof,method:'DELETE_NOW' }), partialEnv);
   assert.equal(rejectedDelete.status, 503);
   assert.equal((await rejectedDelete.json()).code, 'AI_CONSENT_UNAVAILABLE');
   assert.equal(partialDb.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', partialUser.id)[0].n, 1);

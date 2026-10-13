@@ -68,6 +68,13 @@ async function race(bootstrap) {
   assert.ok(f.db.rows('SELECT DISTINCT modified_revision FROM sync_records').every(row=>row.modified_revision<=revision+1));
 }
 await race(true);await race(false);
+// Lifecycle closure after authentication/pre-read but before CAS cannot publish bootstrap or record writes.
+for(const existing of [false,true])for(const status of ['PENDING_DELETION','PURGING']){
+ const f=await fixture(),initial=data();if(existing)assert.equal((await f.push(initial)).status,200);
+ const next=clone(initial);next.settings.rest=100;
+ let baseline;f.db.setBeforeBatch(()=>{f.db.setBeforeBatch(null);f.db.raw.prepare('UPDATE users SET account_status=? WHERE id=?').run(status,f.id);baseline=f.dump();});
+ const r=await f.push(next,existing?1:0);assert.notEqual(r.status,200);assert.equal(f.dump(),baseline,'late lifecycle CAS zero domain change');
+}
 // Rollback and account deletion/blocked race execute in real SQL, without fake CAS shortcuts.
 {
   const f=await fixture();const d=data();f.db.setFailOn(/^INSERT INTO sync_records/);const before=f.dump();assert.deepEqual(await code(await f.push(d)),[503,'SYNC_STORAGE_UNAVAILABLE']);assert.equal(f.dump(),before);f.db.setFailOn(null);assert.equal((await f.push(d)).status,200);

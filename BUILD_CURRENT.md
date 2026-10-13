@@ -1,6 +1,8 @@
 # Reptrio — Güncel çalışma kaydı
 
-## Build 44 · B44-08 / B44-10 · 2026-10-09
+Current: B44-04 backend `feat/b44-04-account-lifecycle`, union `d6419a8`; isolated implementation and focused checks complete. Final full npm remote CI PENDING; see latest B44-04 entries below. No production change/build. Whole-B44 HIGH Guardian/device review deferred by user.
+
+## Historical checkpoint · B44-08 / B44-10 · 2026-10-09
 
 Kullanıcının onayladığı mimari **B** üzerinde storage ve Phase 2A transport kabul edilmiş temeldir. **Phase 2B staged RAW publisher / personal restore / durable journal / strict ALL undo IMPLEMENTED_LOCAL / UNACCEPTED**. B44-08/B44-10 tüm export/restore/native/statistics kullanıcı akışı **PARTIAL / DEVAM EDİYOR**.
 
@@ -118,3 +120,14 @@ Accepted contract only: native onboarding and B44-08/10 screens remain OPEN/PART
 - `worker/account-api.js` checks whether BOTH consent tables exist before irreversible provider revocation; explicit deletion of both tables even with FK OFF. Mixed migration -> fail-closed deletion. Existing maintenance purge SQL adjusted for installations after migration 0012 (**never auto-execute**).
 - Tests authored: `scripts/ai-import-consent-test.mjs` routed real SQL, wired `npm run test:ai-consent` into `npm test`; old unauthenticated parser expectations updated and FK-OFF deletion footprint expanded. **NOT_RUN** in GitHub-only chat; no CI result, Guardian or actual D1 end-to-end asserted.
 - **Pending**: run full npm test and focus suite, code review for revocation/worker races, independent HIGH Guardian at user's requested final integrated Build44 step, Mobile membership/settings/upload UI, privacy/legal signoff, migration-first rollout. No production D1/Worker/Apple/TestFlight / device actions.
+
+## B44-04 · backend isolated implementation · 2026-10-13
+
+- Branch `feat/b44-04-account-lifecycle`, union baseline `d6419a8`; additive0013 migration file only. Risk **HIGH** (auth/persistence lifecycle and permanent cleanup).
+- User-visible: ownership by email10minute link or exact-linked provider, separate final confirmation, default30UTC-day recoverable closure and immediate permanent option; scoped pending login/status/explicit recovery/immediate purge. No deletion password field; no success from401/missing owner/response loss.
+- Internal: explicit UNKNOWN-safe provenance/email verification; atomic session/reset/OAuth revocation, ACTIVE read/CAS/restore/AI gates, complete schema preflight, lease/retry/overdue cron and all account-scoped cleanup. Stored AI in-flight leases preserve late IDs; UNKNOWN upstream crash blocks false success and raises operation alerts.
+- Focused real SQLite lifecycle, populated-table deletion FK ON/OFF, OAuth, password-reset, AI, Worker, onboarding, storage, transport and restore33 checks PASS, including actual5,101sessions/66,313sets full ALLundo and existing16 critical mutants. Final full npm is **LOCAL_SMOKE_BLOCKED / REMOTE_CI_PENDING** (Chrome CDP startup after fixture-listen escalation). Whole-B44 independent HIGH Guardian **DEFERRED/PENDING**, never replaced by these tests.
+- Device/release checks: provider/browser/ephemeral flow, initial/runtime fragment delivery, retained30-day deadline UI and lost-response/Watch-custody integration require mobile/physical evidence. Google/Apple ceremony does not guarantee password re-entry. Production alert routing and UNKNOWN upstream reconciliation remain release gates.
+- No production migration/deploy/data deletion, build or TestFlight. Pre-lifecycle downgrade unsafe after pending users exist. Canonical API/crash contract: `docs/BUILD_44_ACCOUNT_RETENTION_CONTRACT.md`.
+
+Final B44-04 backend checkpoint: Apple config/decryptable-material submission preflight is zero-write/no-revoke and CAS-bound to exact provider material; later outages retain PURGING retry/overdue state. Legacy UNKNOWN/no-provider password reset is preserved without timestamp inference; known providers/ambiguous UNKNOWN-linked stay fail-closed. Tests-only account-lifecycle GitHub workflow added by parent, no deploy/build trigger. Backend source ready for parent review/commit/draft CI; full remote npm must pass before sequential mobile implementation. No Guardian/physical acceptance claimed.

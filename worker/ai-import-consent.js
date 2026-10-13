@@ -1,3 +1,4 @@
+import { activeAccountDB } from './account-lifecycle.js';
 import { currentUser, sameOrigin } from './account-api.js';
 
 // This permission is for user-selected PDF/DOCX/XLSX program analysis ONLY.
@@ -16,7 +17,8 @@ function answer(body, status = 200) {
 export async function hasAiImportConsent(env, userId) {
   if (!env?.DB || !userId) return false;
   try {
-    const consent = await env.DB.prepare(`SELECT c.granted_at, c.revoked_at, c.policy_version
+    const db=await activeAccountDB(env.DB);
+    const consent = await db.prepare(`SELECT c.granted_at, c.revoked_at, c.policy_version
       FROM ai_import_consents c
       JOIN users u ON u.id = c.user_id
       WHERE c.user_id = ? AND u.deleted_at IS NULL`).bind(userId).first();
@@ -68,6 +70,7 @@ export async function handleAiConsentRequest(request, env, pathname) {
       || payload.policyVersion !== AI_IMPORT_POLICY_VERSION)
     return answer({ code: 'INVALID_CONSENT_REQUEST' }, 400);
 
+  env={...env,DB:await activeAccountDB(env.DB)};
   const now = new Date().toISOString();
   // Both the effective decision and audit are one transaction. No document or session secrets in the audit.
   // The conditional user SELECT fails closed if the account was removed during the request.
