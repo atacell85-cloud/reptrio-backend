@@ -1,3 +1,4 @@
+import { activeAccountDB } from './account-lifecycle.js';
 import { body, error, isJsonPost, json, methodOrTypeError, normalizeEmail, passwordDigest, randomToken, sameOrigin, tokenDigest, validPassword } from './account-api.js';
 import { sendTransactionalEmail } from './transactional-email.js';
 
@@ -9,7 +10,8 @@ import { sendTransactionalEmail } from './transactional-email.js';
 // voids pending mobile OAuth codes and the user's other links, and consumes the token — every statement guarded by
 // the same "token still valid" predicate, the consume last, so a concurrent or stale submit changes nothing.
 // Eligibility: only accounts with a user-chosen password. An account created by Google / Apple sign-in has a generated
-// password nobody knows (same predicate as account deletion's `deletionContext`); a reset would create a new password
+// password nobody knows; explicit provenance excludes it. UNKNOWN with no linked provider retains legacy reset
+// compatibility; UNKNOWN with linked providers remains ambiguous and fail-closed. A reset would create a new password
 // login surface for it, so it gets no link and no mail (the response is unchanged).
 const RESET_TTL_MINUTES = 30;
 const THROTTLE_MIN_INTERVAL_MS = 60_000;
@@ -18,7 +20,7 @@ const RETAIN_ROWS_MS = 24 * 3_600_000;
 // Fixed link origin: never derived from the request Host header or configuration.
 const RESET_LINK_ORIGIN = 'https://api.reptrio.com';
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const HAS_OWN_PASSWORD = 'NOT EXISTS (SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id = users.id AND oauth_accounts.created_at = users.created_at)';
+const HAS_OWN_PASSWORD = "(users.credential_origin='PASSWORD' OR (users.credential_origin='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id=users.id)))";
 
 export async function handlePasswordResetRequest(request, env, ctx, pathname) {
   if (pathname === '/api/auth/password/forgot') return forgotPassword(request, env, ctx);
@@ -39,6 +41,7 @@ async function forgotPassword(request, env, ctx) {
 }
 
 async function issueReset(env, email) {
+  env={...env,DB:await activeAccountDB(env.DB)};
   const user = await env.DB.prepare(`SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL AND ${HAS_OWN_PASSWORD}`).bind(email).first();
   if (!user) return;
   const now = new Date();
@@ -50,10 +53,10 @@ async function issueReset(env, email) {
   const results = await env.DB.batch([
     env.DB.prepare(`INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at)
       SELECT ?, ?, ?, ?, ?
-      WHERE (SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ? AND created_at > ?) < ?
+      WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL AND ${HAS_OWN_PASSWORD}) AND (SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ? AND created_at > ?) < ?
         AND NOT EXISTS (SELECT 1 FROM password_reset_tokens WHERE user_id = ? AND created_at > ?)`)
       .bind(id, user.id, await tokenDigest(token), issuedAt, new Date(now.getTime() + RESET_TTL_MINUTES * 60_000).toISOString(),
-        user.id, new Date(now.getTime() - 3_600_000).toISOString(), THROTTLE_MAX_PER_HOUR,
+        user.id,user.id, new Date(now.getTime() - 3_600_000).toISOString(), THROTTLE_MAX_PER_HOUR,
         user.id, new Date(now.getTime() - THROTTLE_MIN_INTERVAL_MS).toISOString()),
     env.DB.prepare('UPDATE password_reset_tokens SET revoked_at = ? WHERE user_id = ? AND id <> ? AND used_at IS NULL AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM password_reset_tokens AS issued WHERE issued.id = ?)').bind(issuedAt, user.id, id, id),
     env.DB.prepare('DELETE FROM password_reset_tokens WHERE user_id = ? AND created_at < ?').bind(user.id, new Date(now.getTime() - RETAIN_ROWS_MS).toISOString()),
@@ -68,6 +71,7 @@ async function issueReset(env, email) {
 }
 
 async function resetPassword(request, env, ctx) {
+  env={...env,DB:await activeAccountDB(env.DB)};
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
   if (!(await withinRateLimit(request, env, 'reset'))) return error('PASSWORD_RESET_RATE_LIMITED', 429);
@@ -95,12 +99,12 @@ async function resetPassword(request, env, ctx) {
   const valid = `EXISTS (SELECT 1 FROM password_reset_tokens AS current JOIN users AS owner ON owner.id = current.user_id
     WHERE current.id = ? AND current.user_id = ? AND current.used_at IS NULL AND current.revoked_at IS NULL AND current.expires_at > ?
       AND owner.deleted_at IS NULL
-      AND NOT EXISTS (SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id = owner.id AND oauth_accounts.created_at = owner.created_at))`;
+      AND (owner.credential_origin='PASSWORD' OR (owner.credential_origin='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id=owner.id))))`;
   const guard = [row.id, row.user_id, now];
   let results;
   try {
     results = await env.DB.batch([
-      env.DB.prepare(`UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ? AND ${valid}`).bind(passwordHash, salt, row.user_id, ...guard),
+      env.DB.prepare(`UPDATE users SET password_hash = ?, password_salt = ?,credential_origin='PASSWORD' WHERE id = ? AND ${valid}`).bind(passwordHash, salt, row.user_id, ...guard),
       env.DB.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${valid}`).bind(row.user_id, ...guard),
       env.DB.prepare(`UPDATE mobile_oauth_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL AND ${valid}`).bind(now, row.user_id, ...guard),
       env.DB.prepare(`UPDATE password_reset_tokens SET revoked_at = ? WHERE user_id = ? AND id <> ? AND used_at IS NULL AND revoked_at IS NULL AND ${valid}`).bind(now, row.user_id, row.id, ...guard),

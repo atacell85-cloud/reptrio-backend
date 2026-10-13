@@ -132,9 +132,9 @@ function mockAccountDb() {
             },
             async run() {
               if (sql.startsWith('INSERT INTO users')) state.users.push({ id: values[0], email: values[1], password_hash: values[2], password_salt: values[3], created_at: values[4], deleted_at: null });
-              if (sql.startsWith('INSERT INTO auth_sessions')) state.sessions.push({ id: values[0], user_id: values[1], token_hash: values[2], created_at: values[3], expires_at: values[4] });
+              if (sql.startsWith('INSERT INTO auth_sessions')) state.sessions.push({ id: values[0],user_id:values[4],token_hash:values[1],created_at:values[2],expires_at:values[3] });
               if (sql.startsWith('DELETE FROM auth_sessions WHERE token_hash')) state.sessions = state.sessions.filter(item => item.token_hash !== values[0]);
-              return { success: true };
+              return { success: true,meta:{changes:1} };
             }
           };
         }

@@ -349,8 +349,19 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
   assert.deepEqual(await (await reset(forged, 'oauth-new-pass')).json(), { code: 'PASSWORD_RESET_INVALID' }, 'an OAuth-only account never gets a local password');
   assert.equal(db.rows('SELECT password_hash FROM users WHERE id = ?', google.id)[0].password_hash, 'generated');
 
-  const requiresPassword = async user => (await (await call('/api/auth/delete', { headers: { Authorization: `Bearer ${await session(user.id)}` } })).json()).requiresPassword;
-  for (const [user, eligible] of [[bob, true], [mixed, true], [google, false], [apple, false]]) assert.equal(await requiresPassword(user), eligible, `eligibility parity for ${user.email}`);
+  for(const u of [bob,mixed,google,apple])assert.equal((await(await call('/api/auth/delete',{headers:{Authorization:`Bearer ${await session(u.id)}`}})).json()).requiresPassword,false,'deletion never asks for a password');
+}
+
+// B44 lifecycle/provenance compatibility: no timestamp inference, preserve ordinary migrated email reset.
+{
+ const legacy=await register('legacy-reset@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(legacy.id);
+ const link=await requestLink(legacy);assert.equal((await reset(link,'legacy-new-password')).status,200);assert.equal(db.rows('SELECT credential_origin FROM users WHERE id=?',legacy.id)[0].credential_origin,'PASSWORD');
+ for(const origin of ['GOOGLE','APPLE']){const u=await register('orphan-'+origin.toLowerCase()+'@example.test');db.raw.prepare('UPDATE users SET credential_origin=? WHERE id=?').run(origin,u.id);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0,'known provider orphan never gets password');}
+ for(const skew of [false,true]){const u=await register('unknown-linked-'+skew+'@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(u.id);const created=db.rows('SELECT created_at FROM users WHERE id=?',u.id)[0].created_at;db.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at)VALUES('google',?,?,?,?,?)").run('unknown-reset-'+skew,u.id,u.email,skew?'2000-01-01':created,created);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0,'UNKNOWN linked neither collision nor skew grants reset');}
+ const race=await register('unknown-reset-race@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(race.id);const raceLink=await requestLink(race),before=db.rows('SELECT password_hash FROM users WHERE id=?',race.id)[0].password_hash;
+ db.setBeforeBatch(statements=>{if(statements[0].sql.startsWith('UPDATE users SET password_hash')){db.setBeforeBatch(null);db.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at)VALUES('apple','race-unknown',?,?,?,?)").run(race.id,race.email,'2000-01-01','2000-01-01');}});
+ assert.equal((await reset(raceLink,'should-never-change')).status,400);assert.equal(db.rows('SELECT password_hash FROM users WHERE id=?',race.id)[0].password_hash,before);assert.equal(tokenRows(race.id)[0].used_at,null);
+ for(const status of ['PENDING_DELETION','PURGING']){const u=await register('reset-'+status.toLowerCase()+'@example.test'),t=await requestLink(u);db.raw.prepare('UPDATE users SET account_status=? WHERE id=?').run(status,u.id);assert.equal((await reset(t,'pending-password-change')).status,400);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0);assert.equal(tokenRows(u.id)[0].used_at,null);}
 }
 
 // ---- 10. Atomicity: a failure inside the batch rolls back the password change and keeps the link unused.
@@ -396,7 +407,7 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
     let undo;
     const changingDb = { ...db, prepare: db.prepare, batch: async statements => {
       if (change === 'deleted') { db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().toISOString(), mixed.id); undo = () => db.raw.prepare('UPDATE users SET deleted_at = NULL WHERE id = ?').run(mixed.id); }
-      else { db.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, email_trusted, created_at, last_login_at) VALUES ('apple', 'race-apple', ?, ?, 1, ?, ?)").run(mixed.id, mixed.email, before.created_at, before.created_at); undo = () => db.raw.prepare("DELETE FROM oauth_accounts WHERE provider_subject = 'race-apple'").run(); }
+      else { db.raw.prepare("UPDATE users SET credential_origin='APPLE' WHERE id=?").run(mixed.id); undo=()=>db.raw.prepare("UPDATE users SET credential_origin='PASSWORD' WHERE id=?").run(mixed.id); }
       return db.batch(statements);
     } };
     const raced = await worker.fetch(new Request(`${ORIGIN}/api/auth/password/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: raceToken, password: 'racing-pass-34' }) }), { ...env, DB: changingDb }, ctx);

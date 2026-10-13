@@ -93,7 +93,7 @@ for (const account of [oldEmail, oldGoogle, oldApple]) assert.equal((await info(
 assert.equal((await login('old-email@example.test', { onboardingEligible: true })).user.onboardingEligible, false);
 assert.equal((await signIn('google', { sub: 'old-google', email: 'old-google@gmail.com', verified: true })).onboardingEligible, false);
 assert.equal((await signIn('apple', { sub: 'old-apple', email: 'old-apple@example.test', verified: 'true' })).onboardingEligible, false);
-assert.equal((await signIn('apple', { sub: 'new-link', email: 'old-google@gmail.com', verified: 'true' })).onboardingEligible, false);
+assert.equal((await signIn('apple', { sub: 'new-link', email: 'old-google@gmail.com', verified: 'true' })).error,'OAUTH_ACCOUNT_LINK_REQUIRES_VERIFICATION');
 const fresh = await post('/api/auth/register', { email: 'fresh@example.test', password: 'password123', onboardingEligible: false });
 assert.equal(fresh.status, 201);
 const freshBody = await fresh.json();

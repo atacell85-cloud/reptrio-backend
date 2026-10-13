@@ -80,12 +80,18 @@ for(const id of ['x'.repeat(3005),'α"\\'.repeat(300)]){
   await zero(f,()=>f.mutation({upserts:{sessions:[{...root,title:'edited'}]}}),[413,'SYNC_ROOT_LIMIT']);assert.equal(f.db.metrics.payloadRows,0);assert.equal(f.db.metrics.batches,0);assert.ok(f.db.metrics.maxReturnedBytes<10_000);console.log(`P2 oversize projection ${actual} bytes:0 personal payload rows/0 batches.`);
 }
 {
-  const f=await fixture();const id='α"\\'.repeat(170);const root={id,title:'original',sets:{g:Object.fromEntries(Array.from({length:1000},(_,i)=>[`k${i}`,{reps:'5'}]))}};const d={schemaVersion:8,programs:[],sessions:[root],measurements:[]};await ok(await f.push(d));f.db.resetMetrics();const change={upserts:{sessions:[{...root,title:'edited'}]}};const result=await ok(await f.mutation(change,1,'p2-near'));limits(f);assert.ok(f.db.metrics.maxReturnedBytes>3_500_000 && f.db.metrics.maxReturnedBytes<=4_000_000);const touched=f.db.trace.find(entry=>entry.sql.startsWith('WITH touched AS'));assert.ok(touched.returnedBytes<=touched.boundedBytes && touched.boundedBytes<=4_000_000);console.log(`P2 legal escaped near-boundary transfer ${touched.returnedBytes} bytes <= SQL bound ${touched.boundedBytes}.`);assert.deepEqual((await f.pull()).data,{...d,sessions:[{...root,title:'edited'}]});assert.deepEqual(await ok(await f.mutation(change,1,'p2-near')),result);
+  const f=await fixture();const id='α"\\'.repeat(170);const root={id,title:'original',sets:{g:Object.fromEntries(Array.from({length:1000},(_,i)=>[`k${i}`,{reps:'5'}]))}};const d={schemaVersion:8,programs:[],sessions:[root],measurements:[]};await ok(await f.push(d));f.db.resetMetrics();const change={upserts:{sessions:[{...root,title:'edited'}]}};const result=await ok(await f.mutation(change,1,'p2-near'));limits(f);assert.ok(f.db.metrics.maxReturnedBytes>3_500_000 && f.db.metrics.maxReturnedBytes<=4_000_000);const touched=f.db.trace.find(entry=>entry.sql.includes('WITH touched AS'));assert.ok(touched.returnedBytes<=touched.boundedBytes && touched.boundedBytes<=4_000_000);console.log(`P2 legal escaped near-boundary transfer ${touched.returnedBytes} bytes <= SQL bound ${touched.boundedBytes}.`);assert.deepEqual((await f.pull()).data,{...d,sessions:[{...root,title:'edited'}]});assert.deepEqual(await ok(await f.mutation(change,1,'p2-near')),result);
 }
 {
   const f=await fixture();const root={id:'x'.repeat(3005),title:'original',sets:{g:{k:{reps:'5'}}}};await ok(await f.push({schemaVersion:8,programs:[],sessions:[root],measurements:[]}));
-  const before=f.db.rows('SELECT * FROM sync_records');f.db.setBeforeRead(sql=>{if(sql.startsWith('WITH touched AS')){f.db.setBeforeRead(null);f.db.raw.exec("UPDATE sync_account_state SET revision=2,write_token='growth-owner'");const row=f.db.rows("SELECT * FROM sync_records WHERE kind='set'")[0];const insert=f.db.raw.prepare('INSERT INTO sync_records VALUES (?,?,?,?,?,?,?,?,?,?,?)');for(let i=0;i<1000;i++)insert.run(f.id,'set',JSON.stringify([root.id,'g',`new${i}`]),row.parent_key,i,row.address_json,row.payload_json,2,2,0,null);}});
+  const before=f.db.rows('SELECT * FROM sync_records');f.db.setBeforeRead(sql=>{if(sql.includes('WITH touched AS')){f.db.setBeforeRead(null);f.db.raw.exec("UPDATE sync_account_state SET revision=2,write_token='growth-owner'");const row=f.db.rows("SELECT * FROM sync_records WHERE kind='set'")[0];const insert=f.db.raw.prepare('INSERT INTO sync_records VALUES (?,?,?,?,?,?,?,?,?,?,?)');for(let i=0;i<1000;i++)insert.run(f.id,'set',JSON.stringify([root.id,'g',`new${i}`]),row.parent_key,i,row.address_json,row.payload_json,2,2,0,null);}});
   f.db.resetMetrics();assert.deepEqual(await error(await f.mutation({upserts:{sessions:[{...root,title:'edited'}]}})),[409,'SYNC_CONFLICT']);assert.equal(f.db.metrics.payloadRows,0);assert.equal(f.db.metrics.batches,0);assert.equal(f.db.metrics.writes,0);assert.equal(f.db.rows('SELECT * FROM sync_mutation_receipts').length,0);assert.deepEqual(f.db.rows('SELECT * FROM sync_records WHERE created_revision=1'),before);
+}
+// Authenticated-before-pending delta writes and receipts remain zero-effect after lifecycle closure.
+for(const status of ['PENDING_DELETION','PURGING']){
+ const f=await fixture();await f.push(base());let baseline;
+ f.db.setBeforeBatch(()=>{f.db.setBeforeBatch(null);f.db.raw.prepare('UPDATE users SET account_status=? WHERE id=?').run(status,f.id);baseline=f.dump();});
+ const r=await f.mutation({metadata:{draft:null}},1,'pending-delta');assert.notEqual(r.status,200);assert.equal(f.dump(),baseline);assert.equal(f.db.rows('SELECT * FROM sync_mutation_receipts').length,0);
 }
 // Signed prefix completeness: replay/skip, account scope, tampering, expiry and pinned revision.
 {
@@ -111,7 +117,7 @@ for(const mode of ['delete','relocate','reassign','race-revision','race-token','
   if(mode==='delete')f.db.raw.prepare('DELETE FROM sync_records WHERE rowid=CAST(? AS INTEGER)').run(tuple[5]);
   if(mode==='relocate')f.db.raw.prepare('UPDATE sync_records SET rowid=9007199254740993 WHERE rowid=CAST(? AS INTEGER)').run(tuple[5]);
   if(mode==='reassign')f.db.raw.prepare("UPDATE sync_records SET record_key='[\"different\"]' WHERE rowid=CAST(? AS INTEGER)").run(tuple[5]);
-  if(mode.startsWith('race-'))f.db.setBeforeRead(sql=>{if(sql.startsWith('WITH candidates')){f.db.setBeforeRead(null);if(mode==='race-revision')f.db.raw.exec('UPDATE sync_account_state SET revision=2');else if(mode==='race-token')f.db.raw.exec("UPDATE sync_account_state SET write_token='other'");else f.db.raw.prepare('UPDATE sync_records SET rowid=9007199254740993 WHERE rowid=CAST(? AS INTEGER)').run(tuple[5]);}});
+  if(mode.startsWith('race-'))f.db.setBeforeRead(sql=>{if(sql.includes('WITH candidates')){f.db.setBeforeRead(null);if(mode==='race-revision')f.db.raw.exec('UPDATE sync_account_state SET revision=2');else if(mode==='race-token')f.db.raw.exec("UPDATE sync_account_state SET write_token='other'");else f.db.raw.prepare('UPDATE sync_records SET rowid=9007199254740993 WHERE rowid=CAST(? AS INTEGER)').run(tuple[5]);}});
   assert.deepEqual(await error(await f.call(`records?cursor=${encodeURIComponent(first.continuation)}`)),[409,'SYNC_SNAPSHOT_CHANGED']);
 }
 // A locator outside JavaScript's safe integer range remains an exact decimal string and pages successfully.
@@ -120,7 +126,7 @@ for(const mode of ['delete','relocate','reassign','race-revision','race-token','
 }
 // Initial coherent retry is bounded; persistent drift fails closed. Empty authority never reads retained legacy.
 {
-  const f=await fixture();await f.push(base());let times=0;f.db.setBeforeRead(sql=>{if(sql.startsWith('WITH candidates')&&times++===0)f.db.raw.exec("UPDATE sync_account_state SET revision=2,write_token='next'");});f.db.resetMetrics();assert.equal((await ok(await f.call('records'))).syncVersion,2);assert.ok(f.db.metrics.queries<=8);f.db.setBeforeRead(sql=>{if(sql.startsWith('WITH candidates'))f.db.raw.exec('UPDATE sync_account_state SET revision=revision+1');});assert.deepEqual(await error(await f.call('records')),[409,'SYNC_SNAPSHOT_CHANGED']);f.db.setBeforeRead(null);f.db.raw.exec('DELETE FROM sync_records');f.db.raw.prepare("INSERT INTO user_data VALUES (?, '{\"legacy\":true}',99,'old')").run(f.id);const empty=await ok(await f.call('records'));assert.equal(empty.total,0);assert.equal(empty.terminal,true);assert.deepEqual(empty.records,[]);
+  const f=await fixture();await f.push(base());let times=0;f.db.setBeforeRead(sql=>{if(sql.includes('WITH candidates')&&times++===0)f.db.raw.exec("UPDATE sync_account_state SET revision=2,write_token='next'");});f.db.resetMetrics();assert.equal((await ok(await f.call('records'))).syncVersion,2);assert.ok(f.db.metrics.queries<=8);f.db.setBeforeRead(sql=>{if(sql.includes('WITH candidates'))f.db.raw.exec('UPDATE sync_account_state SET revision=revision+1');});assert.deepEqual(await error(await f.call('records')),[409,'SYNC_SNAPSHOT_CHANGED']);f.db.setBeforeRead(null);f.db.raw.exec('DELETE FROM sync_records');f.db.raw.prepare("INSERT INTO user_data VALUES (?, '{\"legacy\":true}',99,'old')").run(f.id);const empty=await ok(await f.call('records'));assert.equal(empty.total,0);assert.equal(empty.terminal,true);assert.deepEqual(empty.records,[]);
 }
 // Stable root ranks, distinct append ranks including tombstones; explicit create/prepend/move and child ordering.
 {
@@ -195,7 +201,7 @@ for(const pattern of [/^INSERT INTO sync_records/,/^WITH ordered AS/,/^INSERT IN
 }
 // Receipt-row escaping expands after bounded root/order selectors; exact preflight rejects before CAS.
 {
-  const f=await fixture();const long='\\'.repeat(220_000);const d={schemaVersion:8,programs:[],sessions:[{...session(`a${long}`),title:'a'},{...session(`b${long}`),title:'b'},session('anchor')],measurements:[]};seed(f,d);const order=[{kind:'session',key:d.sessions[0].id,anchor:'anchor',placement:'before'},{kind:'session',key:d.sessions[1].id,anchor:'anchor',placement:'before'}];await zero(f,()=>f.mutation({order}),[413,'SYNC_ROOT_LIMIT']);assert.equal(f.db.metrics.batches,0);assert.ok(f.db.trace.some(entry=>entry.sql.startsWith('WITH o0 AS')),'receipt projection was bounded and validated before CAS');
+  const f=await fixture();const long='\\'.repeat(220_000);const d={schemaVersion:8,programs:[],sessions:[{...session(`a${long}`),title:'a'},{...session(`b${long}`),title:'b'},session('anchor')],measurements:[]};seed(f,d);const order=[{kind:'session',key:d.sessions[0].id,anchor:'anchor',placement:'before'},{kind:'session',key:d.sessions[1].id,anchor:'anchor',placement:'before'}];await zero(f,()=>f.mutation({order}),[413,'SYNC_ROOT_LIMIT']);assert.equal(f.db.metrics.batches,0);assert.ok(f.db.trace.some(entry=>entry.sql.includes('WITH o0 AS')),'receipt projection was bounded and validated before CAS');
 }
 // Schema5 account guard remains pure-PWA, including incompatible untouched roots; metadata is not a bypass.
 for(const incompatible of ['object-session','program','schema8']){
@@ -235,7 +241,7 @@ for(const foreignKeys of [true,false]){
  assert.equal(f.db.rows('SELECT COUNT(*)AS n FROM sync_mutation_receipts')[0].n,0);
 }
 // Five critical semantic mutants fail observable invariants using the same SQLite rather than source assertions.
-let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replaceAll("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href));
+let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replaceAll("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href)).replaceAll("'./account-lifecycle.js'",JSON.stringify(new URL('../worker/account-lifecycle.js',import.meta.url).href));
 async function mutant(from,to){assert.ok(source.includes(from));return import(`data:text/javascript;base64,${Buffer.from(source.replace(from,to)).toString('base64')}`);}
 const direct=(m,f,change={},rev=1)=>m.recordMutation(new Request(`${ORIGIN}/api/sync/records/mutations`,{method:'POST',body:JSON.stringify({mutationId:'mutant',baseRevision:rev,clientSchemaVersion:8,...change})}),f.env,f.id);
 {

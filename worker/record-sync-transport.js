@@ -1,3 +1,4 @@
+import { activeAccountDB } from './account-lifecycle.js';
 import { storageJSON } from './record-sync-storage.js';
 import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
 const encoder = new TextEncoder();
@@ -55,8 +56,9 @@ const PAGE_SQL = `WITH candidates AS (
  FROM sync_account_state s JOIN users u ON u.id=s.user_id CROSS JOIN totals t
  LEFT JOIN bounded b ON b.cumulative_bytes<=1880000
  LEFT JOIN sync_records r ON r.user_id=s.user_id AND r.kind=b.kind AND r.record_key=b.record_key
- WHERE s.user_id=? ORDER BY r.kind,r.record_key`;
+ WHERE s.user_id=? AND u.deleted_at IS NULL ORDER BY r.kind,r.record_key`;
 export async function recordPage(request,env,userId) {
+  env={...env,DB:await activeAccountDB(env.DB,userId)};
   try {
     await ready(env); let state = await readRecordState(env.DB,userId); authority(state);
     const url = new URL(request.url);
@@ -186,7 +188,7 @@ async function plannedOrdinals(db,userId,changes,roots,order,oldRows) {
 }
 // Validate every derived bound string/SQL before first use, including dynamically planned key lists.
 function mutationDB(db) {
-  return {batch:statements=>db.batch(statements),prepare(sql) {
+  return {accountLifecycleGuarded:db.accountLifecycleGuarded,accountLifecycleUserId:db.accountLifecycleUserId,batch:statements=>db.batch(statements),prepare(sql) {
     if(bytes(sql)>100_000)fail('SYNC_QUERY_LIMIT',413);
     return {bind(...values) {
       if(values.length>100 || values.some(value=>typeof value==='string' && bytes(value)>LIMITS.chunkBytes))fail('SYNC_ROOT_LIMIT',413);
@@ -195,6 +197,7 @@ function mutationDB(db) {
   }};
 }
 export async function recordMutation(request,env,userId) {
+  env={...env,DB:await activeAccountDB(env.DB,userId)};
   try {
     const p=await boundedBody(request); inspect(p); if(bytes(JSON.stringify(p))>LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413); const {touched,order}=validateEnvelope(p); const requestHash=await digest(p);
     await ready(env); const db=mutationDB(env.DB);

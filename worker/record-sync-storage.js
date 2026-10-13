@@ -1,3 +1,4 @@
+import { activeAccountDB } from './account-lifecycle.js';
 import {WIRE_RULES} from './personal-backup-contract.js';
 // The wire AppData remains raw JSON. This adapter owns storage, not client normalization/export projection.
 // Preserve validated raw scalar signs without changing A's canonical request/receipt hashes.
@@ -46,17 +47,18 @@ export function personalRestoreSchemaStatus(tables) {
 }
 // Lightweight state only; the internal token never crosses a response boundary.
 export async function readRecordState(db,userId,mutationId=undefined) {
+  db=await activeAccountDB(db,userId);
   const state = await db.prepare(`SELECT u.deleted_at, s.storage_schema_version, s.revision, s.write_token, s.write_status, s.updated_at,
     COALESCE(s.revision,d.sync_version,0) AS sync_version ${mutationId === undefined ? '' : ',m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision'} FROM users u LEFT JOIN sync_account_state s ON s.user_id=u.id LEFT JOIN user_data d ON d.user_id=u.id ${mutationId === undefined ? '' : 'LEFT JOIN sync_mutation_receipts m ON m.user_id=u.id AND m.mutation_id=?'}
-    WHERE u.id=?`).bind(...(mutationId === undefined ? [userId] : [mutationId,userId])).first();
+    WHERE u.id=? AND u.deleted_at IS NULL`).bind(...(mutationId === undefined ? [userId] : [mutationId,userId])).first();
   if (!state || state.deleted_at !== null || (state.write_status && state.write_status !== 'ACTIVE')) fail('SYNC_ACCOUNT_BLOCKED');
   if (state.storage_schema_version !== null && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   return state;
 }
 
 // Account deletion needs only schema/state version before external cleanup, never account payload assembly.
-export async function storageCleanupMode(db,userId) {
-  const tables = await storageTables(db);
+export async function storageCleanupMode(db,userId,schemaRows=null) {
+  const tables = schemaRows || await storageTables(db);
   const readiness = recordSchemaStatus(tables);
   const receipts = receiptSchemaStatus(tables);
   const personal=personalRestoreSchemaStatus(tables);
@@ -72,6 +74,7 @@ export async function storageCleanupMode(db,userId) {
 // One SQL statement observes state and records (or only legacy fallback) in one read snapshot. No account-wide
 // JSON aggregate and no fallback once the authority marker exists, including accounts with zero live records.
 export async function readRecordSnapshot(db, userId, readiness) {
+  db=await activeAccountDB(db,userId);
   if (readiness === 'missing') {
     const row = await db.prepare(`SELECT u.id, d.payload_json, d.sync_version, d.updated_at FROM users u LEFT JOIN user_data d ON d.user_id = u.id WHERE u.id = ? AND u.deleted_at IS NULL`).bind(userId).first();
     if (!row) fail('SYNC_ACCOUNT_BLOCKED');
@@ -384,6 +387,7 @@ export function recordChunks(items) {
 }
 export const RECORD_WRITE_GATE_SQL = `EXISTS (SELECT 1 FROM sync_account_state s JOIN users u ON u.id = s.user_id WHERE s.user_id = ? AND s.revision = ? AND s.write_token = ? AND s.storage_schema_version = 1 AND s.write_status = 'ACTIVE' AND u.deleted_at IS NULL)`;
 export async function recordPush(request, env, userId) {
+  env={...env,DB:await activeAccountDB(env.DB,userId)};
   try {
     const payload = await boundedBody(request);
     if (!object(payload) || !object(payload.data)) fail('SYNC_PAYLOAD_INVALID',400);

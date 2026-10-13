@@ -1,3 +1,4 @@
+import { purgeDueAccounts, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
 import { cleanupPersonalOperations } from './personal-restore-api.js';
 import { cleanupMutationReceipts } from './record-sync-transport.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
@@ -8,7 +9,12 @@ const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 export default {
-  async scheduled(event,env,ctx) { ctx.waitUntil(Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)])); },
+  async scheduled(event,env,ctx) {
+    // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
+    ctx.waitUntil(event.cron === '* * * * *'
+      ? purgeDueAccounts(env)
+      : Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)]));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/runtime-config.js') return runtimeConfig(request);
@@ -18,6 +24,7 @@ export default {
     if (accountResponse) return accountResponse;
     const aiConsentResponse = await handleAiConsentRequest(request, env, url.pathname);
     if (aiConsentResponse) return aiConsentResponse;
+    env={...env,DB:await activeAccountDB(env.DB)};
     if (url.pathname === '/api/health') return health(request, env);
     if (url.pathname === '/api/import/parse') return parseImport(request, env);
     if (url.pathname === '/api/import/jobs') return createImportJob(request, env, ctx);
@@ -28,6 +35,7 @@ export default {
   },
 
   async queue(batch, env) {
+    env={...env,DB:await activeAccountDB(env.DB)};
     for (const message of batch.messages) {
       await processImportJob(env, message.body?.jobId, message.body?.userId);
       message.ack();
@@ -70,6 +78,7 @@ async function parseImport(request, env) {
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, body.importId, body.normalizedDocument);
+    await assertAiImportConsent(env,user.id);
     return json({ preview, observability: observability({ requestId, config, payload, upstream, attempts, started, status: 'ok' }) }, 200, { 'X-Import-Request-Id': requestId });
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
@@ -101,19 +110,26 @@ async function createImportJob(request, env, ctx) {
     .bind(body.importId, user.id, JSON.stringify({ fileName: source.fileName, fileType: source.fileType, language: source.language || null }), normalizedJson, body.file?.name || null, body.file?.type || null, body.file?.size || null, now, now)
     .run();
   if (body.file) {
+    let workId;
     if (!env.OPENAI_API_KEY) return apiError('OPENAI_API_KEY_MISSING', 503);
     try {
       const rawFile = await rawFileFromUpload(body.file, config);
       const requestId = crypto.randomUUID();
       const started = Date.now();
       await assertAiImportConsent(env, user.id);
+      workId=await beginBackgroundWork(env,user.id);
       const { payload, upstream, attempts } = await createOpenAIBackgroundResponse({ apiKey: env.OPENAI_API_KEY, config, input: { importId: body.importId, normalizedDocument: body.normalizedDocument, rawFile }, requestId });
+      await backgroundReturned(env,workId,payload.id);
       const metadata = observability({ requestId, config, payload, upstream, attempts, started, status: payload.status || 'queued' });
-      await env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
+      const publication=await env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
         .bind(payload.id, JSON.stringify(metadata), new Date().toISOString(), user.id, body.importId)
         .run();
+      if(publication.meta.changes!==1)throw coded('ACCOUNT_PENDING_DELETION');
+      await backgroundResolved(env,workId);
+      await assertAiImportConsent(env,user.id);
       return json({ importId: body.importId, status: 'queued' }, 202);
     } catch (error) {
+      if(workId){await backgroundUnknown(env,workId);await cleanupClosedBackgroundWork(env,workId);}
       const code = error.code || 'OPENAI_REQUEST_FAILED';
       await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE user_id = ? AND id = ?").bind(code, new Date().toISOString(), user.id, body.importId).run();
       return apiError(code, statusFor(code));
@@ -143,6 +159,7 @@ async function handleImportJob(request, env, ctx, importId, retry) {
     if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
     row = await syncOpenAIBackgroundJob(env, row);
   }
+  if(!(await env.DB.prepare('SELECT id FROM users WHERE id=? AND deleted_at IS NULL').bind(user.id).first()))return apiError('AUTH_REQUIRED',401);
   return json({
     importId: row.id,
     status: row.status,
@@ -287,6 +304,7 @@ async function syncOpenAIBackgroundJob(env, row) {
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
+    await assertAiImportConsent(env,row.user_id);
     const { payload, upstream } = await retrieveOpenAIResponse({ apiKey: env.OPENAI_API_KEY, responseId: row.openai_response_id });
     if (payload.status === 'queued' || payload.status === 'in_progress') return row;
     const normalizedDocument = parseJson(row.normalized_document_json);

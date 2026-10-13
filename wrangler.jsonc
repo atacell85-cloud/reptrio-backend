@@ -17,9 +17,9 @@
   "assets": {
     "directory": "./.cloudflare-assets",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password"]
+    "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password", "/account-deletion-link"]
   },
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": ["*/15 * * * *", "* * * * *"] },
   "vars": {
     "RECORD_TRANSPORT_ENABLED": "true",
     "PERSONAL_RESTORE_ENABLED": "true",
@@ -55,6 +55,7 @@
     ]
   },
   "ratelimits": [
+    { "name": "ACCOUNT_LIFECYCLE_LIMITER", "namespace_id": "1003", "simple": { "limit": 6, "period": 60 } },
     {
       "name": "AI_IMPORT_LIMITER",
       "namespace_id": "1001",

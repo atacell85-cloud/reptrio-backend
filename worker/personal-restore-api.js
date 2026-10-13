@@ -1,3 +1,4 @@
+import { activeAccountDB } from './account-lifecycle.js';
 import { validatePortableRootV2, V2_SETTINGS_FIELDS } from './personal-backup-v2-contract.js';
 import {storageTables,recordSchemaStatus,personalRestoreSchemaStatus,readRecordState,splitData,storageJSON,assembleRecordData,compatible,compatibleStorageRow,recordChunks,inspect,RECORD_WRITE_GATE_SQL} from './record-sync-storage.js';
 import {portableBody,portableHash,byteHash,WIRE_RULES,canonicalPortable,portableBytes,portableFail as fail,object,own,exactFields,validatePortableRoot,parsePortable} from './personal-backup-contract.js';
@@ -11,7 +12,7 @@ const sum=(a,b)=>{for(const k of Object.keys(a))a[k]+=b[k]||0;return a;};
 const countKeys=Object.keys(zero());
 const now=()=>new Date().toISOString();
 const statementGate=`EXISTS(SELECT 1 FROM personal_restore_operations o JOIN users u ON u.id=o.user_id LEFT JOIN sync_account_state active ON active.user_id=u.id WHERE o.user_id=? AND o.operation_id=? AND o.generation_version=? AND o.state=? AND o.expires_at>? AND u.deleted_at IS NULL AND(active.write_status IS NULL OR active.write_status='ACTIVE'))`;
-function boundedDB(db){let queries=1;const check=(sql,values)=>{if(++queries>50||portableBytes(sql)>100000||values.length>100||values.some(v=>typeof v==='string'&&portableBytes(v)>1800000))fail('LIMIT',413);};return {prepare(sql){return {bind(...values){check(sql,values);return db.prepare(sql).bind(...values);},first(){check(sql,[]);return db.prepare(sql).first();},all(){check(sql,[]);return db.prepare(sql).all();}};},batch:values=>db.batch(values)};}
+function boundedDB(db){let queries=1;const check=(sql,values)=>{if(++queries>50||portableBytes(sql)>100000||values.length>100||values.some(v=>typeof v==='string'&&portableBytes(v)>1800000))fail('LIMIT',413);};return {accountLifecycleGuarded:db.accountLifecycleGuarded,accountLifecycleUserId:db.accountLifecycleUserId,prepare(sql){return {bind(...values){check(sql,values);return db.prepare(sql).bind(...values);},first(){check(sql,[]);return db.prepare(sql).first();},all(){check(sql,[]);return db.prepare(sql).all();}};},batch:values=>db.batch(values)};}
 async function ready(env,db){if(env.PERSONAL_RESTORE_ENABLED==='false')fail('DISABLED',503);const tables=await storageTables(db);if(recordSchemaStatus(tables)!=='ready'||personalRestoreSchemaStatus(tables)!=='ready')fail('MIGRATION_REQUIRED',503);}
 async function operation(db,userId,id,purpose){const row=await db.prepare('SELECT * FROM personal_restore_operations WHERE user_id=? AND operation_id=? AND purpose=?').bind(userId,id,purpose).first();if(!row)fail('OPERATION_NOT_FOUND',404);return row;}
 function live(op){if(op.expires_at<=now())fail('EXPIRED');}
@@ -19,6 +20,7 @@ function binding(op,p){if(p.localBinding!==op.local_binding)fail('LOCAL_BINDING_
 function counts(value){exactFields(value,countKeys);if(countKeys.some(k=>!int(value[k])))fail('COUNT_INVALID');return value;}
 function progressReply(op,progress,status='PENDING'){return {operationId:op.operation_id,status,generationId:op.generation_id,progress:{phase:progress.phase,processed:progress.processed,counts:progress.counts},continuation:status==='PENDING'?op.generation_id:null};}
 export async function personalRestoreRequest(request,env,userId,purpose,id,action='start'){
+ env={...env,DB:await activeAccountDB(env.DB,userId)};
  try{
   const db=boundedDB(env.DB);await ready(env,db);const state=await readRecordState(db,userId);
   if(action==='receipt'){const op=await operation(db,userId,id,purpose);if(!op.outcome_json)fail('RECEIPT_NOT_READY');return json(JSON.parse(op.outcome_json));}
@@ -176,7 +178,7 @@ function selectionInput(p){
 async function preview(db,userId,op,state,p){
  exactFields(p,['localBinding','generationId','selection']);if(!['FROZEN','PREVIEWING','READY'].includes(op.state))fail('STATE_INVALID');
  const selection=selectionInput(p),selectionHash=await portableHash(selection);
- if(op.state==='READY'&&pinMatches(op,state)&&op.selection_hash===selectionHash)return {operationId:op.operation_id,status:'READY',previewDigest:op.preview_hash,semanticDigest:op.semantic_hash,selectionDigest:op.selection_hash,warnings:JSON.parse(op.progress_json).warnings};
+ if(op.state==='READY'&&pinMatches(op,state)&&op.selection_hash===selectionHash){const saved=JSON.parse(op.progress_json);return {operationId:op.operation_id,status:'READY',previewDigest:op.preview_hash,semanticDigest:op.semantic_hash,selectionDigest:op.selection_hash,classifications:saved.classifications,warnings:saved.warnings};}
  if(op.state!=='PREVIEWING'||op.selection_hash!==selectionHash||!pinMatches(op,state)){
   op=await beginProgress(db,userId,op,state,'preview',{state:'PREVIEWING',selection_hash:selectionHash,preview_hash:null});
   await clearSynthetic(db,userId,op);
