@@ -274,6 +274,17 @@ await test('unit-context and empty-selection semantic guard mutants reveal unsaf
 const fixtureV2=JSON.parse(readFileSync(new URL('../tests/fixtures/personal-backup-v2-golden.json',import.meta.url),'utf8'));
 const v2Roots=()=>structuredClone(fixtureV2.roots);
 async function preparedV2(f,roots=v2Roots(),selection){const uploaded=await upload(f,roots,'RESTORE',9,0,2);assert.equal(uploaded.operation.protocol,2);assert.equal(f.DB.rows('SELECT protocol FROM personal_restore_operations')[0].protocol,2);let preview;for(let i=0;i<100;i++){preview=await ok(f.call('preview',{localBinding:'local-7',generationId:preview?.generationId,...(selection===undefined?{}:{selection:{mode:'explicit',roots:selection}})},uploaded.operation.operationId));if(preview.status==='READY')break;}assert.equal(preview.status,'READY');return {...uploaded,preview,input:{localBinding:'local-7',confirm:true,previewDigest:preview.previewDigest,semanticDigest:preview.semanticDigest,selectionDigest:preview.selectionDigest,baseRevision:0}};}
+await test('B44-10 actual repeated READY preview contains classification and warning evidence',async()=>{
+ const f=environment(),prepared=await preparedV2(f);
+ const again=await ok(f.call('preview',{localBinding:'local-7',selection:{mode:'all-eligible'}},prepared.operation.operationId));
+ assert.equal(again.status,'READY');
+ assert.equal(again.previewDigest,prepared.preview.previewDigest);
+ assert.equal(again.semanticDigest,prepared.preview.semanticDigest);
+ assert.equal(again.selectionDigest,prepared.preview.selectionDigest);
+ assert.deepEqual(again.classifications,prepared.preview.classifications);
+ assert.deepEqual(again.warnings,prepared.preview.warnings);
+ assert.ok(Number.isSafeInteger(again.warnings.historicalReferences));
+});
 await test('V2 actual mobile archive fixture strict machine semantics and V1 rejection',async()=>{
  assert.deepEqual(PROFILE_V2_RULES,JSON.parse(readFileSync(new URL('../tests/fixtures/personal-backup-v2-rules.json',import.meta.url),'utf8')));
  assert.equal(createHash('sha256').update(Buffer.from(fixtureV2.archiveBase64,'base64')).digest('hex'),fixtureV2.archiveDigest);
