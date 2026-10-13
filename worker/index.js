@@ -175,7 +175,7 @@ async function processImportJob(env, jobId, userId) {
   }
   const now = new Date().toISOString();
   const attempts = Number(job.attempts || 0) + 1;
-  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ?").bind(attempts, now, jobId).run();
+  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued','failed')").bind(attempts, now, jobId, userId).run();
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
@@ -188,12 +188,13 @@ async function processImportJob(env, jobId, userId) {
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, job.id, normalizedDocument);
+    await assertAiImportConsent(env, job.user_id);
     const metadata = observability({ requestId, config, payload, upstream, attempts: upstreamAttempts, started, status: 'ok' });
-    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(preview), JSON.stringify(metadata), new Date().toISOString(), new Date().toISOString(), job.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'").bind(JSON.stringify(preview), JSON.stringify(metadata), new Date().toISOString(), new Date().toISOString(), job.id, job.user_id).run();
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
     console.warn(JSON.stringify({ jobId, status: code, attempts }));
-    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ?").bind(code, new Date().toISOString(), job.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('processing','queued')").bind(code, new Date().toISOString(), job.id, job.user_id).run();
   }
 }
 
@@ -291,15 +292,16 @@ async function syncOpenAIBackgroundJob(env, row) {
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, row.id, normalizedDocument);
+    await assertAiImportConsent(env, row.user_id);
     const metadata = { ...(parseJson(row.observability_json) || {}), status: 'ok', model: payload.model || config.model, inputTokens: payload.usage?.input_tokens ?? null, outputTokens: payload.usage?.output_tokens ?? null, totalTokens: payload.usage?.total_tokens ?? null, openaiRequestId: upstream.headers?.get?.('x-request-id') || payload.id || row.openai_response_id };
     const now = new Date().toISOString();
-    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?")
-      .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id)
+    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'")
+      .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id, row.user_id)
       .run();
     return { ...row, status: 'done', preview_json: JSON.stringify(preview), observability_json: JSON.stringify(metadata), error_code: null, updated_at: now, completed_at: now };
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
-    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ?").bind(code, new Date().toISOString(), row.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'").bind(code, new Date().toISOString(), row.id, row.user_id).run();
     return { ...row, status: 'failed', error_code: code, updated_at: new Date().toISOString() };
   }
 }
