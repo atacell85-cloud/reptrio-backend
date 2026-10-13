@@ -75,6 +75,38 @@ for(const order of ['recover-first','purge-first']){
 }
 // Logout invalidates detached links/proofs and reauth tickets together with the requesting session.
 const logoutUser=await register('logout'),logoutToken=await link(logoutUser);assert.equal((await call('/api/auth/logout',logoutUser.sessionToken,{})).status,200);assert.equal(db.rows('SELECT * FROM account_lifecycle_credentials WHERE user_id=?',logoutUser.user.id).length,0);assert.equal((await call('/api/auth/delete/verify-link',logoutUser.sessionToken,{token:logoutToken})).status,401);
+// Revocation after request authentication but before the atomic final transition must still reject the action.
+{
+ const u=await register('late-link-revocation'),t=await link(u);
+ db.setBeforeBatch(statements=>{if(statements[0].sql.includes("'DELETE_PROOF'")){db.setBeforeBatch(null);db.raw.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(u.user.id);}});
+ assert.equal((await call('/api/auth/delete/verify-link',u.sessionToken,{token:t})).status,400);
+ assert.equal(db.rows('SELECT email_verified_at FROM users WHERE id=?',u.user.id)[0].email_verified_at,null);
+ assert.equal(db.rows("SELECT used_at FROM account_lifecycle_credentials WHERE user_id=? AND purpose='DELETE_LINK'",u.user.id)[0].used_at,null);
+ assert.equal(db.rows("SELECT * FROM account_lifecycle_credentials WHERE user_id=? AND purpose='DELETE_PROOF'",u.user.id).length,0);
+}
+{
+ let invalidate=false,local;
+ local=createD1({beforeStatement(sql){if(invalidate&&sql.includes('INSERT INTO account_lifecycle_credentials')&&sql.includes("'DELETE_LINK'")){invalidate=false;local.raw.prepare('DELETE FROM auth_sessions').run();}}});
+ const e={...env,DB:local},u=await(await call('/api/auth/register',null,{email:'issue-revocation@example.test',password:'fixture-password'},e)).json(),beforeMail=mails.length;
+ invalidate=true;
+ assert.notEqual((await call('/api/auth/delete/request-link',u.sessionToken,{},e)).status,202);
+ assert.equal(local.rows('SELECT * FROM account_lifecycle_credentials').length,0);
+ assert.equal(mails.length,beforeMail,'revoked session cannot initiate mail delivery');
+}
+{
+ const u=await register('late-session-revocation'),p=await proof(u);
+ db.setBeforeBatch(statements=>{if(statements[0].sql.startsWith("UPDATE users SET account_status='PENDING_DELETION'")){db.setBeforeBatch(null);db.raw.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(u.user.id);}});
+ const r=await call('/api/auth/delete',u.sessionToken,{proof:p,confirm:'DELETE'});
+ assert.equal(r.status,401,'a revoked initiating session cannot use its still-unconsumed proof');
+ assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'ACTIVE');
+}
+for(const mode of ['revoked','expired']){
+ const u=await register('late-recovery-'+mode);await pending(u);const scoped=await login(u);let authenticated=false;
+ db.setBeforeRead(sql=>{if(sql.includes('FROM account_lifecycle_credentials c JOIN users u'))authenticated=true;else if(authenticated&&sql==='PRAGMA table_info(users)'){db.setBeforeRead(null);if(mode==='revoked')db.raw.prepare('DELETE FROM account_lifecycle_credentials WHERE user_id=?').run(u.user.id);else db.raw.prepare('UPDATE account_lifecycle_credentials SET expires_at=? WHERE user_id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);}});
+ const r=await call('/api/auth/account/purge-now',scoped.recoveryToken,{confirm:'DELETE'});
+ assert.equal(r.status,409,'revoked scoped ownership cannot win the purge claim');
+ assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'PENDING_DELETION');
+}
 // In-flight stored response: purge cannot finish while RUNNING; late ID is preserved operationally, no preview
 // publishes after closure, and explicit cleanup permits a later purge. Interrupted ID persistence is UNKNOWN.
 for(const mode of ['late-return','id-write-crash']){

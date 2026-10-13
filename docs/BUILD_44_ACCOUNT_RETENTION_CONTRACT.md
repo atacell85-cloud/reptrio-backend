@@ -1,6 +1,6 @@
 # Build 44 / B44-04 — 30 Günlük Geri Alınabilir Hesap Silme: Sunucu Sözleşmesi
 
-**Ürün kararı (2026-10-08):** Hesap silmede varsayılan seçenek 30 gün kurtarma süresi. Ayrıca kullanıcı aynı akışta **hemen kalıcı silme** yolunu seçebilmeli. Bu belge yalnızca implementasyon gereksinimidir; backend kodu, D1 ve canlı servis değişmedi.
+**Ürün kararı (2026-10-08):** Hesap silmede varsayılan seçenek 30 gün kurtarma süresi. Ayrıca kullanıcı aynı akışta **hemen kalıcı silme** yolunu seçebilmeli. **Güncel durum (2026-10-13):** Backend uygulandı ve tam Node22 test CI'ı geçti; migration ve canlı deploy yapılmadı. Kilitli API ve doğrulama kanıtı aşağıdaki uygulama kaydındadır.
 
 Mobil karar ve kullanıcı akışı: https://github.com/atacell85-cloud/reptrio-mobile/blob/build44/planning/docs/tasks/BUILD_44_30_DAY_ACCOUNT_RECOVERY.md
 
@@ -69,6 +69,8 @@ An upstream-create crash before durable ID persistence is intrinsically unknown:
 Fresh linked-provider proof means a new exact-subject authorization ceremony and separate final confirmation. It does not promise provider password re-entry: [Google explicitly does not support Google Account reauthentication requests](https://developers.google.com/identity/siwg/security-bundle); its documented prompts are none/consent/select_account, not login/max_age. Apple docs do not establish guaranteed password re-entry. Normal login parameters remain unchanged; mobile should use its isolated ephemeral verification ceremony. Physical provider/browser behavior remains PENDING.
 
 Missing account/401 is never permanent-deletion proof. Response loss after a transition is unknown; mobile preserves owner data/custody until a direct matching success. No post-delete receipt endpoint or fence was added. A pre-lifecycle runtime downgrade becomes unsafe once pending users exist; rollback requires a lifecycle-aware artifact, not the union baseline alone.
+
+2026-10-14 permission race correction: link issuance, proof consumption and final closure repeat live-session checks in their write predicates. Recovery-only immediate purge repeats credential owner/purpose/expiry/unused/freshness at the atomic purge claim. A logout/revocation after initial HTTP authentication cannot bypass those checks. The default deadline starts from the final transition time after Apple/schema prerequisites.
 
 ### Submission prerequisites and legacy password-reset compatibility
 
