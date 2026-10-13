@@ -1,0 +1,31 @@
+name: B44-10 Routed SQLite RESTORE V2 E2E (isolated)
+on:
+  pull_request:
+    branches:
+      - feat/build44-profile-backup-v2
+    paths:
+      - '.github/workflows/build44-restore-e2e.yml'
+      - 'worker/personal-restore-api.js'
+      - 'worker/personal-backup*.js'
+      - 'worker/account-api.js'
+      - 'worker/record-sync*.js'
+      - 'scripts/personal-restore-test.mjs'
+      - 'tests/fixtures/personal-backup*.json'
+jobs:
+  full-restore-e2e:
+    name: Real SQLite / authenticated Worker routing / RESTORE2 and ALL undo
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Test exact mobile-produced V1/V2 golden source and RESTORE2 routed Worker
+        run: npm run test:personal-restore
+      - name: Verify all backend regressions (including record transport and deletion)
+        run: npm test
