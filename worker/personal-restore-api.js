@@ -176,7 +176,7 @@ function selectionInput(p){
 async function preview(db,userId,op,state,p){
  exactFields(p,['localBinding','generationId','selection']);if(!['FROZEN','PREVIEWING','READY'].includes(op.state))fail('STATE_INVALID');
  const selection=selectionInput(p),selectionHash=await portableHash(selection);
- if(op.state==='READY'&&pinMatches(op,state)&&op.selection_hash===selectionHash)return {operationId:op.operation_id,status:'READY',previewDigest:op.preview_hash,semanticDigest:op.semantic_hash,selectionDigest:op.selection_hash,warnings:JSON.parse(op.progress_json).warnings};
+ if(op.state==='READY'&&pinMatches(op,state)&&op.selection_hash===selectionHash){const saved=JSON.parse(op.progress_json);return {operationId:op.operation_id,status:'READY',previewDigest:op.preview_hash,semanticDigest:op.semantic_hash,selectionDigest:op.selection_hash,classifications:saved.classifications,warnings:saved.warnings};}
  if(op.state!=='PREVIEWING'||op.selection_hash!==selectionHash||!pinMatches(op,state)){
   op=await beginProgress(db,userId,op,state,'preview',{state:'PREVIEWING',selection_hash:selectionHash,preview_hash:null});
   await clearSynthetic(db,userId,op);
