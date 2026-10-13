@@ -73,6 +73,9 @@ try {
   assert.equal((await call('/api/import/jobs/shared-job/retry', auth(alice.token, 'POST'))).status, 403);
   assert.equal((await call('/api/import/parse', auth(alice.token, 'POST', data()))).status, 403);
   assert.equal((await put(alice.token, 'grant')).status, 200);
+  // A stale queue delivery from before revocation must not restart merely because the account regranted.
+  await worker.queue({ messages: [{ body: messages.at(-1), ack() {} }] }, env);
+  assert.equal(net.count, 0, 'previously revoked jobs require an explicit retry after regrant');
   assert.equal((await call('/api/import/jobs/shared-job/retry', auth(alice.token, 'POST'))).status, 202);
   await worker.queue({ messages: [{ body: messages.at(-1), ack() {} }] }, env);
   assert.equal(net.count, 1, 'fresh grant allows authorized worker to call OpenAI');
