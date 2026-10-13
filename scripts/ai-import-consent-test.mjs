@@ -98,6 +98,17 @@ try {
   assert.equal((await call('/api/import/jobs', auth(legacy.token, 'POST', data('legacy')), older)).status, 403);
   assert.equal(net.count, 2);
 
+  // Same importId in two accounts: a stale message for Alice must never touch Bob's record.
+  assert.equal((await put(bob.token, 'grant')).status, 200);
+  assert.equal((await call('/api/import/jobs', auth(bob.token, 'POST', data('shared-job')))).status, 202);
+  const bobJob = messages.at(-1);
+  assert.equal(bobJob.userId, bob.id);
+  await worker.queue({ messages: [{ body: { jobId: 'shared-job', userId: alice.id }, ack() {} }] }, env);
+  assert.equal(db.rows('SELECT status FROM import_jobs WHERE id = ? AND user_id = ?', 'shared-job', bob.id)[0].status, 'queued');
+  assert.equal(net.count, 2, 'old account queue cannot process same-ID job of another user');
+  await worker.queue({ messages: [{ body: bobJob, ack() {} }] }, env);
+  assert.equal(net.count, 3, 'new account can process its own same-ID job');
+
   // Actual deletion path with foreign_keys OFF: consent+audit must not remain orphaned.
   const noFk = createD1({ foreignKeys: false });
   const deletionEnv = { ...env, DB: noFk };
@@ -107,5 +118,14 @@ try {
   assert.equal(deleted.status, 200, 'account deletion succeeds with AI consent tables installed');
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consents WHERE user_id = ?', ex.id)[0].n, 0);
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consent_events WHERE user_id = ?', ex.id)[0].n, 0);
+  // A partial migration is a hard account-deletion blocker before any other external side effect.
+  const partialDb = createD1({ foreignKeys: false });
+  const partialEnv = { ...env, DB: partialDb };
+  const partialUser = await register('ai-partial@example.test', partialEnv);
+  partialDb.exec('DROP TABLE ai_import_consent_events');
+  const rejectedDelete = await call('/api/auth/delete', auth(partialUser.token, 'POST', { confirm: 'DELETE', password: 'password123' }), partialEnv);
+  assert.equal(rejectedDelete.status, 503);
+  assert.equal((await rejectedDelete.json()).code, 'AI_CONSENT_UNAVAILABLE');
+  assert.equal(partialDb.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', partialUser.id)[0].n, 1);
   console.log('B44 AI consent: authenticated default-OFF, versioned grant/revoke, legacy parse+jobs+retry+queue gate, account isolation, worker ownership, old schema deny, FK-OFF deletion PASS.');
 } finally { globalThis.fetch = oldFetch; }
