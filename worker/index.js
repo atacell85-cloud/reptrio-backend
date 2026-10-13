@@ -166,7 +166,7 @@ async function enqueueImportJob(env, ctx, jobId, userId) {
 async function processImportJob(env, jobId, userId) {
   if (!jobId || !userId) return;
   const job = await env.DB.prepare('SELECT * FROM import_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId).first();
-  if (!job || !['queued', 'failed'].includes(job.status)) return;
+  if (!job || job.status !== 'queued') return; // A failed/revoked job resumes only after an explicit, newly authorized retry.
   // A queued job grants no continuing permission: check owner again at execution time.
   if (!(await hasAiImportConsent(env, job.user_id))) {
     await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = 'AI_CONSENT_REQUIRED', updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued','failed')")
@@ -175,7 +175,7 @@ async function processImportJob(env, jobId, userId) {
   }
   const now = new Date().toISOString();
   const attempts = Number(job.attempts || 0) + 1;
-  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued','failed')").bind(attempts, now, jobId, userId).run();
+  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'queued'").bind(attempts, now, jobId, userId).run();
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
