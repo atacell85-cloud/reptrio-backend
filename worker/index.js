@@ -11,9 +11,9 @@ const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 export default {
   async scheduled(event,env,ctx) {
     // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
-    ctx.waitUntil(event.cron === '*/15 * * * *'
-      ? Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)])
-      : purgeDueAccounts(env));
+    ctx.waitUntil(event.cron === '* * * * *'
+      ? purgeDueAccounts(env)
+      : Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)]));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
