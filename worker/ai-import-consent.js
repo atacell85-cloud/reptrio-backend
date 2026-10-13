@@ -85,6 +85,9 @@ export async function handleAiConsentRequest(request, env, pathname) {
       env.DB.prepare(`INSERT INTO ai_import_consent_events (id, user_id, action, policy_version, created_at)
         SELECT ?, id, ?, ?, ? FROM users WHERE id = ? AND deleted_at IS NULL`)
         .bind(crypto.randomUUID(), payload.action, AI_IMPORT_POLICY_VERSION, now, user.id),
+      ...(granting ? [] : [env.DB.prepare(`UPDATE import_jobs SET status = 'failed',
+          error_code = 'AI_CONSENT_REQUIRED', updated_at = ?
+          WHERE user_id = ? AND status IN ('queued','processing')`).bind(now, user.id)]),
     ]);
     return answer({ policyVersion: AI_IMPORT_POLICY_VERSION, granted: await hasAiImportConsent(env, user.id) });
   } catch {
