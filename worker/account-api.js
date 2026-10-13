@@ -1,4 +1,5 @@
 import { personalRestoreRequest } from './personal-restore-api.js';
+import { aiConsentDeletionTables } from './ai-import-consent.js';
 import { recordPage, recordMutation } from './record-sync-transport.js';
 import { recordPull, recordPush, recordCapabilities, storageCleanupMode, PERSONAL_RESTORE_TABLES } from './record-sync-storage.js';
 const encoder = new TextEncoder();
@@ -347,9 +348,13 @@ async function deleteAccount(request, env) {
   if (!context) return error('AUTH_REQUIRED', 401);
   if (context.requiresPassword && !(validPassword(password) && constantEqual(await passwordDigest(password, context.passwordSalt), context.passwordHash))) return error('AUTH_INVALID_CREDENTIALS', 401);
 
-  let cleanupMode;
-  try { cleanupMode = await storageCleanupMode(env.DB,user.id); }
-  catch (cause) { return error(cause.code || 'SYNC_STORAGE_UNAVAILABLE',cause.status || 503); }
+  let cleanupMode, consentTables;
+  try {
+    cleanupMode = await storageCleanupMode(env.DB,user.id);
+    // Audit/consent tables must be included even with FK enforcement disabled.
+    // A partially applied privacy migration blocks deletion BEFORE provider revocation.
+    consentTables = await aiConsentDeletionTables(env);
+  } catch (cause) { return error(cause.code || 'SYNC_STORAGE_UNAVAILABLE',cause.status || 503); }
 
   // Sign in with Apple: revoke every linked authorization before any data is removed.
   if (context.apple.length) {
@@ -372,7 +377,7 @@ async function deleteAccount(request, env) {
   await deleteStoredImportResponses(env, user.id);
 
   try {
-    await env.DB.batch((cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : cleanupMode === 'personal' ? [...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES] : cleanupMode === 'receipts' ? ['sync_mutation_receipts',...ACCOUNT_TABLES] : ACCOUNT_TABLES).map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
+    await env.DB.batch([...consentTables, ...(cleanupMode === 'legacy' ? LEGACY_ACCOUNT_TABLES : cleanupMode === 'personal' ? [...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES] : cleanupMode === 'receipts' ? ['sync_mutation_receipts',...ACCOUNT_TABLES] : ACCOUNT_TABLES)].map(table => env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(user.id))
       .concat(env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id)));
   } catch (cause) {
     console.error(JSON.stringify({ event: 'account_delete_failed', stage: 'database', message: String(cause?.message || cause) }));
