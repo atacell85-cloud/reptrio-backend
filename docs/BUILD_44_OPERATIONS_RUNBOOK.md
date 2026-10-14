@@ -9,7 +9,7 @@ user's explicit release instruction. Evidence date: 2026-10-14.
 |---|---|---|---|
 | P1 | Cloudflare account on **Workers Paid** | Dashboard → Workers & Pages → Plans (API token lacks billing scope) | **UNVERIFIED → BLOCKED** |
 | P2 | Real capacity on that plan | §4 numbers re-checked against the plan's limits | BLOCKED on P1 |
-| P3 | `OPS_ALERT_EMAIL` set (Worker var) to an inbox someone reads | `wrangler deploy` config / dashboard Variables | Not set |
+| P3 | `OPS_ALERT_EMAIL` set (Worker var) to an inbox someone reads | `wrangler.jsonc` `vars` → applied by the Build 44 deploy | **Configured** `support@reptrio.com`; delivery test PASS (§2a); production cron delivery pending (§2b) |
 | P4 | Production D1 backed up (Time Travel bookmark recorded) | `wrangler d1 time-travel info a2-workout-pilot` | Not done |
 | P5 | Integrated HIGH Guardian `GEÇTİ` on both integration branches | Guardian report | See mobile `docs/tasks/BUILD_44_INTEGRATION.md` |
 
@@ -64,6 +64,31 @@ writes made after it; only with explicit approval).
 - `observability.enabled = true`: Workers Logs keep `ops_digest_*`, `account_purge_retry/overdue/unavailable` lines.
 - Residual: no external dead-man switch. If the scheduler itself stops, no email is sent; the absence of the daily
   `ops_digest_*` log line is the signal. Check it during the first release week.
+
+### 2a. Recipient and delivery test (2026-10-14) — PASS (test delivery only)
+
+- Recipient `support@reptrio.com` (user decision 2026-10-14). Verified in the live Zoho Mail admin console: Mail Lite,
+  1 user / 1 licence; `support@reptrio.com` is an address of the existing mailbox (no new mailbox, provider or
+  subscription). `reptrio.com` MX = Zoho EU. ZeptoMail suppression list empty.
+- Sender unchanged: existing ZeptoMail EU agent `reptrio-password-reset`, `Reptrio <no-reply@mail.reptrio.com>`.
+- Test: the real `runOperationalDigest` + `sendTransactionalEmail` (backend `1815280`) run locally against an
+  isolated in-memory SQLite with one synthetic UNKNOWN row (`00000000-0000-4000-8000-b44a1e7e5701`); subject prefixed
+  `[TEST — Build 44 alarm teslim doğrulaması]`. Key entered by the user via a hidden TTY prompt (not argv/env/disk;
+  network locked to `POST https://cpaas.zoho.eu/v1.1/email`, redirects refused). No production DB, no deploy.
+- Evidence: script result `zeptomail=accepted, routed=true`; ZeptoMail log 14 Oct 2026 14:30:52 (+03) **Teslim edildi**,
+  client reference `ops-test-2026-10-14T11-24-47-031Z`, recipient `support@reptrio.com`; message present in the Zoho
+  **Inbox** (not spam), From `no-reply@mail.reptrio.com`, To `support@reptrio.com`, TLS.
+- Scope: proves recipient routing and ZeptoMail→Zoho delivery for the digest format. It does **not** prove the
+  production cron.
+
+### 2b. Production cron delivery — NOT VERIFIED (after deploy)
+
+Only after the Build 44 deploy (§1 step 6): confirm the deployed Worker shows `OPS_ALERT_EMAIL` among its variables and
+three cron schedules; after the next 06:00 UTC check Workers Logs for one `ops_digest_clear` / `ops_digest_alert` line
+and, if an alert fired, the ZeptoMail log + Zoho Inbox. `ops_alert_unrouted` or `ops_alert_delivery_failed` = FAIL.
+A clear day sends no email by design: `ops_digest_clear` is written before the recipient is read, so it proves only
+that the scheduler ran, not email routing. Production cron email delivery stays NOT VERIFIED until the first real
+`ops_digest_alert` is delivered (ZeptoMail log + Zoho Inbox); `ops_alert_unrouted` / `ops_alert_delivery_failed` = FAIL.
 
 ## 3. UNKNOWN AI upstream reconciliation
 

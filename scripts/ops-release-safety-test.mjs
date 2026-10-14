@@ -7,6 +7,11 @@ import { tokenDigest } from '../worker/account-api.js';
 import { purgeDueAccounts, backgroundRejected } from '../worker/account-lifecycle.js';
 import { runOperationalDigest, OPS_DIGEST_CRON } from '../worker/ops-alerts.js';
 import { buildReconcileSQL } from './ops/reconcile-ai-work.mjs';
+import { readFileSync } from 'node:fs';
+
+// Deploy config: the digest recipient must be configured (user decision 2026-10-14; runbook §2a).
+const wranglerVars = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars;
+assert.equal(wranglerVars.OPS_ALERT_EMAIL, 'support@reptrio.com');
 
 const POLICY = 'ai_import_openai_document_v1';
 let upstream = () => new Response('{}'), mails = [], openaiCreates = [], openaiDeletes = [];

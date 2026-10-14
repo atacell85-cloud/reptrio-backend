@@ -155,8 +155,9 @@ Runtime changes (user-visible only in failure cases):
 - Runbook, production migration ledger repair and capacity table: `docs/BUILD_44_OPERATIONS_RUNBOOK.md`.
 
 Verification: `npm run test:ops-release-safety` PASS, 11/11 targeted mutants killed (+ Guardian follow-up: proof-precedence and call-site mutants killed); updated in-flight race in `account-lifecycle-test` PASS; full `npm test` — see integration report. Production schema rehearsal (read-only export): plain `migrations apply` fails at 0005; ledger repair + 0008–0013 = fresh schema.
-Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed) → **BLOCKED**; `OPS_ALERT_EMAIL` not set; no production migration/deploy performed.
+Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed) → **BLOCKED**; `OPS_ALERT_EMAIL` not set (superseded 2026-10-14: configured `support@reptrio.com`, see below); no production migration/deploy performed.
 
 2026-10-14 Guardian follow-up (HIGH audit `DURDURULDU` → fixes): explicit OpenAI rejection allowlist; invalid/expired DELETE_NOW proof answers 401 before the 409 upstream refusal; digest reports exact per-state counts (ids capped at 50); runbook checks 0004–0007 indexes before ledger repair. Tests extended (409 stays UNKNOWN, 413 rejected, bad proof 401, 73 UNKNOWN counted exactly).
 - Guardian round 2 GEÇTİ (2026-10-14). Follow-up test-only: expired DELETE_NOW proof answers 401 before the 409 refusal (kills Guardian mutant N4). Known informational limit: digest lists ≤50 opaque ids across states (counts exact).
 - CI 2026-10-14: draft PR #14 Worker CI run 38540862540 PASS. Mobile counterpart PR #40 CI BLOCKED by GitHub billing (job not started).
+- 2026-10-14 alert recipient (config, takes effect only with the Build 44 deploy): `wrangler.jsonc` `vars.OPS_ALERT_EMAIL = support@reptrio.com` (existing Zoho mailbox address; existing ZeptoMail sender). Test delivery PASS: real digest code, isolated SQLite, ZeptoMail `Teslim edildi` + Zoho Inbox, client reference `ops-test-2026-10-14T11-24-47-031Z`. Production cron delivery NOT VERIFIED (post-deploy check, runbook §2b). No deploy/migration.
