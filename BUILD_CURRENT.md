@@ -197,3 +197,8 @@ VERIFIED (runbook §4b). No production migration/deploy.
   CANCELLED: 4.0% of Free at 1k/10k/100k (round-2 code: 24%/214%/2,115%; original: 70%/678%/6,752%). (2) upstream-step
   writes charged to the purge budget; (3) operator charges bounded by present rows; (4) budget pre-check before the
   Apple revoke; (5) operator hold-guard test; records corrected. Purge invocations ≤ 38 D1 statements.
+- 2026-10-15 Guardian round 3 (HIGH, full scope cca37b8..4d245f4 + mobile 80662aa..d763b28): **GEÇTİ** — no BLOCKING/MAJOR;
+  all R1/R2 findings closed. Follow-up (LOW, test/docs only): `test:free-plan` asserts the cleanup-index predicate and that
+  marked operations are not visited (R3 mutant killed); runbook §4d records two bounded, alerted open risks (stuck due
+  accounts re-read every minute; extreme stored-response counts stall with DAILY_BUDGET). Earlier lines in this entry
+  that say "3%" / "17/18 mutants" are superseded by the round-2 bullet (4.0%, abandoned restores included).

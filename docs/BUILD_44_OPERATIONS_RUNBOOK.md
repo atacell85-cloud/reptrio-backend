@@ -187,6 +187,19 @@ complete the erase within days (App Store account deletion) without exceeding th
 Each run needs explicit approval (production data). A 70,000-record account needs about 350,000 rows written, i.e.
 about 6 days at the 60,000/day purge cap.
 
+### 4d. Open capacity risks (Guardian round 3, MINOR; bounded and alerted, not fixed in Build 44)
+
+- **Stuck due accounts are re-read every minute.** The minute selector reads every due account in backoff
+  (`APPLE_REAUTH_REQUIRED`, `ACCOUNT_PURGE_PLAN_CAPACITY`, `OPENAI_CLEANUP_UNAVAILABLE`, `ACCOUNT_PURGE_DAILY_BUDGET`)
+  before picking one: K stuck accounts cost about 1,440 x K rows read/day (about 3,470 would exhaust the Free 5M/day).
+  They are alerted by `ACCOUNT_PURGE_OVERDUE` (and `ACCOUNT_PURGE_MANUAL_REQUIRED`); act when the overdue count exceeds
+  ~100. Follow-up: an index/query that skips backed-off owners.
+- **Extreme stored-response counts stall silently.** An upstream step charges (2 x stored + 42) x 5 rows; with about
+  5,990+ stored response ids that exceeds the 60,000 daily cap, so the account repeats `ACCOUNT_PURGE_DAILY_BUDGET`
+  every day without `MANUAL_REQUIRED`. Unrealistic (imports are rate-limited); treat `ACCOUNT_PURGE_DAILY_BUDGET` in the
+  overdue digest for more than 2 consecutive days as a manual case. The §4c tool reduces only bulk tables; an account
+  whose non-bulk tables alone exceed the cap also needs a manual plan.
+
 ### 4b. CPU (10 ms per cron invocation on Free) — NOT VERIFIED
 
 Local Node CPU per purge invocation (includes in-process SQLite, which D1 executes outside the Worker, and JIT warm-up)

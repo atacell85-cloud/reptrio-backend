@@ -456,6 +456,10 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
   assert.ok(cleanupStatements.length >= 3);
   for (const { sql } of cleanupStatements) assert.ok(db.raw.prepare('EXPLAIN QUERY PLAN ' + sql).all(...Array((sql.match(/\?/g) || []).length).fill('x')).some(r => /INDEX personal_restore_cleanup_due/.test(r.detail)), 'cleanup statement uses the partial index: ' + sql.slice(0, 90));
   assert.equal(db.rows("SELECT COUNT(*) n FROM personal_restore_operations WHERE operation_id LIKE 'term%' AND cleanup_done=0")[0].n, 0, 'backlog fully marked');
+  // The cleanup index must exclude marked operations (Guardian R3: removing the predicate passed every other test).
+  const cleanupIndex = db.rows("SELECT sql FROM sqlite_master WHERE type='index' AND name='personal_restore_cleanup_due'")[0].sql.replace(/\s+/g, ' ');
+  assert.match(cleanupIndex, /WHERE state NOT IN \('COMMITTED','UNDONE','UNDO_READY','UNDO_PREVIEWING'\) AND cleanup_done=0$/);
+  assert.equal(db.rows("SELECT COUNT(*) n FROM personal_restore_operations INDEXED BY personal_restore_cleanup_due WHERE expires_at<=? AND state NOT IN ('COMMITTED','UNDONE','UNDO_READY','UNDO_PREVIEWING') AND cleanup_done=0 AND operation_id LIKE 'term%'", new Date().toISOString())[0].n, 0, 'marked operations are not visited through the cleanup index');
   assert.deepEqual(scans, [], 'no full scan of a growing table in cron/digest/purge paths');
 }
 
