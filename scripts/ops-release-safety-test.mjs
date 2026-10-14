@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
+import { tokenDigest } from '../worker/account-api.js';
 import { purgeDueAccounts, backgroundRejected } from '../worker/account-lifecycle.js';
 import { runOperationalDigest, OPS_DIGEST_CRON } from '../worker/ops-alerts.js';
 import { buildReconcileSQL } from './ops/reconcile-ai-work.mjs';
@@ -73,6 +74,11 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
   // A bad proof is still 401 first, even with open upstream work.
   const badProof = await call(env, '/api/auth/delete', u.sessionToken, { proof: 'X'.repeat(43), confirm: 'DELETE', method: 'DELETE_NOW' });
   assert.equal(badProof.status, 401); assert.equal((await badProof.json()).code, 'ACCOUNT_DELETE_PROOF_INVALID');
+  // An expired (otherwise well-formed, unused, session-bound) proof is also 401 first, never the 409 upstream refusal.
+  const expiredToken = 'E'.repeat(43);
+  db.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,purpose,token_hash,session_hash,created_at,expires_at)VALUES('expired-proof',?,'DELETE_PROOF',?,?,?,?)").run(u.user.id, await tokenDigest(expiredToken), await tokenDigest(u.sessionToken), new Date(Date.now() - 700000).toISOString(), new Date(Date.now() - 1).toISOString());
+  const expiredReply = await call(env, '/api/auth/delete', u.sessionToken, { proof: expiredToken, confirm: 'DELETE', method: 'DELETE_NOW' });
+  assert.equal(expiredReply.status, 401, 'expired proof is 401'); assert.equal((await expiredReply.json()).code, 'ACCOUNT_DELETE_PROOF_INVALID');
   db.resetMetrics();
   const refused = await call(env, '/api/auth/delete', u.sessionToken, { proof: p, confirm: 'DELETE', method: 'DELETE_NOW' });
   assert.equal(refused.status, 409); assert.equal((await refused.json()).code, 'ACCOUNT_PURGE_UPSTREAM_UNRESOLVED');
