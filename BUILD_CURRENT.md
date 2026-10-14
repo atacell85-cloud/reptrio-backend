@@ -1,6 +1,6 @@
 # Reptrio — Güncel çalışma kaydı
 
-Current: B44-04 backend `feat/b44-04-account-lifecycle`, union `d6419a8`; isolated implementation and focused checks complete. Final full npm remote CI PENDING; see latest B44-04 entries below. No production change/build. Whole-B44 HIGH Guardian/device review deferred by user.
+Current: **Build 44 integration** `integration/build44` (base B44-04 `88b6a9c` + PR #1 static fixes + release-safety ops); see 2026-10-14 integration entry at the end. Previous: B44-04 backend `feat/b44-04-account-lifecycle`, union `d6419a8`; isolated implementation and focused checks complete. Final full npm remote CI PENDING; see latest B44-04 entries below. No production change/build. Whole-B44 HIGH Guardian/device review deferred by user.
 
 ## Historical checkpoint · B44-08 / B44-10 · 2026-10-09
 
@@ -143,3 +143,16 @@ Final B44-04 backend checkpoint: Apple config/decryptable-material submission pr
 2026-10-14 scheduled fallback correction (`6a988fee7ecedc709c6f135c2d8f26ec7fcf540c`, HIGH): only the explicit minute trigger invokes lifecycle purge; unspecified/manual scheduler fixtures retain existing mutation/restore maintenance. Existing record-transport regression detected the missing fallback and the runtime was corrected without weakening its assertions. This log entry was inadvertently omitted from that runtime commit and is recorded immediately in this follow-up; no history rewrite/force-push. Verification: lifecycle PASS; transport/restore/full CI in progress.
 
 2026-10-14 final pushed backend evidence: runtime `6a988fee7ecedc709c6f135c2d8f26ec7fcf540c` complete Node22 `npm test` **PASS** (https://github.com/atacell85-cloud/reptrio-backend/actions/runs/38481854941); documentation head `aa6759dc196170c0e9d349fd13570ef8e8c1c670` also **PASS** (https://github.com/atacell85-cloud/reptrio-backend/actions/runs/38481898201). Latest local lifecycle/deletion/consent/storage/transport/restore33 **PASS**, including query budgets and preserved scheduled maintenance,16 critical mutants and5101sessions/66313sets complete ALLundo. Actual mobile API/Worker/SQLite integration against final runtime **PASS**. Backend draftPR13 and mobile draftPR37 preserve stacked dependencies. This checkpoint changes documentation only. Production migration/deploy/build/TestFlight remain unperformed. UNKNOWN upstream reconciliation/alert routing and deployment-plan capacity remain explicit operational release limitations.
+
+## 2026-10-14 — Build 44 integration (`integration/build44`, HIGH)
+
+Base `88b6a9caa3075c7c98acd750246df91fa6318456` (PR #13). PR #11 RESTORE2: not an ancestor, `git cherry` 0 missing patches (all equivalent commits present). PR #2/#3 ancestors. PR #1 still needed (live 2026-10-14: no `X-Robots-Tag` on app.reptrio.com, `recovery.html` 404) → cherry-picked `-x` (`_headers` noindex, recovery page in asset bundle).
+
+Runtime changes (user-visible only in failure cases):
+- `DELETE_NOW` with open AI upstream work (RUNNING/UNKNOWN) → `409 ACCOUNT_PURGE_UPSTREAM_UNRESOLVED` before any state change (session/proof intact). Previously the account went PURGING, sessions were revoked and the client was told the state was preserved. Recovery-screen `POST /api/auth/account/purge-now` gets the same pre-check (previously PENDING_DELETION → unrecoverable PURGING while blocked). 30-day closure unchanged. Purge algorithm (`executePurge`/`purgeAccountData`/`purgeDueAccounts`) unchanged.
+- AI file import: definite OpenAI 4xx (≠408) closes the work row `RESOLVED/UPSTREAM_REJECTED_<status>`; 5xx/408/timeout/network/unreadable stay UNKNOWN. Work id = `X-Client-Request-Id` = `metadata.import_request_id`.
+- New daily `0 6 * * *` trigger → read-only operational digest (`worker/ops-alerts.js`) emailed to `OPS_ALERT_EMAIL` via ZeptoMail; `observability.enabled`. Operator tool `scripts/ops/reconcile-ai-work.mjs` (prints guarded SQL only).
+- Runbook, production migration ledger repair and capacity table: `docs/BUILD_44_OPERATIONS_RUNBOOK.md`.
+
+Verification: `npm run test:ops-release-safety` PASS, 11/11 targeted mutants killed; updated in-flight race in `account-lifecycle-test` PASS; full `npm test` — see integration report. Production schema rehearsal (read-only export): plain `migrations apply` fails at 0005; ledger repair + 0008–0013 = fresh schema.
+Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed) → **BLOCKED**; `OPS_ALERT_EMAIL` not set; no production migration/deploy performed.

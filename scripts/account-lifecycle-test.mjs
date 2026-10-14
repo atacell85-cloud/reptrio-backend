@@ -122,14 +122,16 @@ for(const mode of ['late-return','id-write-crash']){
  const form=new FormData();form.set('importId','job-'+mode);form.set('normalizedDocument',JSON.stringify({fileName:'routine.pdf',fileType:'pdf',blocks:[{type:'paragraph',text:'Squat 3x10'}]}));form.set('file',new Blob(['%PDF-fixture'],{type:'application/pdf'}),'routine.pdf');
  const uploading=worker.fetch(new Request('https://api.reptrio.com/api/import/jobs',{method:'POST',headers:{Authorization:'Bearer '+u.sessionToken},body:form}),env,{});
  await invoked;
- const purge=await call('/api/auth/delete',u.sessionToken,{proof:deletionProof,confirm:'DELETE',method:'DELETE_NOW'});assert.equal(purge.status,503);assert.equal((await purge.json()).code,'ACCOUNT_PURGE_UPSTREAM_UNRESOLVED');assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'PURGING');
+ // Build 44 integration: an open upstream outcome refuses DELETE_NOW before any state change; the proof stays usable.
+ const purge=await call('/api/auth/delete',u.sessionToken,{proof:deletionProof,confirm:'DELETE',method:'DELETE_NOW'});assert.equal(purge.status,409);assert.equal((await purge.json()).code,'ACCOUNT_PURGE_UPSTREAM_UNRESOLVED');assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'ACTIVE');assert.equal((await call('/api/me',u.sessionToken)).status,200,'refusal keeps the session');
+ const closed=await call('/api/auth/delete',u.sessionToken,{proof:deletionProof,confirm:'DELETE',method:'DELETE_AFTER_30_DAYS'});assert.equal(closed.status,200);assert.equal((await closed.json()).accountStatus,'PENDING_DELETION');
  if(mode==='id-write-crash')db.setFailOn(/UPDATE account_lifecycle_work SET state='RETURNED'/);
  release(new Response(JSON.stringify({id:'resp_'+mode,status:'queued'}),{headers:{'Content-Type':'application/json'}}));
  assert.notEqual((await uploading).status,202);db.setFailOn(null);
  const lease=db.rows('SELECT state,response_id FROM account_lifecycle_work WHERE user_id=?',u.user.id)[0];
  assert.equal(db.rows('SELECT preview_json FROM import_jobs WHERE user_id=?',u.user.id)[0].preview_json,null);
- if(mode==='late-return'){assert.equal(lease.state,'RESOLVED');assert.equal(deleted.length,1);db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.user.id);await purgeDueAccounts(env);assert.equal(db.rows('SELECT * FROM users WHERE id=?',u.user.id).length,0);}
- else{assert.equal(lease.state,'UNKNOWN');assert.equal(lease.response_id,null);db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.user.id);await purgeDueAccounts(env);assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'PURGING','unknown upstream never timeout-as-success');}
+ if(mode==='late-return'){assert.equal(lease.state,'RESOLVED');assert.equal(deleted.length,1);db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_at=NULL WHERE id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);await purgeDueAccounts(env);assert.equal(db.rows('SELECT * FROM users WHERE id=?',u.user.id).length,0);}
+ else{assert.equal(lease.state,'UNKNOWN');assert.equal(lease.response_id,null);db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_at=NULL WHERE id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);await purgeDueAccounts(env);assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'PURGING','unknown upstream never timeout-as-success');}
  globalThis.fetch=previous;
 }
 // Crash of purge executor is retriable after execution lease expiry; not equivalent to unknown AI outcome.

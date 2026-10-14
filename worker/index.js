@@ -1,4 +1,5 @@
-import { purgeDueAccounts, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
+import { purgeDueAccounts, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
+import { runOperationalDigest, OPS_DIGEST_CRON } from './ops-alerts.js';
 import { cleanupPersonalOperations } from './personal-restore-api.js';
 import { cleanupMutationReceipts } from './record-sync-transport.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
@@ -11,9 +12,12 @@ const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 export default {
   async scheduled(event,env,ctx) {
     // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
+    // The daily operational digest has its own trigger and budget; purge and maintenance are unchanged.
     ctx.waitUntil(event.cron === '* * * * *'
       ? purgeDueAccounts(env)
-      : Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)]));
+      : event.cron === OPS_DIGEST_CRON
+        ? runOperationalDigest(env, event.scheduledTime)
+        : Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)]));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -114,10 +118,11 @@ async function createImportJob(request, env, ctx) {
     if (!env.OPENAI_API_KEY) return apiError('OPENAI_API_KEY_MISSING', 503);
     try {
       const rawFile = await rawFileFromUpload(body.file, config);
-      const requestId = crypto.randomUUID();
       const started = Date.now();
       await assertAiImportConsent(env, user.id);
       workId=await beginBackgroundWork(env,user.id);
+      // The durable work id is the upstream correlation key (X-Client-Request-Id + metadata) for UNKNOWN reconciliation.
+      const requestId = workId;
       const { payload, upstream, attempts } = await createOpenAIBackgroundResponse({ apiKey: env.OPENAI_API_KEY, config, input: { importId: body.importId, normalizedDocument: body.normalizedDocument, rawFile }, requestId });
       await backgroundReturned(env,workId,payload.id);
       const metadata = observability({ requestId, config, payload, upstream, attempts, started, status: payload.status || 'queued' });
@@ -129,7 +134,7 @@ async function createImportJob(request, env, ctx) {
       await assertAiImportConsent(env,user.id);
       return json({ importId: body.importId, status: 'queued' }, 202);
     } catch (error) {
-      if(workId){await backgroundUnknown(env,workId);await cleanupClosedBackgroundWork(env,workId);}
+      if(workId){await (error.upstreamRejected?backgroundRejected(env,workId,error.status):backgroundUnknown(env,workId));await cleanupClosedBackgroundWork(env,workId);}
       const code = error.code || 'OPENAI_REQUEST_FAILED';
       await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE user_id = ? AND id = ?").bind(code, new Date().toISOString(), user.id, body.importId).run();
       return apiError(code, statusFor(code));
@@ -285,6 +290,8 @@ async function createOpenAIBackgroundResponse({ apiKey, config, input, requestId
   if (!upstream.ok) {
     const error = coded(mapOpenAIStatus(upstream.status));
     error.status = upstream.status;
+    // A definite client-error answer (not timeout) means OpenAI created no response object. 5xx stays UNKNOWN.
+    error.upstreamRejected = upstream.status >= 400 && upstream.status < 500 && upstream.status !== 408;
     throw error;
   }
   return { payload: await upstream.json(), upstream, attempts: 1 };

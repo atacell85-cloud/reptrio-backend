@@ -75,7 +75,11 @@ export async function handleLifecycleRequest(request,env,path){
    return json({user:{id:owner.id,email:owner.email},providers:context.providers,appleReauthRequired:context.apple.length>0&&(!config.ready||tokens.some(token=>!token)||owner.purge_error==='APPLE_REAUTH_REQUIRED'),purgeError:owner.purge_error||null,accountStatus:owner.account_status,deletionRequestedAt:owner.deletion_requested_at,purgeAt:owner.purge_at,ownershipVerificationRequired:!owner.ownership_verified_at,canRecover:!!owner.ownership_verified_at&&owner.account_status==='PENDING_DELETION'&&Date.now()<Date.parse(owner.purge_at)});
   }
   const p=await body(request);if(!owner.ownership_verified_at)return error('ACCOUNT_OWNERSHIP_VERIFICATION_REQUIRED',401);if(p.confirm!==(action==='recover'?'RECOVER':'DELETE'))return error('ACCOUNT_CONFIRMATION_REQUIRED',400);
-  if(action==='purge')return await executePurge(env,owner.id,true,owner.credential_id);
+  if(action==='purge'){
+   // Same refusal as DELETE_NOW: an open AI outcome would leave the account PURGING (unrecoverable) yet unpurged.
+   if(await env.DB.prepare("SELECT 1 FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN') LIMIT 1").bind(owner.id).first())return error('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED',409);
+   return await executePurge(env,owner.id,true,owner.credential_id);
+  }
   const stamp=new Date().toISOString(),marker=crypto.randomUUID();
   const results=await env.DB.batch([
    env.DB.prepare(`UPDATE users SET account_status='ACTIVE',deletion_requested_at=NULL,purge_at=NULL,purge_retry_at=NULL,purge_error=NULL,purge_lease=? WHERE id=? AND account_status='PENDING_DELETION' AND purge_at>? AND EXISTS(SELECT 1 FROM account_lifecycle_credentials WHERE id=? AND used_at IS NULL AND expires_at>? AND ownership_verified_at IS NOT NULL)`).bind(marker,owner.id,stamp,owner.credential_id,stamp),
@@ -117,11 +121,15 @@ export async function handleLifecycleRequest(request,env,path){
  const proofHash=await tokenDigest(p.proof),confirmedAt=new Date().toISOString(),deadline=new Date(Date.parse(confirmedAt)+(method==='DELETE_NOW'?0:30*DAY)).toISOString(),marker=crypto.randomUUID();
  const guard=`EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PENDING_DELETION' AND purge_lease=?)`;
  const results=await env.DB.batch([
-  env.DB.prepare(`UPDATE users SET account_status='PENDING_DELETION',deletion_requested_at=?,purge_at=?,purge_lease=? WHERE id=? AND account_status='ACTIVE' AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM account_lifecycle_credentials WHERE token_hash=? AND user_id=? AND session_hash=? AND purpose='DELETE_PROOF' AND used_at IS NULL AND expires_at>?) AND EXISTS(SELECT 1 FROM auth_sessions WHERE user_id=users.id AND token_hash=? AND expires_at>?) AND (SELECT json_group_array(json_object('provider_subject',provider_subject,'refresh_token_ciphertext',refresh_token_ciphertext)) FROM (SELECT provider_subject,refresh_token_ciphertext FROM oauth_accounts WHERE user_id=users.id AND provider='apple' ORDER BY provider_subject))=?`).bind(confirmedAt,deadline,marker,user.id,proofHash,user.id,sessionHash,confirmedAt,sessionHash,confirmedAt,appleSnapshot),
+  env.DB.prepare(`UPDATE users SET account_status='PENDING_DELETION',deletion_requested_at=?,purge_at=?,purge_lease=? WHERE id=? AND (?=0 OR NOT EXISTS(SELECT 1 FROM account_lifecycle_work WHERE user_id=users.id AND state IN ('RUNNING','UNKNOWN'))) AND account_status='ACTIVE' AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM account_lifecycle_credentials WHERE token_hash=? AND user_id=? AND session_hash=? AND purpose='DELETE_PROOF' AND used_at IS NULL AND expires_at>?) AND EXISTS(SELECT 1 FROM auth_sessions WHERE user_id=users.id AND token_hash=? AND expires_at>?) AND (SELECT json_group_array(json_object('provider_subject',provider_subject,'refresh_token_ciphertext',refresh_token_ciphertext)) FROM (SELECT provider_subject,refresh_token_ciphertext FROM oauth_accounts WHERE user_id=users.id AND provider='apple' ORDER BY provider_subject))=?`).bind(confirmedAt,deadline,marker,user.id,method==='DELETE_NOW'?1:0,proofHash,user.id,sessionHash,confirmedAt,sessionHash,confirmedAt,appleSnapshot),
   ...['auth_sessions','password_reset_tokens','mobile_oauth_codes','oauth_reauth_tickets','account_lifecycle_credentials'].map(table=>env.DB.prepare(`DELETE FROM ${table} WHERE user_id=? AND ${guard}`).bind(user.id,user.id,marker)),
   env.DB.prepare(`UPDATE import_jobs SET status='failed',error_code='ACCOUNT_PENDING_DELETION',updated_at=? WHERE user_id=? AND status IN ('queued','processing') AND ${guard}`).bind(confirmedAt,user.id,user.id,marker)
  ]);
- if(results[0].meta.changes!==1)return error('ACCOUNT_DELETE_PROOF_INVALID',401);
+ if(results[0].meta.changes!==1){
+  // Immediate purge cannot finish while an AI upstream outcome is open; refuse before any state change, proof unused.
+  if(method==='DELETE_NOW'&&await env.DB.prepare("SELECT 1 FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN') LIMIT 1").bind(user.id).first())return error('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED',409);
+  return error('ACCOUNT_DELETE_PROOF_INVALID',401);
+ }
  if(method==='DELETE_NOW')return await executePurge(env,user.id,true,null,true);
  return json({ok:true,accountStatus:'PENDING_DELETION',deletionRequestedAt:confirmedAt,purgeAt:deadline},200,{'Set-Cookie':'aks_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});
  }catch(cause){return error(cause.code||'ACCOUNT_LIFECYCLE_FAILED',cause.status||503);}
@@ -173,6 +181,8 @@ export async function backgroundReturned(env,id,responseId){
  if(r.meta.changes!==1)throw Object.assign(new Error('AI_WORK_ID_UNRECORDED'),{code:'AI_WORK_ID_UNRECORDED'});
 }
 export async function backgroundResolved(env,id){await lifecycleRawDB(env.DB).prepare("UPDATE account_lifecycle_work SET state='RESOLVED',last_error=NULL WHERE id=? AND state='RETURNED'").bind(id).run();}
+// Only a definite upstream rejection closes RUNNING work as nothing-stored; everything else stays UNKNOWN (fail closed).
+export async function backgroundRejected(env,id,status){await lifecycleRawDB(env.DB).prepare("UPDATE account_lifecycle_work SET state='RESOLVED',last_error=? WHERE id=? AND state='RUNNING'").bind(`UPSTREAM_REJECTED_${Number(status)}`,id).run();}
 export async function backgroundUnknown(env,id){await lifecycleRawDB(env.DB).prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='UPSTREAM_OUTCOME_UNKNOWN' WHERE id=? AND state='RUNNING'").bind(id).run();}
 export async function cleanupClosedBackgroundWork(env,id){
  const db=lifecycleRawDB(env.DB),row=await db.prepare("SELECT w.response_id,w.user_id FROM account_lifecycle_work w JOIN users u ON u.id=w.user_id WHERE w.id=? AND w.state='RETURNED' AND u.account_status<>'ACTIVE'").bind(id).first();

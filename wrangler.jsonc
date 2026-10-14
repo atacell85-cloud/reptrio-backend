@@ -19,7 +19,8 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password", "/account-deletion-link"]
   },
-  "triggers": { "crons": ["*/15 * * * *", "* * * * *"] },
+  "triggers": { "crons": ["*/15 * * * *", "* * * * *", "0 6 * * *"] },
+  "observability": { "enabled": true },
   "vars": {
     "RECORD_TRANSPORT_ENABLED": "true",
     "PERSONAL_RESTORE_ENABLED": "true",
