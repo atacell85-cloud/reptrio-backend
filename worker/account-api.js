@@ -388,9 +388,11 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
  if(Number(pending?.open))throw Object.assign(coded('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED'),{status:503});
  if(Number(pending?.stored)){
   // Move stored import responses into the durable cleanup ledger (one RETURNED row per distinct id) before any upstream
-  // effect; the id leaves import_jobs only in the same atomic batch that records it in the ledger.
+  // effect; the id leaves import_jobs only in the same atomic batch that records it in the ledger. Dedupe only against
+  // ledger rows (import_job_id set): a request's own background row may still be RETURNED for one round-trip before
+  // backgroundResolved() closes it, so it is not proof of future cleanup (duplicate deletes are idempotent, 404).
   const adopted=await env.DB.batch([
-   env.DB.prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id) SELECT 'adopt-'||lower(hex(randomblob(16))),?,'RETURNED',j.openai_response_id,?,?,MIN(j.id) FROM import_jobs j WHERE j.user_id=? AND j.openai_response_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id=j.user_id AND w.response_id=j.openai_response_id AND w.state='RETURNED') AND ${held} GROUP BY j.openai_response_id`).bind(userId,now,now,userId,userId,lease,now),
+   env.DB.prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id) SELECT 'adopt-'||lower(hex(randomblob(16))),?,'RETURNED',j.openai_response_id,?,?,MIN(j.id) FROM import_jobs j WHERE j.user_id=? AND j.openai_response_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id=j.user_id AND w.response_id=j.openai_response_id AND w.state='RETURNED' AND w.import_job_id IS NOT NULL) AND ${held} GROUP BY j.openai_response_id`).bind(userId,now,now,userId,userId,lease,now),
    env.DB.prepare(`UPDATE import_jobs SET openai_response_id=NULL WHERE user_id=? AND openai_response_id IS NOT NULL AND ${held}`).bind(userId,userId,lease,now)
   ]);
   if(adopted[1].meta.changes!==Number(pending.stored))throw Object.assign(coded('ACCOUNT_PURGE_LEASE_LOST'),{status:409});
@@ -412,6 +414,10 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
   if(failure)throw coded(failure);
   throw Object.assign(coded('ACCOUNT_PURGE_IN_PROGRESS'),{status:202,progress:confirmed.length});
  }
+ // Checked before the Apple revoke (a held account is not re-revoked every retry). Daily rows-written budget (D1 Free: 100,000/day): conservative estimate = owner rows x (1 + indexes on the table).
+ const owned=[...tables,'users'];
+ const estimate=Number((await env.DB.prepare(`SELECT ${owned.map(table=>`(SELECT COUNT(*) FROM ${table} WHERE ${table==='users'?'id':'user_id'}=?)*(1+(SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='${table}'))`).join('+')} AS rows_written`).bind(...owned.map(()=>userId)).first())?.rows_written||0);
+ if(estimate>PURGE_DAILY_ROWS_WRITTEN)throw Object.assign(coded('ACCOUNT_PURGE_PLAN_CAPACITY'),{status:503,estimate});
  const config=oauthConfig(env,'apple');
  for(const row of context.apple){
   if(!config.ready)throw Object.assign(coded('APPLE_REVOKE_UNAVAILABLE'),{status:503});
@@ -420,10 +426,6 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
   const result=await revokeAppleToken(config,token);
   if(result!=='revoked')throw Object.assign(coded(result==='invalid_grant'?'APPLE_REAUTH_REQUIRED':'APPLE_REVOKE_FAILED'),{status:502});
  }
- // Daily rows-written budget (D1 Free: 100,000/day): conservative estimate = owner rows x (1 + indexes on the table).
- const owned=[...tables,'users'];
- const estimate=Number((await env.DB.prepare(`SELECT ${owned.map(table=>`(SELECT COUNT(*) FROM ${table} WHERE ${table==='users'?'id':'user_id'}=?)*(1+(SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='${table}'))`).join('+')} AS rows_written`).bind(...owned.map(()=>userId)).first())?.rows_written||0);
- if(estimate>PURGE_DAILY_ROWS_WRITTEN)throw Object.assign(coded('ACCOUNT_PURGE_PLAN_CAPACITY'),{status:503,estimate});
  const stamp=new Date().toISOString(),day=stamp.slice(0,10);
  // Final erase gate: lease held, every upstream object confirmed deleted (no open ledger row, no stored import id) and
  // this batch's rows charged to today's budget (the budget row carries this lease only if the charge fitted).

@@ -149,6 +149,11 @@ Syntax/diff PASS. Complete npm local run blocked at headless smoke Chrome CDP st
   aktarma sonrası anında AI yanıtı silme) Build 45'e bırakıldı.
 - Hemen silme isteği tamamlanma bildirmez: `202 PURGING` (geri dönüşsüz kabul); tamamlanma dakikalık cron'da, her
   çağrıda ya <=40 dış silme ya da son atomik silme. Nihai silme veritabanı kapısıyla dış temizlik doğrulanmadan engellenir.
-- Arka plan yazmaları günlük 25.000+25.000 satırla sınırlı (Free günlük yazma kotasının en az yarısı uygulamaya kalır);
-  sınırı aşan tek hesap silinmez, `ACCOUNT_PURGE_PLAN_CAPACITY` ile alarm verir (yayın engeli değil, operasyon kaydı).
+- Arka plan yazmaları günlük sınırlı: silme 60.000 + bakım 15.000 satır (uygulamaya her gün en az 25.000 kalır).
+- Büyük hesap (kullanıcı kararı 2026-10-14, Guardian bulgusu sonrası "Sınırı yükselt + manuel"): son silmesi günlük
+  silme payını aşan hesap (≈12.000+ senkron kaydı) otomatik silinmez, `ACCOUNT_PURGE_PLAN_CAPACITY` ile bekletilir,
+  günlük özet `ACCOUNT_PURGE_MANUAL_REQUIRED` alarmı verir; operatör `scripts/ops/purge-large-account.mjs` ile aynı
+  günlük paydan ödeyerek parçalı küçültür, ardından normal kapılı son silme otomatik tamamlanır (runbook §4c). Mobil
+  metin bunu açıkça söyler ("çok büyük hesaplarda ekibimizin işlemiyle birkaç gün"). Bugün etkilenen hesap yok
+  (production en büyük hesap 225 set).
 - Cron CPU (10 ms) yalnız gerçek Cloudflare ortamında doğrulanabilir; doğrulanmadan PASS sayılmaz.

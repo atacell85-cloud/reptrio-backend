@@ -131,10 +131,12 @@ Mechanism (Option A, approved 2026-10-14; purge algorithm and its single atomic 
   erase (Apple revoke, then the atomic batch). Failures back off exponentially (max 1 day); a lost lease (120 s) is
   retaken; repeated deletes are idempotent (404 = already absent).
 - The final batch deletes nothing unless, at the database: the lease is held, no ledger row is open, no import job still
-  references a stored response, and today's purge write budget (25,000 rows, estimate = owner rows x (1 + indexes))
-  accepted this charge. Larger accounts are held with `ACCOUNT_PURGE_PLAN_CAPACITY` (alerted, nothing erased); a spent
-  budget resumes at 00:00 UTC (`ACCOUNT_PURGE_DAILY_BUDGET`). The 15-minute maintenance has its own 25,000 rows/day cap,
-  so >= 50% of the daily write quota always remains for the app.
+  references a stored response, and today's purge write budget (60,000 rows, estimate = owner rows x (1 + indexes))
+  accepted this charge. Larger accounts (about 12,000+ sync records: `sync_records` has 4 indexes, 5 rows written per
+  row) are held with `ACCOUNT_PURGE_PLAN_CAPACITY` (nothing erased; digest `ACCOUNT_PURGE_MANUAL_REQUIRED`) for §4c; a
+  spent budget resumes at 00:00 UTC (`ACCOUNT_PURGE_DAILY_BUDGET`). The 15-minute maintenance has its own 15,000
+  rows/day cap, so >= 25,000 rows/day always remain for the app (production 2026-10-14: ~500 writes/day).
+  User decision 2026-10-14 (after the Guardian finding): raise the cap + manual procedure for larger accounts.
 
 | Stored AI responses | Invocations (email/Google/Apple) | Max D1 statements / invocation | Max external fetches / invocation |
 |---|---|---|---|
@@ -162,6 +164,20 @@ retained `personal_restore_records` without planner statistics (now driven from 
 partial indexes, `CROSS JOIN` fixes the loop order); owner deletes scanning `auth_sessions` (no `user_id` index).
 Behaviour note: roots/chunks cleanup now targets cleanup-eligible operations only (as payload cleanup already did); a
 protected (committed/undo) restore's rare record-less roots stay until account erase instead of being deleted early.
+
+### 4c. Held large account (`ACCOUNT_PURGE_MANUAL_REQUIRED`) — operator procedure
+
+The account is already closed, unrecoverable and upstream-clean (the hold happens only at the final step). Goal:
+complete the erase within days (App Store account deletion) without exceeding the D1 daily write quota.
+1. Take the user id from the dashboard/D1 (`SELECT id FROM users WHERE purge_error='ACCOUNT_PURGE_PLAN_CAPACITY'`).
+2. `node scripts/ops/purge-large-account.mjs --user <id> --evidence <ticket>` prints, per bulk table, a **charge**
+   command (reserves rows x 5 in today's shared purge budget; expect `changes: 1`, `0` = budget spent, stop until
+   00:00 UTC) and a **delete** command (<= 4,000 owner rows, only while the account is still held). Run charge then
+   delete; repeat until every delete reports `changes: 0`.
+3. `UPDATE users SET purge_retry_at=NULL WHERE id='<id>' AND account_status='PURGING';` — the next minute cron runs
+   the normal gated final erase (lease, ledger, budget). Confirm the row is gone.
+Each run needs explicit approval (production data). A 70,000-record account needs about 350,000 rows written, i.e.
+about 6 days at the 60,000/day purge cap.
 
 ### 4b. CPU (10 ms per cron invocation on Free) — NOT VERIFIED
 

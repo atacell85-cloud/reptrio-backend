@@ -27,6 +27,9 @@ export async function collectOperationalFindings(env, now = Date.now()) {
   if (totals.UNKNOWN) findings.push({ code: 'AI_WORK_UNKNOWN', count: totals.UNKNOWN, workIds: byState('UNKNOWN').map(row => row.id), oldest: byState('UNKNOWN')[0]?.created_at ?? null });
   if (totals.RUNNING) findings.push({ code: 'AI_WORK_STUCK_RUNNING', count: totals.RUNNING, workIds: byState('RUNNING').map(row => row.id) });
   if (totals.RETURNED) findings.push({ code: 'AI_CLEANUP_FAILED', count: totals.RETURNED, workIds: byState('RETURNED').map(row => row.id) });
+  // Accounts held because their final erase exceeds the daily purge write cap: operator procedure (runbook §4c).
+  const held = await env.DB.prepare("SELECT COUNT(*) AS n, MIN(purge_at) AS oldest FROM users WHERE account_status='PURGING' AND deleted_at IS NULL AND purge_error='ACCOUNT_PURGE_PLAN_CAPACITY'").first();
+  if (Number(held?.n)) findings.push({ code: 'ACCOUNT_PURGE_MANUAL_REQUIRED', count: Number(held.n), oldest: held.oldest });
   // Previous UTC day's background D1 write budgets (Workers Free: 100,000 rows written/day): warn from 80% of a cap.
   const yesterday = new Date(now - 86400000).toISOString().slice(0, 10), caps = { purge: PURGE_DAILY_ROWS_WRITTEN, maintenance: MAINTENANCE_DAILY_ROWS_WRITTEN };
   for (const row of (await env.DB.prepare('SELECT scope,rows_written FROM d1_write_budget WHERE day=?').bind(yesterday).all()).results || [])

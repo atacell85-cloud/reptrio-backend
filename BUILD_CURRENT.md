@@ -181,3 +181,11 @@ Verification: full `npm test` PASS (+ new `test:free-plan`: 0–300 responses x 
 races, budgets, statistics-free plans); 17/18 targeted mutants killed (1 equivalent: plain JOIN gets the same plan with
 the partial index); cron rows-read projection 3% of Free at 1k–100k rows (was 68%–6,540%). CPU on Cloudflare NOT
 VERIFIED (runbook §4b). No production migration/deploy.
+- 2026-10-14 Guardian round 1 DURDURULDU → fixes: (1) BLOCKING race — ledger adoption / re-upload deduped against the
+  request's own about-to-resolve background row, so an account could be erased with a response never deleted
+  (reproduced); now dedupe only against ledger rows (`import_job_id` set), regression tests for both variants.
+  (2) BLOCKING capacity — user decision "raise cap + manual": purge cap 60,000/day (maintenance 15,000), held large
+  accounts alerted (`ACCOUNT_PURGE_MANUAL_REQUIRED`) and reduced by `scripts/ops/purge-large-account.mjs` (charges the
+  same budget), then the normal gated erase; mobile copy states it. (3) capacity estimate before Apple revoke.
+  (4) alias-aware scan check. (5) tests for the DB-level open-ledger gate, purge-now UNKNOWN race, fail-closed without
+  0014 (incl. partial). (6) mobile PURGING copy per state. Maintenance budget charge failures are logged.

@@ -8,6 +8,7 @@ import { createD1 } from './lib/d1-sqlite.mjs';
 import { purgeDueAccounts } from '../worker/account-lifecycle.js';
 import { sealProviderToken, oauthConfig, tokenDigest } from '../worker/account-api.js';
 import { runOperationalDigest } from '../worker/ops-alerts.js';
+import { buildChunkSQL } from './ops/purge-large-account.mjs';
 import { PURGE_UPSTREAM_DELETES, PURGE_DAILY_ROWS_WRITTEN, MAINTENANCE_DAILY_ROWS_WRITTEN } from '../worker/free-plan-limits.js';
 
 const FREE = { d1: 50, fetch: 50 }, MARGIN = { d1: 40, fetch: 40 };
@@ -160,6 +161,68 @@ for (const point of ['adopt', 'resolve', 'progress', 'final']) {
   await drain(db, env, u, 5, stats); assert.ok(!exists(db, u)); assert.ok(net.deleted.has('resp_gate_late'));
 }
 
+// 3c. Guardian finding 1: a request's own background row is RETURNED for one round-trip after publishing X into the
+// job and before backgroundResolved(). Adoption (purge) or a re-upload in that window must still keep X in the ledger.
+for (const variant of ['purge', 'reupload']) {
+  const { db, env } = fresh(); resetNet();
+  const u = await owner(db, env, 'window-' + variant); const now = new Date().toISOString();
+  db.raw.prepare("INSERT INTO import_jobs(id,user_id,status,source_json,normalized_document_json,attempts,created_at,updated_at,openai_response_id) VALUES ('job',?,'processing','{}','{}',1,?,?,'resp_window_X')").run(u.user.id, now, now);
+  db.raw.prepare("INSERT INTO account_lifecycle_work(id,user_id,state,created_at,expires_at,response_id) VALUES ('own-bg',?,'RETURNED',?,?,'resp_window_X')").run(u.user.id, now, new Date(Date.now() + 600000).toISOString());
+  if (variant === 'reupload') {
+    inv.enforce = false;
+    assert.equal((await call(env, '/api/privacy/ai-import/consent', u.sessionToken, { action: 'grant', policyVersion: 'ai_import_openai_document_v1' })).status, 200);
+    net.create = () => new Response(JSON.stringify({ error: { message: 'x' } }), { status: 400 });
+    const form = new FormData(); form.set('importId', 'job'); form.set('normalizedDocument', JSON.stringify({ fileName: 'r.pdf', fileType: 'pdf', blocks: [{ type: 'paragraph', text: 'Squat 3x10' }] })); form.set('file', new Blob(['%PDF-fixture'], { type: 'application/pdf' }), 'r.pdf');
+    await worker.fetch(new Request('https://api.reptrio.com/api/import/jobs', { method: 'POST', headers: { Authorization: 'Bearer ' + u.sessionToken }, body: form }), env, { waitUntil() {} });
+    assert.equal(db.rows("SELECT openai_response_id FROM import_jobs WHERE id='job'")[0].openai_response_id, null, 're-upload cleared the job reference');
+  } else { due(db, u); inv.d1 = 0; inv.fetch = 0; db.setFailOn(/^SELECT id,response_id FROM account_lifecycle_work/); await purgeDueAccounts(env); db.setFailOn(null); }
+  assert.equal(db.rows("SELECT COUNT(*) n FROM account_lifecycle_work WHERE user_id=? AND state='RETURNED' AND response_id='resp_window_X' AND import_job_id='job'", u.user.id)[0].n, 1, `${variant}: X recorded in the ledger despite the own background row`);
+  db.raw.prepare("UPDATE account_lifecycle_work SET state='RESOLVED' WHERE id='own-bg'").run(); // backgroundResolved()
+  due(db, u); db.raw.prepare('UPDATE users SET purge_retry_at=NULL,purge_lease_until=NULL WHERE id=?').run(u.user.id); u.ids = ['resp_window_X'];
+  await drain(db, env, u); assert.ok(!exists(db, u)); assert.ok(net.deleted.has('resp_window_X'), `${variant}: X deleted upstream before erase`);
+}
+
+// 3d. Final-erase gate at the database (Guardian G2): an open ledger row appearing at the final batch blocks erasure.
+{
+  const { db, env } = fresh(); resetNet();
+  const u = await owner(db, env, 'gate-ledger'); due(db, u);
+  db.setBeforeBatch(statements => { if (statements.some(st => st.sql.startsWith('DELETE FROM users'))) { db.setBeforeBatch(null); db.raw.prepare("INSERT INTO account_lifecycle_work(id,user_id,state,created_at,expires_at,response_id,import_job_id) VALUES ('late-ledger',?,'RETURNED',?,?,'resp_gate_ledger','j')").run(u.user.id, new Date().toISOString(), new Date().toISOString()); } });
+  inv.d1 = 0; inv.fetch = 0; await purgeDueAccounts(env);
+  assert.ok(exists(db, u), 'erase refused while a ledger row is open');
+  db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.user.id); u.ids = ['resp_gate_ledger'];
+  await drain(db, env, u, 5); assert.ok(!exists(db, u)); assert.ok(net.deleted.has('resp_gate_ledger'));
+}
+
+// 3e. purge-now transition re-checks UNKNOWN atomically (Guardian P1): work turning UNKNOWN after the handler pre-check.
+{
+  const { db, env } = fresh(); resetNet();
+  const u = await owner(db, env, 'pn-race'); inv.enforce = false;
+  await call(env, '/api/auth/delete/request-link', u.sessionToken, {});
+  const link = /#token=([\w-]{43})/.exec(net.mails.at(-1).textbody)[1];
+  const { proof } = await (await call(env, '/api/auth/delete/verify-link', u.sessionToken, { token: link })).json();
+  assert.equal((await call(env, '/api/auth/delete', u.sessionToken, { proof, confirm: 'DELETE' })).status, 200);
+  const login = await (await call(env, '/api/auth/login', null, { email: u.user.email, password: 'fixture-password' })).json();
+  db.raw.prepare("UPDATE account_lifecycle_credentials SET ownership_verified_at=? WHERE user_id=? AND purpose='RECOVERY'").run(new Date().toISOString(), u.user.id);
+  let armed = true;
+  db.setBeforeRead(sql => { if (armed && sql.startsWith('SELECT type,name,sql FROM sqlite_master')) { armed = false; db.raw.prepare("INSERT INTO account_lifecycle_work(id,user_id,state,created_at,expires_at) VALUES ('late-unknown',?,'UNKNOWN',?,?)").run(u.user.id, new Date().toISOString(), new Date().toISOString()); } });
+  const reply = await call(env, '/api/auth/account/purge-now', login.recoveryToken, { confirm: 'DELETE' }); db.setBeforeRead(null);
+  assert.equal(reply.status, 409); assert.equal((await reply.json()).code, 'ACCOUNT_PURGE_UPSTREAM_UNRESOLVED');
+  assert.equal(db.rows('SELECT account_status FROM users WHERE id=?', u.user.id)[0].account_status, 'PENDING_DELETION', 'still recoverable');
+}
+
+// 3f. Without migration 0014 the Build 44 lifecycle fails closed (Guardian L1): no state change, no purge. Also a
+// partially applied 0014 (ledger column present, budget table missing).
+for (const partial of [false, true]) {
+  const db = createD1({ migrationsUpTo: '0013_account_lifecycle.sql' });
+  if (partial) db.raw.exec('ALTER TABLE account_lifecycle_work ADD COLUMN import_job_id TEXT');
+  const env = { DB: db, ZEPTOMAIL_API_KEY: 'fixture', OPENAI_API_KEY: 'fixture', ASSETS: { fetch: async () => new Response('') } };
+  const r = await call(env, '/api/auth/register', null, { email: `pre0014${partial ? '-partial' : ''}@example.test`, password: 'fixture-password' }); const u = await r.json();
+  assert.equal((await call(env, '/api/auth/delete/request-link', u.sessionToken, {})).status, 503, 'lifecycle unavailable before 0014');
+  db.raw.prepare("UPDATE users SET account_status='PENDING_DELETION',purge_at=? WHERE id=?").run(new Date(Date.now() - 1).toISOString(), u.user.id);
+  await purgeDueAccounts(env);
+  assert.equal(db.rows('SELECT account_status FROM users WHERE id=?', u.user.id)[0].account_status, 'PENDING_DELETION', 'cron does nothing before 0014');
+}
+
 // 4. D1 fault at every statement of one step (incl. platform limit exceptions): invariants hold, retry completes.
 {
   const { db: probe, env: probeEnv } = fresh(); resetNet();
@@ -268,16 +331,46 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
 {
   const { db, env } = fresh(); resetNet();
   const big = await owner(db, env, 'big'); const now = new Date().toISOString();
-  // 13,000 sets x (1 + 1 index) = 26,000 estimated rows written > the 25,000/day purge cap.
+  // 31,000 sets x (1 + 1 index) = 62,000 estimated rows written > the 60,000/day purge cap.
   const set = db.raw.prepare("INSERT INTO workout_sets(id,user_id,session_id,payload_json,created_at,updated_at) VALUES (?,?,'s','{}',?,?)");
-  db.raw.exec('BEGIN'); for (let i = 0; i < 13000; i++) set.run(`big-${i}`, big.user.id, now, now); db.raw.exec('COMMIT');
+  db.raw.exec('BEGIN'); for (let i = 0; i < 31000; i++) set.run(`big-${i}`, big.user.id, now, now); db.raw.exec('COMMIT');
   due(db, big); await drain(db, env, big, 3);
   assert.ok(exists(db, big), 'an account beyond the per-day write cap is never partially erased');
   assert.equal(db.rows('SELECT purge_error FROM users WHERE id=?', big.user.id)[0].purge_error, 'ACCOUNT_PURGE_PLAN_CAPACITY');
+  {
+    const { db: adb, env: aenv } = fresh(); resetNet();
+    const appleBig = await owner(adb, aenv, 'apple-big', { provider: 'apple' });
+    const s2 = adb.raw.prepare("INSERT INTO workout_sets(id,user_id,session_id,payload_json,created_at,updated_at) VALUES (?,?,'s','{}',?,?)");
+    adb.raw.exec('BEGIN'); for (let i = 0; i < 31000; i++) s2.run(`ab-${i}`, appleBig.user.id, now, now); adb.raw.exec('COMMIT');
+    due(adb, appleBig); await drain(adb, aenv, appleBig, 2);
+    assert.equal(net.revokes, 0, 'a capacity-held account is not Apple-revoked on every retry');
+  }
   const digest = await runOperationalDigest({ ...env, DB: db }, Date.now() + 2 * 3600000);
   assert.ok(digest.findings.find(f => f.code === 'ACCOUNT_PURGE_OVERDUE')?.errors.includes('ACCOUNT_PURGE_PLAN_CAPACITY'), 'held account is alerted');
+  assert.equal(digest.findings.find(f => f.code === 'ACCOUNT_PURGE_MANUAL_REQUIRED')?.count, 1, 'operator procedure requested explicitly');
+  // Operator procedure (runbook §4c): guarded chunks charged to the shared purge budget, then the normal gated erase.
+  const bystanderBig = await owner(db, env, 'big-bystander'); const keepBystander = footprint(db, bystanderBig.user.id);
+  assert.throws(() => buildChunkSQL({ user: "x' OR 1=1 --", evidence: 'ticket-1' })); assert.throws(() => buildChunkSQL({ user: big.user.id, evidence: 'ticket-1', rows: 9000 }));
+  const opDay = '2099-01-01';
+  const chunks = () => buildChunkSQL({ user: big.user.id, evidence: 'ticket-1', rows: 4000, day: opDay });
+  let commands = 0;
+  for (let guard = 0; guard < 50; guard++) {
+    let progressed = false;
+    for (const c of chunks()) {
+      if (db.raw.prepare(c.charge).run().changes !== 1) { db.raw.prepare("UPDATE d1_write_budget SET rows_written=0 WHERE day=? AND scope='purge'").run(opDay); assert.equal(db.raw.prepare(c.charge).run().changes, 1); } // next UTC day
+      const deleted = db.raw.prepare(c.delete).run().changes; commands++; if (deleted) progressed = true;
+    }
+    if (!progressed) break;
+  }
+  assert.equal(db.rows('SELECT COUNT(*) n FROM workout_sets WHERE user_id=?', big.user.id)[0].n, 0, 'bulk rows reduced');
+  assert.ok(db.rows("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='purge'", opDay)[0].rows_written <= PURGE_DAILY_ROWS_WRITTEN, 'operator chunks never exceed the shared cap');
+  assert.equal(footprint(db, bystanderBig.user.id), keepBystander, 'operator chunks touch only the held account');
+  db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(big.user.id);
+  await drain(db, env, big, 3); assert.ok(!exists(db, big), 'normal gated final erase completes after the operator reduction');
+  // Chunks are inert for an account that is not held.
+  for (const c of buildChunkSQL({ user: bystanderBig.user.id, evidence: 'ticket-2', day: opDay })) assert.equal(db.raw.prepare(c.delete).run().changes, 0);
   // Spent purge budget: the next owner waits for the next UTC day instead of exceeding it.
-  const day = now.slice(0, 10); db.raw.prepare("INSERT INTO d1_write_budget(day,scope,rows_written) VALUES (?,'purge',?)").run(day, PURGE_DAILY_ROWS_WRITTEN);
+  const day = now.slice(0, 10); db.raw.prepare("INSERT INTO d1_write_budget(day,scope,rows_written) VALUES (?,'purge',?) ON CONFLICT(day,scope) DO UPDATE SET rows_written=excluded.rows_written").run(day, PURGE_DAILY_ROWS_WRITTEN);
   const late = await owner(db, env, 'late'); due(db, late); await drain(db, env, late, 2);
   const lateRow = db.rows('SELECT purge_error,purge_retry_at FROM users WHERE id=?', late.user.id)[0];
   assert.ok(exists(db, late)); assert.equal(lateRow.purge_error, 'ACCOUNT_PURGE_DAILY_BUDGET');
@@ -286,11 +379,11 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
   db.raw.prepare("UPDATE d1_write_budget SET rows_written=0 WHERE scope='purge'").run(); db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(late.user.id);
   await drain(db, env, late, 3); assert.ok(!exists(db, late));
   // Maintenance: a large expired-receipt backlog is cleaned without ever charging beyond the cap.
-  db.raw.exec('BEGIN'); for (let i = 0; i < 9000; i++) db.raw.prepare("INSERT INTO sync_mutation_receipts VALUES(?,?,'h','p',0,1,'{}',?,?)").run(big.user.id, 'rcpt-' + i, now, new Date(Date.now() - 1000).toISOString()); db.raw.exec('COMMIT');
+  db.raw.exec('BEGIN'); for (let i = 0; i < 9000; i++) db.raw.prepare("INSERT INTO sync_mutation_receipts VALUES(?,?,'h','p',0,1,'{}',?,?)").run(bystanderBig.user.id, 'rcpt-' + i, now, new Date(Date.now() - 1000).toISOString()); db.raw.exec('COMMIT');
   db.raw.prepare("INSERT INTO d1_write_budget(day,scope,rows_written) VALUES (?,'maintenance',?)").run(day, MAINTENANCE_DAILY_ROWS_WRITTEN - 2000);
   for (let i = 0; i < 6; i++) { let task; await worker.scheduled({ cron: '*/15 * * * *' }, { ...env, DB: db }, { waitUntil(p) { task = p; } }); await task; }
   assert.ok(db.rows("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='maintenance'", day)[0].rows_written <= MAINTENANCE_DAILY_ROWS_WRITTEN, 'maintenance cap never exceeded');
-  assert.ok(db.rows('SELECT COUNT(*) n FROM sync_mutation_receipts WHERE user_id=?', big.user.id)[0].n > 0, 'backlog deferred, not forced');
+  assert.ok(db.rows('SELECT COUNT(*) n FROM sync_mutation_receipts WHERE user_id=?', bystanderBig.user.id)[0].n > 0, 'backlog deferred, not forced');
 }
 
 // 10. Statistics-free query plans (no ANALYZE): cron and digest statements never scan growing tables.
@@ -315,7 +408,9 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
     for (const { sql } of db.trace) {
       if (/^\s*PRAGMA/i.test(sql) || /sqlite_master/.test(sql)) continue;
       const plan = db.raw.prepare('EXPLAIN QUERY PLAN ' + sql).all(...Array((sql.match(/\?/g) || []).length).fill('x')).map(r => r.detail);
-      for (const step of plan) { const m = /^SCAN (\w+)(?: AS \w+)?/.exec(step); const table = m && (growing.includes(m[1]) ? m[1] : null); if (table && !/USING (?:COVERING )?INDEX personal_restore_(?:cleanup|sync)_due/.test(step)) scans.push(`${name}: ${step} :: ${sql.slice(0, 80)}`); }
+      // EXPLAIN names aliased tables by alias: resolve `FROM|JOIN <table> [AS] <alias>` first.
+      const alias = {}; for (const m of sql.matchAll(/\b(?:FROM|JOIN|UPDATE|INTO)\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?/gi)) { alias[m[1]] = m[1]; if (m[2] && !/^(?:WHERE|ON|SET|USING|CROSS|JOIN|LEFT|INNER|ORDER|GROUP|LIMIT|VALUES|SELECT)$/i.test(m[2])) alias[m[2]] = m[1]; }
+      for (const step of plan) { const m = /^SCAN (\w+)/.exec(step); const table = m && alias[m[1]] || m?.[1]; if (table && growing.includes(table) && !/USING (?:COVERING )?INDEX personal_restore_(?:cleanup|sync)_due/.test(step)) scans.push(`${name}: ${step} [${table}] :: ${sql.slice(0, 80)}`); }
     }
   }
   assert.ok(!exists(db, victim), 'purge statements were exercised');

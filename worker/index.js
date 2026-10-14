@@ -95,13 +95,13 @@ async function parseImport(request, env) {
 
 // Cleanup-ledger row (RETURNED = stored upstream, deletion pending) for the response currently referenced by an import
 // job, when that reference is about to be replaced by `next` (null = cleared). Active owners only; never duplicates a
-// pending ledger row. Account purge deletes RETURNED rows upstream (200/404 only) before erasing the account.
+// pending ledger row (a request's own, about-to-resolve background row does not count). Account purge deletes RETURNED rows upstream (200/404 only) before erasing the account.
 function supersededResponse(env, userId, importId, next, now) {
   return lifecycleRawDB(env.DB).prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id)
     SELECT 'superseded-'||lower(hex(randomblob(16))),j.user_id,'RETURNED',j.openai_response_id,?,?,j.id FROM import_jobs j
     WHERE j.user_id = ? AND j.id = ? AND j.openai_response_id IS NOT NULL AND (? IS NULL OR j.openai_response_id <> ?)
       AND EXISTS(SELECT 1 FROM users u WHERE u.id = j.user_id AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL)
-      AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id = j.user_id AND w.response_id = j.openai_response_id AND w.state = 'RETURNED')`)
+      AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id = j.user_id AND w.response_id = j.openai_response_id AND w.state = 'RETURNED' AND w.import_job_id IS NOT NULL)`)
     .bind(now, now, userId, importId, next, next);
 }
 
@@ -129,7 +129,7 @@ async function budgetedMaintenance(env) {
   // Sequential, so a statement starts only while its worst case fits: the daily cap is never exceeded.
   await cleanupMutationReceipts({ ...env, DB: budgeted });
   await cleanupPersonalOperations({ ...env, DB: budgeted });
-  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(() => {});
+  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(cause => console.warn(JSON.stringify({ event: 'maintenance_budget_charge_failed', code: cause.code || 'DATABASE_UNAVAILABLE', charged })));
   if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
 }
 
