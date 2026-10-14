@@ -142,3 +142,13 @@ Syntax/diff PASS. Complete npm local run blocked at headless smoke Chrome CDP st
 - UNKNOWN AI işlemleri yanlış başarıya veya veri silinmesine yol açmaz: kesinleşmeyen işlem DELETE_NOW'u durum değişikliğinden önce reddeder ve due purge'ü bloke eder; kapanış yalnız operatör kanıtıyla (`reconcile-ai-work.mjs`) veya kesin upstream reddiyle olur. Sağlayıcı saklama süresine dayalı otomatik kapanış yok.
 - İzleme/alarm mevcut altyapıyla: günlük cron özeti + ZeptoMail + Workers Logs. Harici dead-man switch yok (kalan risk).
 - 2026-10-14 kullanıcı kararı: `OPS_ALERT_EMAIL = support@reptrio.com` (mevcut Zoho posta kutusu adresi; yeni hesap/sağlayıcı/abonelik yok; gönderim mevcut ZeptoMail). Test teslimatı PASS; production cron teslimatı deploy sonrası ayrıca doğrulanır.
+
+### 2026-10-14 — Build 44 runs on Workers Free (Option A)
+- Kullanıcı kararı: Workers Paid'e geçilmez; önceki Paid ön koşulu kaldırıldı. Yayın koşulu: hesap silmenin gerçek Free
+  sınırları içinde güvenli çalıştığının kanıtı. Seçenek A onaylandı; B (tam parçalı yeniden yazım) yapılmadı; C (içe
+  aktarma sonrası anında AI yanıtı silme) Build 45'e bırakıldı.
+- Hemen silme isteği tamamlanma bildirmez: `202 PURGING` (geri dönüşsüz kabul); tamamlanma dakikalık cron'da, her
+  çağrıda ya <=40 dış silme ya da son atomik silme. Nihai silme veritabanı kapısıyla dış temizlik doğrulanmadan engellenir.
+- Arka plan yazmaları günlük 25.000+25.000 satırla sınırlı (Free günlük yazma kotasının en az yarısı uygulamaya kalır);
+  sınırı aşan tek hesap silinmez, `ACCOUNT_PURGE_PLAN_CAPACITY` ile alarm verir (yayın engeli değil, operasyon kaydı).
+- Cron CPU (10 ms) yalnız gerçek Cloudflare ortamında doğrulanabilir; doğrulanmadan PASS sayılmaz.

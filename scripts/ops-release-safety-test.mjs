@@ -142,6 +142,9 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
   assert.ok(!digest.findings.some(f => f.code === 'AI_CLEANUP_FAILED' || f.code === 'AI_WORK_UNKNOWN'), 'handed-off row is not re-alerted');
   openaiDeletes = []; due(db, u); await purgeDueAccounts(env);
   assert.deepEqual(openaiDeletes, ['resp_foundupstream1']);
+  assert.equal(db.rows('SELECT purge_error FROM users WHERE id=?', u.user.id)[0].purge_error, 'ACCOUNT_PURGE_IN_PROGRESS', 'upstream step is not completion');
+  await purgeDueAccounts(env);
+  assert.deepEqual(openaiDeletes, ['resp_foundupstream1'], 'confirmed delete is not repeated');
   assert.equal(db.rows('SELECT * FROM users WHERE id=?', u.user.id).length, 0);
 }
 
@@ -186,10 +189,11 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
   assert.deepEqual(clear.findings, []); assert.equal(mails.length, 0, 'clear digest sends nothing');
 }
 
-// 6. Capacity evidence: D1 statements + outbound subrequests per purge invocation by account shape (Workers Paid gate).
+// 6. Capacity evidence (Workers Free): each purge invocation stays <= 40 D1 statements (every batch statement counted)
+// and <= 40 OpenAI deletes; large accounts finish in ceil(n/40) upstream steps + one final erase.
 {
   const rows = [];
-  for (const n of [0, 1, 3, 10, 30]) {
+  for (const n of [0, 1, 3, 10, 30, 100]) {
     const { db, env } = fresh();
     const u = await (await call(env, '/api/auth/register', null, { email: `cap${n}@example.test`, password: 'fixture-password' })).json();
     const now = new Date().toISOString();
@@ -198,12 +202,17 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
       db.raw.prepare("INSERT INTO account_lifecycle_work(id,user_id,state,created_at,expires_at,response_id)VALUES(?,?,'RETURNED',?,?,?)").run('w' + i, u.user.id, now, now, 'resp_work' + i);
     }
     db.raw.prepare("UPDATE users SET account_status='PENDING_DELETION',purge_at=? WHERE id=?").run(new Date(Date.now() - 1).toISOString(), u.user.id);
-    openaiDeletes = []; db.resetMetrics(); await purgeDueAccounts(env);
-    assert.equal(db.rows('SELECT id FROM users WHERE id=?', u.user.id).length, 0);
-    rows.push({ storedResponses: n, d1: db.metrics.queries, fetch: openaiDeletes.length, total: db.metrics.queries + openaiDeletes.length });
+    openaiDeletes = []; let invocations = 0, maxD1 = 0, maxFetch = 0;
+    while (db.rows('SELECT 1 FROM users WHERE id=?', u.user.id).length && invocations < 20) {
+      const before = openaiDeletes.length; db.resetMetrics(); await purgeDueAccounts(env); invocations++;
+      maxD1 = Math.max(maxD1, db.metrics.queries); maxFetch = Math.max(maxFetch, openaiDeletes.length - before);
+    }
+    assert.equal(db.rows('SELECT * FROM users WHERE id=?', u.user.id).length, 0, `account with ${2 * n} stored responses is erased`);
+    assert.equal(new Set(openaiDeletes).size, 2 * n, 'every stored response deleted upstream exactly once');
+    assert.equal(invocations, Math.ceil(2 * n / 40) + 1);
+    assert.ok(maxD1 <= 40 && maxFetch <= 40, `Free per-invocation margin: d1=${maxD1} fetch=${maxFetch}`);
+    rows.push({ storedResponses: 2 * n, invocations, maxD1PerInvocation: maxD1, maxFetchPerInvocation: maxFetch });
   }
-  for (const r of rows) assert.ok(r.d1 <= 1000 && r.total <= 10000, 'within Workers Paid per-invocation limits');
-  assert.ok(rows.some(r => r.total > 50), 'Free plan (50 subrequests) cannot purge AI-import accounts: Paid is a release precondition');
   console.log(JSON.stringify({ purgeBudget: rows }));
 }
 

@@ -47,7 +47,8 @@ for(const foreignKeys of [true,false]){
  const local=createD1({foreignKeys}),e={...env,DB:local};
  const u=await(await call('/api/auth/register',null,{email:'wipe@example.test',password:'fixture-password'},e)).json();
  const token=randomToken(32),now=new Date().toISOString();local.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES(?,?,?,?,'DELETE_PROOF',?,?)").run('proof',u.user.id,await tokenDigest(token),await tokenDigest(u.sessionToken),now,new Date(Date.now()+600000).toISOString());
- local.setFailOn(/DELETE FROM users/);const r=await call('/api/auth/delete',u.sessionToken,{proof:token,confirm:'DELETE',method:'DELETE_NOW'},e);assert.equal(r.status,503);assert.equal(local.rows('SELECT account_status FROM users')[0].account_status,'PURGING');
+ local.setFailOn(/DELETE FROM users/);const r=await call('/api/auth/delete',u.sessionToken,{proof:token,confirm:'DELETE',method:'DELETE_NOW'},e);assert.equal(r.status,202);assert.equal((await r.json()).purgeComplete,false);assert.equal(local.rows('SELECT account_status FROM users')[0].account_status,'PURGING');
+ await purgeDueAccounts(e);assert.equal(local.rows('SELECT account_status FROM users')[0].account_status,'PURGING','failed final batch rolls back to retriable PURGING');assert.equal(local.rows('SELECT purge_error FROM users')[0].purge_error,'ACCOUNT_PURGE_FAILED');
  local.setFailOn(null);local.raw.prepare('UPDATE users SET purge_retry_at=NULL,purge_lease_until=NULL').run();await purgeDueAccounts(e);
  for(const table of local.rows("SELECT name FROM sqlite_master WHERE type='table'")){const cols=local.rows(`PRAGMA table_info(${table.name})`);if(table.name==='users'||cols.some(c=>c.name==='user_id'))assert.equal(local.rows(`SELECT * FROM ${table.name}`).length,0,table.name);}
 }
@@ -70,8 +71,8 @@ const day29Auth=await login(day29);assert.equal((await call('/api/auth/account/r
 for(const order of ['recover-first','purge-first']){
  const u=await register(order);await pending(u);const auth=await login(u);
  const paths=order==='recover-first'?['recover','purge-now']:['purge-now','recover'];const replies=await Promise.all(paths.map(action=>call('/api/auth/account/'+action,auth.recoveryToken,{confirm:action==='recover'?'RECOVER':'DELETE'})));
- assert.equal(replies.filter(r=>r.status===200||r.status===201).length,1,order);
- const current=db.rows('SELECT account_status FROM users WHERE id=?',u.user.id);if(replies[paths.indexOf('recover')].status===201)assert.equal(current[0].account_status,'ACTIVE');else assert.equal(current.length,0);
+ assert.equal(replies.filter(r=>r.status===201||r.status===202).length,1,order);
+ const current=db.rows('SELECT account_status FROM users WHERE id=?',u.user.id);if(replies[paths.indexOf('recover')].status===201)assert.equal(current[0].account_status,'ACTIVE');else{assert.equal(current[0].account_status,'PURGING','purge claim is irreversible, not completion');for(let i=0;i<10&&db.rows('SELECT 1 FROM users WHERE id=?',u.user.id).length;i++)await purgeDueAccounts(env);assert.equal(db.rows('SELECT 1 FROM users WHERE id=?',u.user.id).length,0);}
 }
 // Logout invalidates detached links/proofs and reauth tickets together with the requesting session.
 const logoutUser=await register('logout'),logoutToken=await link(logoutUser);assert.equal((await call('/api/auth/logout',logoutUser.sessionToken,{})).status,200);assert.equal(db.rows('SELECT * FROM account_lifecycle_credentials WHERE user_id=?',logoutUser.user.id).length,0);assert.equal((await call('/api/auth/delete/verify-link',logoutUser.sessionToken,{token:logoutToken})).status,401);
@@ -95,14 +96,14 @@ const logoutUser=await register('logout'),logoutToken=await link(logoutUser);ass
 }
 {
  const u=await register('late-session-revocation'),p=await proof(u);
- db.setBeforeBatch(statements=>{if(statements[0].sql.startsWith("UPDATE users SET account_status='PENDING_DELETION'")){db.setBeforeBatch(null);db.raw.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(u.user.id);}});
+ db.setBeforeBatch(statements=>{if(statements[0].sql.startsWith("UPDATE users SET account_status=CASE WHEN ?=1 THEN 'PURGING' ELSE 'PENDING_DELETION' END")){db.setBeforeBatch(null);db.raw.prepare('DELETE FROM auth_sessions WHERE user_id=?').run(u.user.id);}});
  const r=await call('/api/auth/delete',u.sessionToken,{proof:p,confirm:'DELETE'});
  assert.equal(r.status,401,'a revoked initiating session cannot use its still-unconsumed proof');
  assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'ACTIVE');
 }
 for(const mode of ['revoked','expired']){
  const u=await register('late-recovery-'+mode);await pending(u);const scoped=await login(u);let authenticated=false;
- db.setBeforeRead(sql=>{if(sql.includes('FROM account_lifecycle_credentials c JOIN users u'))authenticated=true;else if(authenticated&&sql==='PRAGMA table_info(users)'){db.setBeforeRead(null);if(mode==='revoked')db.raw.prepare('DELETE FROM account_lifecycle_credentials WHERE user_id=?').run(u.user.id);else db.raw.prepare('UPDATE account_lifecycle_credentials SET expires_at=? WHERE user_id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);}});
+ db.setBeforeRead(sql=>{if(sql.includes('FROM account_lifecycle_credentials c JOIN users u'))authenticated=true;else if(authenticated&&sql.startsWith("SELECT type,name,sql FROM sqlite_master")){db.setBeforeRead(null);if(mode==='revoked')db.raw.prepare('DELETE FROM account_lifecycle_credentials WHERE user_id=?').run(u.user.id);else db.raw.prepare('UPDATE account_lifecycle_credentials SET expires_at=? WHERE user_id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);}});
  const r=await call('/api/auth/account/purge-now',scoped.recoveryToken,{confirm:'DELETE'});
  assert.equal(r.status,409,'revoked scoped ownership cannot win the purge claim');
  assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.user.id)[0].account_status,'PENDING_DELETION');
@@ -143,9 +144,10 @@ assert.equal((await call('/api/me',b.sessionToken)).status,200,'other account un
 {
  const local=createD1(),e={...env,DB:local};const u=await(await call('/api/auth/register',null,{email:'query-budget@example.test',password:'fixture-password'},e)).json();
  const token=randomToken(),stamp=new Date().toISOString();local.raw.prepare('INSERT INTO account_lifecycle_credentials(id,user_id,purpose,token_hash,session_hash,created_at,expires_at)VALUES(?,?,?,?,?,?,?)').run('budget',u.user.id,'DELETE_PROOF',await tokenDigest(token),await tokenDigest(u.sessionToken),stamp,new Date(Date.now()+600000).toISOString());
- local.resetMetrics();assert.equal((await call('/api/auth/delete',u.sessionToken,{proof:token,confirm:'DELETE',method:'DELETE_NOW'},e)).status,200);assert.ok(local.metrics.queries<=50,`cold immediate query budget: ${local.metrics.queries}`);
+ local.resetMetrics();assert.equal((await call('/api/auth/delete',u.sessionToken,{proof:token,confirm:'DELETE',method:'DELETE_NOW'},e)).status,202);assert.ok(local.metrics.queries<=30,`cold immediate request query budget: ${local.metrics.queries}`);
+ local.raw.prepare('UPDATE users SET purge_at=? WHERE id=?').run(new Date(Date.now()-1).toISOString(),u.user.id);local.resetMetrics();await purgeDueAccounts(e);assert.equal(local.rows('SELECT id FROM users').length,0);assert.ok(local.metrics.queries<=40,`final erase invocation query budget: ${local.metrics.queries}`);
  for(const id of ['cron-budget-a','cron-budget-b'])local.raw.prepare("INSERT INTO users(id,email,password_hash,password_salt,created_at,account_status,purge_at)VALUES(?,?,?,?,?,'PENDING_DELETION',?)").run(id,id+'@example.test','fixture','fixture',stamp,new Date(Date.now()-1).toISOString());
- for(let remaining=1;remaining>=0;remaining--){local.resetMetrics();let task;await worker.scheduled({cron:'* * * * *'},e,{waitUntil(p){task=p;}});await task;assert.equal(local.rows('SELECT id FROM users').length,remaining,'bounded cron advances one owner per invocation');assert.ok(local.metrics.queries<=50,`cron query budget: ${local.metrics.queries}`);}
+ for(let remaining=1;remaining>=0;remaining--){local.resetMetrics();let task;await worker.scheduled({cron:'* * * * *'},e,{waitUntil(p){task=p;}});await task;assert.equal(local.rows('SELECT id FROM users').length,remaining,'bounded cron advances one owner per invocation');assert.ok(local.metrics.queries<=40,`cron query budget: ${local.metrics.queries}`);}
  local.resetMetrics();let maintenance;await worker.scheduled({cron:'*/15 * * * *'},e,{waitUntil(p){maintenance=p;}});await maintenance;assert.ok(!local.trace.some(row=>row.sql.includes('UPDATE account_lifecycle_work')),'legacy maintenance does not share purge budget');
 }
 globalThis.fetch=realFetch;console.log('Account lifecycle PASS: routed SQLite link scanner/session binding/expiry/replay/mail failure; pending access isolation; exact-byte explicit recovery; deadline cron; FK on/off purge rollback/retry.');

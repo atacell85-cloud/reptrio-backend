@@ -1,5 +1,6 @@
-import { purgeDueAccounts, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
+import { purgeDueAccounts, lifecycleMaintenance, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
 import { runOperationalDigest, OPS_DIGEST_CRON } from './ops-alerts.js';
+import { MAINTENANCE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
 import { cleanupPersonalOperations } from './personal-restore-api.js';
 import { cleanupMutationReceipts } from './record-sync-transport.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
@@ -17,7 +18,7 @@ export default {
       ? purgeDueAccounts(env)
       : event.cron === OPS_DIGEST_CRON
         ? runOperationalDigest(env, event.scheduledTime)
-        : Promise.all([cleanupMutationReceipts(env),cleanupPersonalOperations(env)]));
+        : budgetedMaintenance(env));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -92,6 +93,46 @@ async function parseImport(request, env) {
   }
 }
 
+// Cleanup-ledger row (RETURNED = stored upstream, deletion pending) for the response currently referenced by an import
+// job, when that reference is about to be replaced by `next` (null = cleared). Active owners only; never duplicates a
+// pending ledger row. Account purge deletes RETURNED rows upstream (200/404 only) before erasing the account.
+function supersededResponse(env, userId, importId, next, now) {
+  return lifecycleRawDB(env.DB).prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id)
+    SELECT 'superseded-'||lower(hex(randomblob(16))),j.user_id,'RETURNED',j.openai_response_id,?,?,j.id FROM import_jobs j
+    WHERE j.user_id = ? AND j.id = ? AND j.openai_response_id IS NOT NULL AND (? IS NULL OR j.openai_response_id <> ?)
+      AND EXISTS(SELECT 1 FROM users u WHERE u.id = j.user_id AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id = j.user_id AND w.response_id = j.openai_response_id AND w.state = 'RETURNED')`)
+    .bind(now, now, userId, importId, next, next);
+}
+
+// 15-minute maintenance under a daily D1 rows-written budget (Workers Free: 100,000/day shared with the app).
+// Each write statement runs only if its worst case still fits; actual rows (x (1 + indexes)) are charged afterwards.
+const MAINTENANCE_STATEMENT_ROWS = 256;
+async function budgetedMaintenance(env) {
+  const raw = lifecycleRawDB(env.DB), day = new Date().toISOString().slice(0, 10);
+  await lifecycleMaintenance(env);
+  let spent, indexes;
+  try {
+    spent = Number((await raw.prepare("SELECT rows_written FROM d1_write_budget WHERE day = ? AND scope = 'maintenance'").bind(day).first())?.rows_written || 0);
+    indexes = Object.fromEntries(((await raw.prepare("SELECT tbl_name, COUNT(*) AS n FROM sqlite_master WHERE type = 'index' GROUP BY tbl_name").all()).results || []).map(row => [row.tbl_name, Number(row.n)]));
+  } catch (cause) { console.warn(JSON.stringify({ event: 'maintenance_budget_unavailable', code: cause.code || 'DATABASE_UNAVAILABLE' })); return; }
+  // Rows written = affected rows x (1 + indexes of the target table); unknown tables are charged 5 per row.
+  const weight = sql => 1 + (indexes[(/^\s*(?:DELETE\s+FROM|UPDATE|INSERT\s+INTO)\s+(\w+)/i.exec(sql) || [])[1]] ?? 4);
+  let charged = 0, skipped = 0;
+  // Explicit delegation (D1 statements are class instances; spreading would drop their prototype methods).
+  const wrap = (st, w) => ({ unwrap: st, bind: (...v) => wrap(st.bind(...v), w), first: (...a) => st.first(...a), all: (...a) => st.all(...a), raw: (...a) => st.raw(...a),
+    run: async () => {
+      if (w && spent + charged + MAINTENANCE_STATEMENT_ROWS * w > MAINTENANCE_DAILY_ROWS_WRITTEN) { skipped++; return { success: true, meta: { changes: 0 } }; }
+      const result = await st.run(); if (w) charged += Number(result?.meta?.changes || 0) * w; return result;
+    } });
+  const budgeted = { prepare: sql => wrap(raw.prepare(sql), /^\s*(?:DELETE|UPDATE|INSERT)\b/i.test(sql) ? weight(sql) : 0), batch: items => raw.batch(items.map(item => item.unwrap || item)) };
+  // Sequential, so a statement starts only while its worst case fits: the daily cap is never exceeded.
+  await cleanupMutationReceipts({ ...env, DB: budgeted });
+  await cleanupPersonalOperations({ ...env, DB: budgeted });
+  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(() => {});
+  if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
+}
+
 async function createImportJob(request, env, ctx) {
   if (request.method !== 'POST') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' });
   const contentType = request.headers.get('content-type')?.toLowerCase() || '';
@@ -108,11 +149,12 @@ async function createImportJob(request, env, ctx) {
   if (bytes(normalizedJson) > config.maxInputBytes) return apiError('DOCUMENT_TOO_LARGE', 413);
   const now = new Date().toISOString();
   const source = body.normalizedDocument;
-  await env.DB.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, raw_file_name, raw_file_type, raw_file_size, attempts, created_at, updated_at)
+  // Re-upload of an existing import id: its previous stored response moves into the cleanup ledger in the same atomic
+  // batch that clears it, so no upstream object loses its only reference.
+  await env.DB.batch([supersededResponse(env, user.id, body.importId, null, now), env.DB.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, raw_file_name, raw_file_type, raw_file_size, attempts, created_at, updated_at)
     VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, ?)
     ON CONFLICT(user_id, id) DO UPDATE SET status = 'queued', error_code = NULL, preview_json = NULL, observability_json = NULL, openai_response_id = NULL, normalized_document_json = excluded.normalized_document_json, source_json = excluded.source_json, raw_file_name = excluded.raw_file_name, raw_file_type = excluded.raw_file_type, raw_file_size = excluded.raw_file_size, updated_at = excluded.updated_at`)
-    .bind(body.importId, user.id, JSON.stringify({ fileName: source.fileName, fileType: source.fileType, language: source.language || null }), normalizedJson, body.file?.name || null, body.file?.type || null, body.file?.size || null, now, now)
-    .run();
+    .bind(body.importId, user.id, JSON.stringify({ fileName: source.fileName, fileType: source.fileType, language: source.language || null }), normalizedJson, body.file?.name || null, body.file?.type || null, body.file?.size || null, now, now)]);
   if (body.file) {
     let workId;
     if (!env.OPENAI_API_KEY) return apiError('OPENAI_API_KEY_MISSING', 503);
@@ -126,9 +168,10 @@ async function createImportJob(request, env, ctx) {
       const { payload, upstream, attempts } = await createOpenAIBackgroundResponse({ apiKey: env.OPENAI_API_KEY, config, input: { importId: body.importId, normalizedDocument: body.normalizedDocument, rawFile }, requestId });
       await backgroundReturned(env,workId,payload.id);
       const metadata = observability({ requestId, config, payload, upstream, attempts, started, status: payload.status || 'queued' });
-      const publication=await env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
-        .bind(payload.id, JSON.stringify(metadata), new Date().toISOString(), user.id, body.importId)
-        .run();
+      const published = new Date().toISOString();
+      // A concurrent upload of the same import id may already have published another response: keep it in the ledger.
+      const [, publication] = await env.DB.batch([supersededResponse(env, user.id, body.importId, payload.id, published), env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
+        .bind(payload.id, JSON.stringify(metadata), published, user.id, body.importId)]);
       if(publication.meta.changes!==1)throw coded('ACCOUNT_PENDING_DELETION');
       await backgroundResolved(env,workId);
       await assertAiImportConsent(env,user.id);

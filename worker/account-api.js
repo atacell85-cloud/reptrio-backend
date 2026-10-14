@@ -1,6 +1,7 @@
 import { activeAccountDB, lifecycleReady, handleLifecycleRequest, issueRecovery, createDeleteProof, recoveryOwner } from './account-lifecycle.js';
 import { personalRestoreRequest } from './personal-restore-api.js';
 import { aiConsentDeletionTables } from './ai-import-consent.js';
+import { PURGE_UPSTREAM_DELETES, PURGE_UPSTREAM_TIME_MS, PURGE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
 import { recordPage, recordMutation } from './record-sync-transport.js';
 import { recordPull, recordPush, recordCapabilities, storageCleanupMode, PERSONAL_RESTORE_TABLES } from './record-sync-storage.js';
 const encoder = new TextEncoder();
@@ -380,13 +381,36 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
  // Check every cleanup table/owner column before external side effects, including legacy tables.
  for(const table of tables){const row=schemaRows.find(row=>row.type==='table'&&row.name===table);if(!row?.sql||!/(?:\(|,)\s*["`\[]?user_id["`\]]?\s+(?:TEXT|INTEGER|BLOB|REAL|NUMERIC)\b/i.test(row.sql))throw Object.assign(coded('ACCOUNT_CLEANUP_SCHEMA_UNSUPPORTED'),{status:503});}
  if(preflight)return;
- const work=(await env.DB.prepare("SELECT id,state,response_id FROM account_lifecycle_work WHERE user_id=? AND state<>'RESOLVED'").bind(userId).all()).results||[];
- if(work.some(row=>row.state==='RUNNING'||row.state==='UNKNOWN'))throw Object.assign(coded('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED'),{status:503});
- for(const row of work){
-  if(!row.response_id||!env.OPENAI_API_KEY)throw coded('OPENAI_CLEANUP_UNAVAILABLE');
-  let response;try{response=await fetch(`${OPENAI_RESPONSES_URL}/${encodeURIComponent(row.response_id)}`,{method:'DELETE',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`},signal:AbortSignal.timeout(PROVIDER_TIMEOUT_MS)});}catch{throw coded('OPENAI_CLEANUP_FAILED');}
-  if(!response.ok&&response.status!==404)throw coded('OPENAI_CLEANUP_FAILED');
-  await env.DB.prepare("UPDATE account_lifecycle_work SET state='RESOLVED',last_error=NULL WHERE id=? AND user_id=? AND state='RETURNED'").bind(row.id,userId).run();
+ // Workers Free: every invocation does EITHER bounded upstream cleanup (<= PURGE_UPSTREAM_DELETES OpenAI deletes) OR the
+ // final erase, never both, so D1 statements and external subrequests stay well below the 50/50 per-invocation limits.
+ const held="EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>?)",now=new Date().toISOString();
+ const pending=await env.DB.prepare("SELECT (SELECT COUNT(*) FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN')) AS open,(SELECT COUNT(*) FROM account_lifecycle_work WHERE user_id=? AND state='RETURNED') AS returned,(SELECT COUNT(*) FROM import_jobs WHERE user_id=? AND openai_response_id IS NOT NULL) AS stored").bind(userId,userId,userId).first();
+ if(Number(pending?.open))throw Object.assign(coded('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED'),{status:503});
+ if(Number(pending?.stored)){
+  // Move stored import responses into the durable cleanup ledger (one RETURNED row per distinct id) before any upstream
+  // effect; the id leaves import_jobs only in the same atomic batch that records it in the ledger.
+  const adopted=await env.DB.batch([
+   env.DB.prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id) SELECT 'adopt-'||lower(hex(randomblob(16))),?,'RETURNED',j.openai_response_id,?,?,MIN(j.id) FROM import_jobs j WHERE j.user_id=? AND j.openai_response_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id=j.user_id AND w.response_id=j.openai_response_id AND w.state='RETURNED') AND ${held} GROUP BY j.openai_response_id`).bind(userId,now,now,userId,userId,lease,now),
+   env.DB.prepare(`UPDATE import_jobs SET openai_response_id=NULL WHERE user_id=? AND openai_response_id IS NOT NULL AND ${held}`).bind(userId,userId,lease,now)
+  ]);
+  if(adopted[1].meta.changes!==Number(pending.stored))throw Object.assign(coded('ACCOUNT_PURGE_LEASE_LOST'),{status:409});
+ }
+ if(Number(pending?.returned)||Number(pending?.stored)){
+  if(!env.OPENAI_API_KEY)throw coded('OPENAI_CLEANUP_UNAVAILABLE');
+  const rows=(await env.DB.prepare("SELECT id,response_id FROM account_lifecycle_work WHERE user_id=? AND state='RETURNED' ORDER BY created_at,id LIMIT ?").bind(userId,PURGE_UPSTREAM_DELETES).all()).results||[];
+  const started=Date.now(),confirmed=[];let failure=null;
+  for(const row of rows){
+   if(Date.now()-started>PURGE_UPSTREAM_TIME_MS)break;
+   if(!row.response_id){failure='OPENAI_CLEANUP_UNAVAILABLE';break;}
+   let response;try{response=await fetch(`${OPENAI_RESPONSES_URL}/${encodeURIComponent(row.response_id)}`,{method:'DELETE',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`},signal:AbortSignal.timeout(PROVIDER_TIMEOUT_MS)});}catch{failure='OPENAI_CLEANUP_FAILED';break;}
+   // 200 deleted / 404 already absent are the only proofs that nothing remains upstream.
+   if(!response.ok&&response.status!==404){failure='OPENAI_CLEANUP_FAILED';break;}
+   confirmed.push(row.id);
+  }
+  // Durable, idempotent progress: one statement records every confirmed delete of this invocation.
+  if(confirmed.length)await env.DB.prepare(`UPDATE account_lifecycle_work SET state='RESOLVED',last_error=NULL WHERE user_id=? AND state='RETURNED' AND id IN (${confirmed.map(()=>'?').join(',')}) AND ${held}`).bind(userId,...confirmed,userId,lease,now).run();
+  if(failure)throw coded(failure);
+  throw Object.assign(coded('ACCOUNT_PURGE_IN_PROGRESS'),{status:202,progress:confirmed.length});
  }
  const config=oauthConfig(env,'apple');
  for(const row of context.apple){
@@ -396,11 +420,23 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
   const result=await revokeAppleToken(config,token);
   if(result!=='revoked')throw Object.assign(coded(result==='invalid_grant'?'APPLE_REAUTH_REQUIRED':'APPLE_REVOKE_FAILED'),{status:502});
  }
- await deleteStoredImportResponses(env,userId);
- const gate="EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>? AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work WHERE user_id=users.id AND state<>'RESOLVED'))",stamp=new Date().toISOString();
- const result=await env.DB.batch(tables.map(table=>env.DB.prepare(`DELETE FROM ${table} WHERE user_id=? AND ${gate}`).bind(userId,userId,lease,stamp)).concat(env.DB.prepare(`DELETE FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>? AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work WHERE user_id=users.id AND state<>'RESOLVED')`).bind(userId,lease,stamp)));
+ // Daily rows-written budget (D1 Free: 100,000/day): conservative estimate = owner rows x (1 + indexes on the table).
+ const owned=[...tables,'users'];
+ const estimate=Number((await env.DB.prepare(`SELECT ${owned.map(table=>`(SELECT COUNT(*) FROM ${table} WHERE ${table==='users'?'id':'user_id'}=?)*(1+(SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='${table}'))`).join('+')} AS rows_written`).bind(...owned.map(()=>userId)).first())?.rows_written||0);
+ if(estimate>PURGE_DAILY_ROWS_WRITTEN)throw Object.assign(coded('ACCOUNT_PURGE_PLAN_CAPACITY'),{status:503,estimate});
+ const stamp=new Date().toISOString(),day=stamp.slice(0,10);
+ // Final erase gate: lease held, every upstream object confirmed deleted (no open ledger row, no stored import id) and
+ // this batch's rows charged to today's budget (the budget row carries this lease only if the charge fitted).
+ const gate=`EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>? AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work WHERE user_id=users.id AND state<>'RESOLVED') AND NOT EXISTS(SELECT 1 FROM import_jobs WHERE user_id=users.id AND openai_response_id IS NOT NULL)) AND EXISTS(SELECT 1 FROM d1_write_budget WHERE day=? AND scope='purge' AND lease=?)`;
+ const result=await env.DB.batch([
+  env.DB.prepare(`INSERT INTO d1_write_budget(day,scope,rows_written,lease) SELECT ?,'purge',?,? WHERE ?<=? ON CONFLICT(day,scope) DO UPDATE SET rows_written=d1_write_budget.rows_written+excluded.rows_written,lease=excluded.lease WHERE d1_write_budget.rows_written+excluded.rows_written<=?`).bind(day,estimate,lease,estimate,PURGE_DAILY_ROWS_WRITTEN,PURGE_DAILY_ROWS_WRITTEN),
+  ...tables.map(table=>env.DB.prepare(`DELETE FROM ${table} WHERE user_id=? AND ${gate}`).bind(userId,userId,lease,stamp,day,lease)),
+  env.DB.prepare(`DELETE FROM users WHERE id=? AND ${gate}`).bind(userId,userId,lease,stamp,day,lease)
+ ]);
+ if(result[0].meta.changes!==1)throw Object.assign(coded('ACCOUNT_PURGE_DAILY_BUDGET'),{status:503});
  if(result.at(-1).meta.changes!==1)throw Object.assign(coded('ACCOUNT_PURGE_LEASE_LOST'),{status:409});
 }
+
 
 // Every table with a user_id column (migrations 0001–0008). `users` is deleted last, in the same batch.
 const LEGACY_ACCOUNT_TABLES = ['import_jobs', 'mobile_oauth_codes', 'oauth_reauth_tickets', 'oauth_accounts', 'auth_sessions', 'user_data', 'programs', 'workout_sessions', 'workout_sets', 'user_settings', 'sync_metadata', 'password_reset_tokens'];
@@ -432,15 +468,6 @@ async function revokeAppleToken(config, refreshToken) {
   } catch {
     return 'APPLE_UNREACHABLE';
   }
-}
-
-async function deleteStoredImportResponses(env,userId){
- const rows=(await env.DB.prepare('SELECT DISTINCT openai_response_id FROM import_jobs WHERE user_id=? AND openai_response_id IS NOT NULL').bind(userId).all()).results||[];
- if(rows.length&&!env.OPENAI_API_KEY)throw coded('OPENAI_CLEANUP_UNAVAILABLE');
- for(const row of rows){
-  let response;try{response=await fetch(`${OPENAI_RESPONSES_URL}/${encodeURIComponent(row.openai_response_id)}`,{method:'DELETE',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`},signal:AbortSignal.timeout(PROVIDER_TIMEOUT_MS)});}catch{throw coded('OPENAI_CLEANUP_FAILED');}
-  if(!response.ok&&response.status!==404)throw coded('OPENAI_CLEANUP_FAILED');
- }
 }
 
 // ---- Provider refresh tokens at rest: AES-GCM with a key derived (HKDF-SHA-256) from the Sign in with Apple private

@@ -1,3 +1,4 @@
+import { purgeDueAccounts } from '../worker/account-lifecycle.js';
 import {tokenDigest} from '../worker/account-api.js';
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
@@ -119,7 +120,9 @@ try {
   const seedProof=async(d,u)=>d.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES('proof',?,?,?,'DELETE_PROOF',?,?)").run(u.id,await tokenDigest(deletionProof),await tokenDigest(u.token),stamp,new Date(Date.now()+600000).toISOString());
   await seedProof(noFk,ex);
   const deleted = await call('/api/auth/delete', auth(ex.token, 'POST', { confirm: 'DELETE', proof:deletionProof,method:'DELETE_NOW' }), deletionEnv);
-  assert.equal(deleted.status, 200, 'account deletion succeeds with AI consent tables installed');
+  assert.equal(deleted.status, 202, 'account deletion is accepted with AI consent tables installed');
+  for (let i = 0; i < 5 && noFk.rows('SELECT 1 FROM users WHERE id = ?', ex.id).length; i++) await purgeDueAccounts(deletionEnv);
+  assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM users WHERE id = ?', ex.id)[0].n, 0, 'minute cron completes the erase');
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consents WHERE user_id = ?', ex.id)[0].n, 0);
   assert.equal(noFk.rows('SELECT COUNT(*) AS n FROM ai_import_consent_events WHERE user_id = ?', ex.id)[0].n, 0);
   // A partial migration is a hard account-deletion blocker before any other external side effect.

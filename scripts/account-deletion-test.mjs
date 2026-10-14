@@ -149,7 +149,7 @@ async function seed(user, tag) {
   db.raw.prepare("INSERT INTO personal_restore_records(user_id,operation_id,root_id,item_ordinal,kind,record_key,ordinal,address_json,payload_json,source_tuple,portable_hash)VALUES(?,?,0,0,'session','[\"source\"]',0,'{}','{}','[\"source\"]','h')").run(user.id,op);
   db.raw.prepare("INSERT INTO personal_restore_chunks VALUES(?,?,0,'h',1,1,'{}',2)").run(user.id,op);
   db.raw.prepare("INSERT INTO personal_restore_identity_journal(user_id,source_namespace,kind,source_tuple,target_kind,target_key,target_path,operation_id,import_hash,address_hash,target_ordinal,added_revision,disposition,state)VALUES(?,'source','session','[\"source\"]','session','[\"source\"]','[]',?,'h','h',0,1,'ADDED','LIVE')").run(user.id,op);
-  db.raw.prepare("INSERT INTO account_lifecycle_work VALUES(?,?,'RESOLVED',NULL,?,?,NULL)").run('work-'+tag,user.id,now,now);
+  db.raw.prepare("INSERT INTO account_lifecycle_work VALUES(?,?,'RESOLVED',NULL,?,?,NULL,NULL)").run('work-'+tag,user.id,now,now);
   db.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at)VALUES(?,?,?,?,'RECOVERY',?,?)").run('lifecycle-'+tag,user.id,'credential-'+tag,'session-'+tag,now,new Date(Date.now()+600000).toISOString());
   db.raw.prepare('INSERT INTO oauth_reauth_tickets(id,user_id,ticket_hash,created_at,expires_at)VALUES(?,?,?,?,?)').run('ticket-'+tag,user.id,'ticket-hash-'+tag,now,new Date(Date.now()+600000).toISOString());
 
@@ -162,13 +162,15 @@ async function proof(user){
  assert.equal((await call('/api/auth/delete/request-link',deleteRequest(user.token,{}))).status,202);
  const r=await call('/api/auth/delete/verify-link',deleteRequest(user.token,{token:mailLink}));assert.equal(r.status,200);return(await r.json()).proof;
 }
+// Build 44 Free plan: DELETE_NOW is accepted (202 PURGING, never completion); the minute cron erases in bounded steps.
+async function drain(id,e=env,max=10){for(let i=0;i<max&&(e.DB.rows?e.DB:db).rows('SELECT 1 FROM users WHERE id=?',id).length;i++)await purgeDueAccounts(e);}
 async function remove(user,extra={},override=env){const r=await call('/api/auth/delete',deleteRequest(user.token,{proof:await proof(user),confirm:'DELETE',method:'DELETE_NOW',...extra}),override);return {status:r.status,body:await r.json()};}
 const bystander=await register('bystander@example.test');await seed(bystander,'bystander');const before=footprint(bystander.id);
 for(const provider of ['password','google','apple']){
  const u=provider==='password'?await register('password@example.test'):await oauthLogin(provider,provider+'-sub',provider+'@example.test',provider==='apple'?'refresh':null);
  await seed(u,provider);const metadata=await info(u);assert.equal(metadata.requiresPassword,false);assert.equal(metadata.contractVersion,2);
  assert.equal((await call('/api/auth/delete',deleteRequest(u.token,{confirm:'DELETE',password:'password123'}))).status,401,'password/session alone never deletes');
- const r=await remove(u,{userId:bystander.id});assert.equal(r.status,200);assert.equal(r.body.accountStatus,'DELETED');assert.deepEqual(footprint(u.id),empty);assert.deepEqual(footprint(bystander.id),before);
+ const r=await remove(u,{userId:bystander.id});assert.equal(r.status,202);assert.equal(r.body.accountStatus,'PURGING');assert.equal(r.body.purgeComplete,false);assert.equal(footprint(u.id).user_data,1,'accepted is not erased');assert.equal(footprint(u.id).auth_sessions,0);await drain(u.id);assert.deepEqual(footprint(u.id),empty);assert.deepEqual(footprint(bystander.id),before);
 }
 // Exact linked provider proof, state/nonce checks, mismatch never links/creates/switches account.
 const owner=await oauthLogin('apple','legacy-apple','legacy@example.test',null);
@@ -176,7 +178,7 @@ db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN',email_verified_at=N
 assert.equal((await info(owner)).requiresPassword,false);const countBefore=db.rows('SELECT COUNT(*) AS n FROM users')[0].n;
 const mismatch=await appleReauth(owner.token,'wrong-sub','wrong@example.test','wrong-refresh');assert.equal(mismatch.location.searchParams.get('auth_error'),'OAUTH_REAUTH_MISMATCH');assert.equal(db.rows('SELECT COUNT(*) AS n FROM users')[0].n,countBefore);
 const good=await appleReauth(owner.token,'legacy-apple','legacy@example.test','legacy-refresh');const providerProof=new URLSearchParams(good.location.hash.slice(1)).get('proof');assert.ok(providerProof);assert.equal(good.location.searchParams.get('code'),null);
-const providerDelete=await call('/api/auth/delete',deleteRequest(owner.token,{confirm:'DELETE',proof:providerProof,method:'DELETE_NOW'}));assert.equal(providerDelete.status,200);assert.deepEqual(footprint(owner.id),empty);
+const providerDelete=await call('/api/auth/delete',deleteRequest(owner.token,{confirm:'DELETE',proof:providerProof,method:'DELETE_NOW'}));assert.equal(providerDelete.status,202);await drain(owner.id);assert.deepEqual(footprint(owner.id),empty);
 // Provider dependency preflight never knowingly schedules missing/corrupt/unreadable Apple material.
 for(const mode of ['missing','corrupt','rotated','config']){
  const u=await oauthLogin('apple','prerequisite-'+mode,mode+'-prerequisite@example.test','original-'+mode);await seed(u,'prerequisite-'+mode);const p=await proof(u);
@@ -189,18 +191,18 @@ for(const mode of ['missing','corrupt','rotated','config']){
  const reauth=await appleReauth(u.token,'prerequisite-'+mode,mode+'-prerequisite@example.test','fresh-'+mode);assert.ok(new URLSearchParams(reauth.location.hash.slice(1)).get('proof'));
  const scheduled=await call('/api/auth/delete',deleteRequest(u.token,{proof:p,confirm:'DELETE'}));assert.equal(scheduled.status,200);assert.equal(net.revokes.length,revokes,'no revoke at scheduling');assert.ok(db.rows('SELECT refresh_token_ciphertext FROM oauth_accounts WHERE user_id=?',u.id)[0].refresh_token_ciphertext);
  db.raw.prepare('UPDATE users SET purge_at=? WHERE id=?').run(new Date(Date.now()-1).toISOString(),u.id);
- if(mode==='config'){net.revokeMode='server';await purgeDueAccounts(env);assert.equal(db.rows('SELECT account_status,purge_error FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.ok(db.rows('SELECT purge_retry_at FROM users WHERE id=?',u.id)[0].purge_retry_at);net.revokeMode='ok';db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.id);}
- await purgeDueAccounts(env);assert.deepEqual(footprint(u.id),empty,'deadline revoke and complete cleanup');
+ if(mode==='config'){net.revokeMode='server';await purgeDueAccounts(env);assert.equal(db.rows('SELECT purge_error FROM users WHERE id=?',u.id)[0].purge_error,'ACCOUNT_PURGE_IN_PROGRESS','stored response deleted in its own bounded step');assert.equal(net.revokes.length,revokes,'no Apple revoke before upstream cleanup completes');await purgeDueAccounts(env);assert.equal(db.rows('SELECT account_status,purge_error FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.ok(db.rows('SELECT purge_retry_at FROM users WHERE id=?',u.id)[0].purge_retry_at);net.revokeMode='ok';db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(u.id);}
+ await drain(u.id);assert.deepEqual(footprint(u.id),empty,'deadline revoke and complete cleanup');
 }
 // External failure blocks final success and preserves personal rows in PURGING. Scoped OAuth recovery allows retry.
 for(const mode of ['network','server','invalid_client','invalid_grant']){
  const u=await oauthLogin('apple','failure-'+mode,mode+'@example.test','refresh-'+mode);await seed(u,'failure-'+mode);net.revokeMode=mode;
- const r=await remove(u);assert.notEqual(r.status,200);assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.equal(footprint(u.id).user_data,1);assert.equal(footprint(u.id).auth_sessions,0);
+ const r=await remove(u);assert.equal(r.status,202);await purgeDueAccounts(env);assert.ok(db.rows('SELECT purge_error FROM users WHERE id=?',u.id)[0].purge_error,'provider failure recorded');assert.equal(db.rows('SELECT account_status FROM users WHERE id=?',u.id)[0].account_status,'PURGING');assert.equal(footprint(u.id).user_data,1);assert.equal(footprint(u.id).auth_sessions,0);
  net.revokeMode='ok';const rec=await oauthLogin('apple','failure-'+mode,mode==='invalid_grant'?null:mode+'@example.test','refresh-'+mode);
  const scoped=await(await call('/api/auth/account/status',authed(rec.token))).json();assert.equal(scoped.user.id,u.id);assert.deepEqual(scoped.providers,['apple']);assert.equal(scoped.ownershipVerificationRequired,true);assert.equal((await call('/api/auth/account/purge-now',deleteRequest(rec.token,{confirm:'DELETE'}))).status,401,'provider login alone cannot finalize without new ticket proof');
  // helper returns recovery auth below; explicit purge retries same owner and leaves no data.
  assert.equal((await appleReauth(rec.token,'failure-'+mode,mode+'@example.test','refresh-'+mode)).location.searchParams.get('reauth'),'ok');
- const result=await call('/api/auth/account/purge-now',deleteRequest(rec.token,{confirm:'DELETE'}));assert.equal(result.status,200);assert.deepEqual(footprint(u.id),empty);
+ const result=await call('/api/auth/account/purge-now',deleteRequest(rec.token,{confirm:'DELETE'}));assert.equal(result.status,202);assert.equal((await result.json()).purgeComplete,false);await drain(u.id);assert.deepEqual(footprint(u.id),empty);
 }
 // Partial cleanup schema is rejected before state/external mutation. SQL exceptions rollback full cleanup.
 for(const table of ['sync_mutation_receipts','personal_restore_records','ai_import_consents']){

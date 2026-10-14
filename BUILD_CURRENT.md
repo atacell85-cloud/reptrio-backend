@@ -161,3 +161,23 @@ Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed
 - Guardian round 2 GEÇTİ (2026-10-14). Follow-up test-only: expired DELETE_NOW proof answers 401 before the 409 refusal (kills Guardian mutant N4). Known informational limit: digest lists ≤50 opaque ids across states (counts exact).
 - CI 2026-10-14: draft PR #14 Worker CI run 38540862540 PASS. Mobile counterpart PR #40 CI BLOCKED by GitHub billing (job not started).
 - 2026-10-14 alert recipient (config, takes effect only with the Build 44 deploy): `wrangler.jsonc` `vars.OPS_ALERT_EMAIL = support@reptrio.com` (existing Zoho mailbox address; existing ZeptoMail sender). Test delivery PASS: real digest code, isolated SQLite, ZeptoMail `Teslim edildi` + Zoho Inbox, client reference `ops-test-2026-10-14T11-24-47-031Z`. Production cron delivery NOT VERIFIED (post-deploy check, runbook §2b). No deploy/migration.
+
+## 2026-10-14 — Build 44 Free-plan purge (Option A, HIGH)
+
+User decision: stay on Workers Free; Option A approved (bounded durable purge). Runtime changes:
+- `DELETE_NOW` / recovery `purge-now` answer `202 {accountStatus:'PURGING', purgeComplete:false}` after the irreversible
+  transition (sessions revoked); the minute cron erases in bounded steps. User-visible: "Kalıcı silme başladı" instead of
+  an immediate "Hesabın silindi" (mobile counterpart).
+- Purge step = upstream cleanup (<= 40 OpenAI deletes, durable/idempotent ledger progress, `ACCOUNT_PURGE_IN_PROGRESS`)
+  OR final erase (Apple revoke + atomic batch). Final batch gated at the database (lease, no open ledger row, no stored
+  import id, daily write budget). New codes: `ACCOUNT_PURGE_IN_PROGRESS`, `ACCOUNT_PURGE_PLAN_CAPACITY`,
+  `ACCOUNT_PURGE_DAILY_BUDGET`. UNKNOWN/RUNNING fail-closed unchanged.
+- Import re-upload / concurrent publication no longer drops a stored `openai_response_id`: the old id moves into the
+  ledger (`RETURNED`, `import_job_id`) in the same atomic batch.
+- 15-minute maintenance: lifecycle expiry cleanup + overdue log moved here; daily 25,000 rows-written cap. Restore
+  cleanup queries driven by partial indexes (`CROSS JOIN`), roots/chunks limited to cleanup-eligible operations.
+- Digest: `D1_WRITE_BUDGET_HIGH`. Migration `0014_free_plan_capacity` (additive). Constants `worker/free-plan-limits.js`.
+Verification: full `npm test` PASS (+ new `test:free-plan`: 0–300 responses x email/Google/Apple, faults at every step,
+races, budgets, statistics-free plans); 17/18 targeted mutants killed (1 equivalent: plain JOIN gets the same plan with
+the partial index); cron rows-read projection 3% of Free at 1k–100k rows (was 68%–6,540%). CPU on Cloudflare NOT
+VERIFIED (runbook §4b). No production migration/deploy.

@@ -1,6 +1,7 @@
 // Build 44 release safety: daily operational digest for account deletion and AI upstream reconciliation.
 // Runs from its own daily trigger (OPS_DIGEST_CRON) so it never shares the purge or maintenance query budget. Reports counts and opaque work ids only: no emails, user ids or document content.
 import { sendTransactionalEmail } from './transactional-email.js';
+import { PURGE_DAILY_ROWS_WRITTEN, MAINTENANCE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
 
 export const OPS_DIGEST_CRON = '0 6 * * *';
 const HOUR = 3600000;
@@ -26,6 +27,10 @@ export async function collectOperationalFindings(env, now = Date.now()) {
   if (totals.UNKNOWN) findings.push({ code: 'AI_WORK_UNKNOWN', count: totals.UNKNOWN, workIds: byState('UNKNOWN').map(row => row.id), oldest: byState('UNKNOWN')[0]?.created_at ?? null });
   if (totals.RUNNING) findings.push({ code: 'AI_WORK_STUCK_RUNNING', count: totals.RUNNING, workIds: byState('RUNNING').map(row => row.id) });
   if (totals.RETURNED) findings.push({ code: 'AI_CLEANUP_FAILED', count: totals.RETURNED, workIds: byState('RETURNED').map(row => row.id) });
+  // Previous UTC day's background D1 write budgets (Workers Free: 100,000 rows written/day): warn from 80% of a cap.
+  const yesterday = new Date(now - 86400000).toISOString().slice(0, 10), caps = { purge: PURGE_DAILY_ROWS_WRITTEN, maintenance: MAINTENANCE_DAILY_ROWS_WRITTEN };
+  for (const row of (await env.DB.prepare('SELECT scope,rows_written FROM d1_write_budget WHERE day=?').bind(yesterday).all()).results || [])
+    if (Number(row.rows_written) >= 0.8 * caps[row.scope]) findings.push({ code: 'D1_WRITE_BUDGET_HIGH', scope: row.scope, day: yesterday, rowsWritten: Number(row.rows_written), cap: caps[row.scope] });
   return findings;
 }
 
