@@ -43,6 +43,8 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
     ['r400', () => new Response('{"error":{}}', { status: 400 }), 'RESOLVED', 'UPSTREAM_REJECTED_400'],
     ['r429', () => new Response('{"error":{}}', { status: 429 }), 'RESOLVED', 'UPSTREAM_REJECTED_429'],
     ['r408', () => new Response('{}', { status: 408 }), 'UNKNOWN', 'UPSTREAM_OUTCOME_UNKNOWN'],
+    ['r409', () => new Response('{}', { status: 409 }), 'UNKNOWN', 'UPSTREAM_OUTCOME_UNKNOWN'],
+    ['r413', () => new Response('{}', { status: 413 }), 'RESOLVED', 'UPSTREAM_REJECTED_413'],
     ['r500', () => new Response('{}', { status: 500 }), 'UNKNOWN', 'UPSTREAM_OUTCOME_UNKNOWN'],
     ['net', () => { throw new TypeError('network'); }, 'UNKNOWN', 'UPSTREAM_OUTCOME_UNKNOWN'],
     ['body', () => new Response('not-json', { status: 200 }), 'UNKNOWN', 'UPSTREAM_OUTCOME_UNKNOWN'],
@@ -68,6 +70,9 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
   upstream = () => new Response('{}', { status: 502 }); await upload(env, u, 'job-u');
   const [unknown] = work(db, u); assert.equal(unknown.state, 'UNKNOWN');
   const p = await proof(env, u);
+  // A bad proof is still 401 first, even with open upstream work.
+  const badProof = await call(env, '/api/auth/delete', u.sessionToken, { proof: 'X'.repeat(43), confirm: 'DELETE', method: 'DELETE_NOW' });
+  assert.equal(badProof.status, 401); assert.equal((await badProof.json()).code, 'ACCOUNT_DELETE_PROOF_INVALID');
   db.resetMetrics();
   const refused = await call(env, '/api/auth/delete', u.sessionToken, { proof: p, confirm: 'DELETE', method: 'DELETE_NOW' });
   assert.equal(refused.status, 409); assert.equal((await refused.json()).code, 'ACCOUNT_PURGE_UPSTREAM_UNRESOLVED');
@@ -142,6 +147,16 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
   const after = snapshot();
   assert.deepEqual(after.filter(r => r.id !== ids.UNKNOWN), before.filter(r => r.id !== ids.UNKNOWN), 'non-UNKNOWN rows unchanged by rejection or stale operator SQL');
   assert.deepEqual(after.find(r => r.id === ids.UNKNOWN), before.find(r => r.id === ids.UNKNOWN), 'rejection never closes UNKNOWN');
+}
+
+// 4d. Digest counts are exact beyond the 50 listed ids.
+{
+  const { db, env } = fresh();
+  const u = await account(env, 'many'), now = new Date().toISOString();
+  for (let i = 0; i < 73; i++) db.raw.prepare("INSERT INTO account_lifecycle_work(id,user_id,state,created_at,expires_at,last_error)VALUES(?,?,'UNKNOWN',?,?,'UPSTREAM_OUTCOME_UNKNOWN')").run('u' + String(i).padStart(3, '0'), u.user.id, now, now);
+  const digest = await runOperationalDigest({ ...env, OPS_ALERT_EMAIL: 'ops@example.test' }, Date.now());
+  const unknown = digest.findings.find(f => f.code === 'AI_WORK_UNKNOWN');
+  assert.equal(unknown.count, 73); assert.equal(unknown.workIds.length, 50);
 }
 
 // 5. Scheduling: the digest has its own trigger; the minute purge and 15-minute maintenance triggers are unchanged.

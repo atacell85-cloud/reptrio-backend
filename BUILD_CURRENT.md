@@ -150,9 +150,11 @@ Base `88b6a9caa3075c7c98acd750246df91fa6318456` (PR #13). PR #11 RESTORE2: not a
 
 Runtime changes (user-visible only in failure cases):
 - `DELETE_NOW` with open AI upstream work (RUNNING/UNKNOWN) → `409 ACCOUNT_PURGE_UPSTREAM_UNRESOLVED` before any state change (session/proof intact). Previously the account went PURGING, sessions were revoked and the client was told the state was preserved. Recovery-screen `POST /api/auth/account/purge-now` gets the same pre-check (previously PENDING_DELETION → unrecoverable PURGING while blocked). 30-day closure unchanged. Purge algorithm (`executePurge`/`purgeAccountData`/`purgeDueAccounts`) unchanged.
-- AI file import: definite OpenAI 4xx (≠408) closes the work row `RESOLVED/UPSTREAM_REJECTED_<status>`; 5xx/408/timeout/network/unreadable stay UNKNOWN. Work id = `X-Client-Request-Id` = `metadata.import_request_id`.
+- AI file import: definite OpenAI rejection (400/401/403/404/413/415/422/429 only) closes the work row `RESOLVED/UPSTREAM_REJECTED_<status>`; 5xx/408/timeout/network/unreadable stay UNKNOWN. Work id = `X-Client-Request-Id` = `metadata.import_request_id`.
 - New daily `0 6 * * *` trigger → read-only operational digest (`worker/ops-alerts.js`) emailed to `OPS_ALERT_EMAIL` via ZeptoMail; `observability.enabled`. Operator tool `scripts/ops/reconcile-ai-work.mjs` (prints guarded SQL only).
 - Runbook, production migration ledger repair and capacity table: `docs/BUILD_44_OPERATIONS_RUNBOOK.md`.
 
-Verification: `npm run test:ops-release-safety` PASS, 11/11 targeted mutants killed; updated in-flight race in `account-lifecycle-test` PASS; full `npm test` — see integration report. Production schema rehearsal (read-only export): plain `migrations apply` fails at 0005; ledger repair + 0008–0013 = fresh schema.
+Verification: `npm run test:ops-release-safety` PASS, 11/11 targeted mutants killed (+ Guardian follow-up: proof-precedence and call-site mutants killed); updated in-flight race in `account-lifecycle-test` PASS; full `npm test` — see integration report. Production schema rehearsal (read-only export): plain `migrations apply` fails at 0005; ledger repair + 0008–0013 = fresh schema.
 Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed) → **BLOCKED**; `OPS_ALERT_EMAIL` not set; no production migration/deploy performed.
+
+2026-10-14 Guardian follow-up (HIGH audit `DURDURULDU` → fixes): explicit OpenAI rejection allowlist; invalid/expired DELETE_NOW proof answers 401 before the 409 upstream refusal; digest reports exact per-state counts (ids capped at 50); runbook checks 0004–0007 indexes before ledger repair. Tests extended (409 stays UNKNOWN, 413 rejected, bad proof 401, 73 UNKNOWN counted exactly).

@@ -290,8 +290,8 @@ async function createOpenAIBackgroundResponse({ apiKey, config, input, requestId
   if (!upstream.ok) {
     const error = coded(mapOpenAIStatus(upstream.status));
     error.status = upstream.status;
-    // A definite client-error answer (not timeout) means OpenAI created no response object. 5xx stays UNKNOWN.
-    error.upstreamRejected = upstream.status >= 400 && upstream.status < 500 && upstream.status !== 408;
+    // Only these definite request rejections mean OpenAI created no response object; anything else stays UNKNOWN.
+    error.upstreamRejected = [400, 401, 403, 404, 413, 415, 422, 429].includes(upstream.status);
     throw error;
   }
   return { payload: await upstream.json(), upstream, attempts: 1 };

@@ -127,7 +127,8 @@ export async function handleLifecycleRequest(request,env,path){
  ]);
  if(results[0].meta.changes!==1){
   // Immediate purge cannot finish while an AI upstream outcome is open; refuse before any state change, proof unused.
-  if(method==='DELETE_NOW'&&await env.DB.prepare("SELECT 1 FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN') LIMIT 1").bind(user.id).first())return error('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED',409);
+  // A bad/expired/used proof stays 401 first; the upstream refusal applies only to an otherwise valid request.
+  if(method==='DELETE_NOW'&&await env.DB.prepare("SELECT 1 FROM account_lifecycle_credentials WHERE token_hash=? AND user_id=? AND session_hash=? AND purpose='DELETE_PROOF' AND used_at IS NULL AND expires_at>?").bind(proofHash,user.id,sessionHash,confirmedAt).first()&&await env.DB.prepare("SELECT 1 FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN') LIMIT 1").bind(user.id).first())return error('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED',409);
   return error('ACCOUNT_DELETE_PROOF_INVALID',401);
  }
  if(method==='DELETE_NOW')return await executePurge(env,user.id,true,null,true);

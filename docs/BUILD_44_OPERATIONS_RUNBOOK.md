@@ -35,7 +35,10 @@ Order (each step only on explicit release instruction):
 2. Re-run the read-only schema check; abort if any 0004–0007 object/column is missing:
    `SELECT name FROM pragma_table_info('oauth_accounts')` must include `refresh_token_ciphertext`,
    `refresh_token_updated_at`, `email_trusted`; tables `mobile_oauth_codes`, `oauth_reauth_tickets`,
-   `password_reset_tokens` must exist with the 0004/0005/0007 columns.
+   `password_reset_tokens` must exist with the 0004/0005/0007 columns, and the indexes `mobile_oauth_codes_hash_idx`,
+   `mobile_oauth_codes_user_idx`, `oauth_reauth_tickets_user_idx`, `password_reset_tokens_user_idx` must exist
+   (`SELECT name FROM sqlite_master WHERE type='index'`). If an index is missing, run that migration's
+   `CREATE INDEX IF NOT EXISTS` statement first (idempotent); never mark a migration applied with objects missing.
 3. Ledger repair (one statement, no schema change):
    `INSERT INTO d1_migrations(name) VALUES ('0004_mobile_oauth_codes.sql'),('0005_oauth_refresh_tokens.sql'),('0006_oauth_email_trusted.sql'),('0007_password_reset_tokens.sql');`
 4. `wrangler d1 migrations list a2-workout-pilot --remote` must show exactly `0008`–`0013` pending.
@@ -68,8 +71,8 @@ Facts (official `openai-node` 7.33.0 resource map): Responses support create / r
 **there is no list/search endpoint**. A response whose id was never received cannot be discovered by the Worker.
 
 Mechanism:
-- Definite upstream rejection (HTTP 4xx except 408) closes the work row as `RESOLVED` / `UPSTREAM_REJECTED_<status>`
-  (no response object was created). 5xx, 408, timeout, network error or unreadable 2xx body stay `UNKNOWN`.
+- Definite upstream rejection (HTTP 400/401/403/404/413/415/422/429 only) closes the work row as `RESOLVED` / `UPSTREAM_REJECTED_<status>`
+  (no response object was created). Any other status (incl. 408/409/5xx), timeout, network error or unreadable 2xx body stays `UNKNOWN`. A bad/expired proof is answered 401 before this check.
 - The work id is sent as `X-Client-Request-Id` and `metadata.import_request_id`, so the operator can locate it.
 - `UNKNOWN`/`RUNNING` blocks: `DELETE_NOW` and the recovery screen's `purge-now` are refused with `409 ACCOUNT_PURGE_UPSTREAM_UNRESOLVED` **before any state
   change** (session and proof stay valid; user may choose 30-day closure; a pending account stays recoverable instead of becoming an unrecoverable, unpurged `PURGING`). A due purge stays `PURGING` with
