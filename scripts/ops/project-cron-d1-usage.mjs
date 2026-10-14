@@ -3,6 +3,8 @@
 // statistics-free databases of growing size. The real Worker code runs against an in-memory SQLite with the repository
 // migrations; every statement is captured with its bound values, then replayed on a snapshot (VACUUM INTO) of the state
 // before it ran with `.scanstats on`. Rows visited by each plan loop approximate D1 "rows read" (rows scanned).
+// Steady state per size n: n RESOLVED ledger rows, n live receipts, n retained restore records, n EXPIRED + n/10
+// CANCELLED abandoned restores (100 freshly expired), n/10 credentials/tickets/sessions, n/100 accounts closed for 30 days.
 // Usage: node scripts/ops/project-cron-d1-usage.mjs [sizes, default 1000,10000,100000]
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -56,6 +58,12 @@ for (const n of sizes) {
   const root = db.raw.prepare("INSERT INTO personal_restore_roots(user_id,operation_id,root_id,root_kind,source_tuple,source_ordinal,portable_hash,counts_json) VALUES (?,?,0,'session','t',0,'h','{}')");
   const record = db.raw.prepare("INSERT INTO personal_restore_records(user_id,operation_id,root_id,item_ordinal,kind,record_key,ordinal,address_json,payload_json,source_tuple,portable_hash) VALUES (?,?,0,?,'set',?,?,'{}','{}',?,'h')");
   for (let o = 0; o < ops; o++) { const owner = 'u' + (o % users); op.run(owner, 'op' + o, past, now, now); root.run(owner, 'op' + o); for (let r = 0; r < n / ops; r++) record.run(owner, 'op' + o, r, 'k' + r, r, 't' + r); }
+  // Abandoned restores accumulate as protocol state: n EXPIRED + n/10 CANCELLED operations without payload. All but the
+  // 100 most recently expired were already marked cleaned by earlier maintenance runs (steady state).
+  const columns = db.rows('PRAGMA table_info(personal_restore_operations)').map(c => c.name), marked = columns.includes('cleanup_done');
+  const terminal = db.raw.prepare(`INSERT INTO personal_restore_operations(user_id,operation_id,purpose,source_namespace,archive_retry_hash,local_binding,data_schema_version,expected_chunks,expected_counts_json,base_revision,state,expires_at,created_at,updated_at${marked ? ',cleanup_done' : ''}) VALUES (?,?,'RESTORE','n','h','b',8,1,'{}',0,?,?,?,?${marked ? ',?' : ''})`);
+  const terminals = n + n / 10;
+  for (let i = 0; i < terminals; i++) terminal.run('u' + (i % users), 'term' + i, i < n ? 'EXPIRED' : 'CANCELLED', past, now, now, ...(marked ? [i < terminals - 100 ? 1 : 0] : []));
   const cred = db.raw.prepare("INSERT INTO account_lifecycle_credentials(id,user_id,token_hash,session_hash,purpose,created_at,expires_at) VALUES (?,?,?,?,'RECOVERY',?,?)");
   const ticket = db.raw.prepare('INSERT INTO oauth_reauth_tickets(id,user_id,ticket_hash,created_at,expires_at) VALUES (?,?,?,?,?)');
   const session = db.raw.prepare('INSERT INTO auth_sessions(id,user_id,token_hash,created_at,expires_at) VALUES (?,?,?,?,?)');

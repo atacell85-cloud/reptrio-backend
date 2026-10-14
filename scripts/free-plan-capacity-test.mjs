@@ -349,8 +349,9 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
   assert.ok(digest.findings.find(f => f.code === 'ACCOUNT_PURGE_OVERDUE')?.errors.includes('ACCOUNT_PURGE_PLAN_CAPACITY'), 'held account is alerted');
   assert.equal(digest.findings.find(f => f.code === 'ACCOUNT_PURGE_MANUAL_REQUIRED')?.count, 1, 'operator procedure requested explicitly');
   // Operator procedure (runbook §4c): guarded chunks charged to the shared purge budget, then the normal gated erase.
-  const bystanderBig = await owner(db, env, 'big-bystander'); const keepBystander = footprint(db, bystanderBig.user.id);
+  const bystanderBig = await owner(db, env, 'big-bystander');
   assert.throws(() => buildChunkSQL({ user: "x' OR 1=1 --", evidence: 'ticket-1' })); assert.throws(() => buildChunkSQL({ user: big.user.id, evidence: 'ticket-1', rows: 9000 }));
+  const keepBystander = () => db.rows('SELECT COUNT(*) n FROM workout_sets WHERE user_id=?', bystanderBig.user.id)[0].n;
   const opDay = '2099-01-01';
   const chunks = () => buildChunkSQL({ user: big.user.id, evidence: 'ticket-1', rows: 4000, day: opDay });
   let commands = 0;
@@ -364,11 +365,26 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
   }
   assert.equal(db.rows('SELECT COUNT(*) n FROM workout_sets WHERE user_id=?', big.user.id)[0].n, 0, 'bulk rows reduced');
   assert.ok(db.rows("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='purge'", opDay)[0].rows_written <= PURGE_DAILY_ROWS_WRITTEN, 'operator chunks never exceed the shared cap');
-  assert.equal(footprint(db, bystanderBig.user.id), keepBystander, 'operator chunks touch only the held account');
+  assert.equal(keepBystander(), 0, 'premise: bystander bulk rows are added below');
   db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(big.user.id);
   await drain(db, env, big, 3); assert.ok(!exists(db, big), 'normal gated final erase completes after the operator reduction');
+  // Chunks are inert for an account that is PURGING but not held (e.g. upstream cleanup still in progress).
+  const progressing = await owner(db, env, 'op-progressing', { stored: 3 }); db.raw.prepare("UPDATE users SET account_status='PURGING',purge_error='ACCOUNT_PURGE_IN_PROGRESS' WHERE id=?").run(progressing.user.id);
+  for (const id of [progressing.user.id, bystanderBig.user.id]) for (let i = 0; i < 5; i++) db.raw.prepare("INSERT INTO workout_sets(id,user_id,session_id,payload_json,created_at,updated_at) VALUES (?,?,'s','{}',?,?)").run(`${id}-set${i}`, id, now, now);
+  const keepProgressing = footprint(db, progressing.user.id);
+  for (const c of buildChunkSQL({ user: progressing.user.id, evidence: 'ticket-3', day: opDay })) assert.equal(db.raw.prepare(c.delete).run().changes, 0);
+  assert.equal(footprint(db, progressing.user.id), keepProgressing, 'never bulk-deletes before upstream cleanup is complete');
+  assert.equal(keepBystander(), 5);
   // Chunks are inert for an account that is not held.
   for (const c of buildChunkSQL({ user: bystanderBig.user.id, evidence: 'ticket-2', day: opDay })) assert.equal(db.raw.prepare(c.delete).run().changes, 0);
+  assert.equal(keepBystander(), 5, 'operator chunks touch only the held account');
+  // R2e: charges are bounded by the rows present (empty tables cost 0).
+  { const small = await owner(db, env, 'op-small'); for (let i = 0; i < 10; i++) db.raw.prepare("INSERT INTO workout_sets(id,user_id,session_id,payload_json,created_at,updated_at) VALUES (?,?,'s','{}',?,?)").run(`small-${i}`, small.user.id, now, now);
+    db.raw.prepare("UPDATE users SET account_status='PURGING',purge_error='ACCOUNT_PURGE_PLAN_CAPACITY' WHERE id=?").run(small.user.id);
+    const smallDay = '2099-02-02';
+    for (const c of buildChunkSQL({ user: small.user.id, evidence: 'ticket-4', day: smallDay })) { assert.equal(db.raw.prepare(c.charge).run().changes, 1); db.raw.prepare(c.delete).run(); }
+    assert.equal(db.rows("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='purge'", smallDay)[0].rows_written, 10 * 5, 'charged exactly the rows present x 5');
+    db.raw.prepare("UPDATE users SET account_status='ACTIVE',purge_error=NULL WHERE id=?").run(small.user.id); }
   // Spent purge budget: the next owner waits for the next UTC day instead of exceeding it.
   const day = now.slice(0, 10); db.raw.prepare("INSERT INTO d1_write_budget(day,scope,rows_written) VALUES (?,'purge',?) ON CONFLICT(day,scope) DO UPDATE SET rows_written=excluded.rows_written").run(day, PURGE_DAILY_ROWS_WRITTEN);
   const late = await owner(db, env, 'late'); due(db, late); await drain(db, env, late, 2);
@@ -376,6 +392,21 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
   assert.ok(exists(db, late)); assert.equal(lateRow.purge_error, 'ACCOUNT_PURGE_DAILY_BUDGET');
   assert.equal(lateRow.purge_retry_at.slice(11), '00:00:00.000Z', 'resumes at the next UTC day');
   assert.ok(db.rows("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='purge'", day)[0].rows_written <= PURGE_DAILY_ROWS_WRITTEN);
+  // Budget spent between the read-only pre-check and the final batch: the atomic charge refuses, nothing is erased.
+  { db.raw.prepare("UPDATE d1_write_budget SET rows_written=0 WHERE day=? AND scope='purge'").run(day);
+    const raced = await owner(db, env, 'budget-race'); due(db, raced);
+    db.setBeforeBatch(statements => { if (statements.some(st => st.sql.startsWith('DELETE FROM users'))) { db.setBeforeBatch(null); db.raw.prepare("UPDATE d1_write_budget SET rows_written=? WHERE day=? AND scope='purge'").run(PURGE_DAILY_ROWS_WRITTEN, day); } });
+    inv.d1 = 0; inv.fetch = 0; await purgeDueAccounts(env);
+    assert.ok(exists(db, raced), 'atomic budget charge refuses the erase'); assert.equal(db.rows('SELECT purge_error FROM users WHERE id=?', raced.user.id)[0].purge_error, 'ACCOUNT_PURGE_DAILY_BUDGET');
+    db.raw.prepare("UPDATE users SET account_status='ACTIVE',purge_at=NULL,purge_error=NULL WHERE id=?").run(raced.user.id);
+    db.raw.prepare("UPDATE d1_write_budget SET rows_written=? WHERE day=? AND scope='purge'").run(PURGE_DAILY_ROWS_WRITTEN, day); }
+  // Spent budget: no Apple revoke and no upstream effect before the next UTC day (round-2 findings 2 and 4).
+  { const revokesBefore = net.revokes, callsBefore = net.calls.length;
+    const appleLate = await owner(db, env, 'apple-late', { provider: 'apple' }); due(db, appleLate); await drain(db, env, appleLate, 2);
+    const storedLate = await owner(db, env, 'stored-late', { stored: 5 }); due(db, storedLate); await drain(db, env, storedLate, 2);
+    assert.equal(net.revokes, revokesBefore, 'no Apple revoke while the day budget is spent');
+    assert.equal(net.calls.length, callsBefore, 'no upstream deletes while the day budget is spent');
+    for (const u of [appleLate, storedLate]) { assert.ok(exists(db, u)); assert.equal(db.rows('SELECT purge_error FROM users WHERE id=?', u.user.id)[0].purge_error, 'ACCOUNT_PURGE_DAILY_BUDGET'); db.raw.prepare('UPDATE users SET account_status=?,purge_at=NULL WHERE id=?').run('ACTIVE', u.user.id); } }
   db.raw.prepare("UPDATE d1_write_budget SET rows_written=0 WHERE scope='purge'").run(); db.raw.prepare('UPDATE users SET purge_retry_at=NULL WHERE id=?').run(late.user.id);
   await drain(db, env, late, 3); assert.ok(!exists(db, late));
   // Maintenance: a large expired-receipt backlog is cleaned without ever charging beyond the cap.
@@ -398,6 +429,10 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
     for (let r = 0; r < 100; r++) db.raw.prepare("INSERT INTO personal_restore_records(user_id,operation_id,root_id,item_ordinal,kind,record_key,ordinal,address_json,payload_json,source_tuple,portable_hash) VALUES ('grow',?,0,?,'set',?,?,'{}','{}',?,'h')").run('op' + op, r, 'k' + r, r, 't' + r);
   }
   db.raw.exec('COMMIT');
+  // Abandoned restores (terminal, payload-free) must leave the cleanup index instead of being re-walked forever.
+  db.raw.exec('BEGIN');
+  for (let i = 0; i < 300; i++) db.raw.prepare("INSERT INTO personal_restore_operations(user_id,operation_id,purpose,source_namespace,archive_retry_hash,local_binding,data_schema_version,expected_chunks,expected_counts_json,base_revision,state,expires_at,created_at,updated_at) VALUES ('grow',?,'RESTORE','n','h','b',8,1,'{}',0,?,?,?,?)").run('term' + i, i % 3 ? 'EXPIRED' : 'CANCELLED', past, now, now);
+  db.raw.exec('COMMIT');
   assert.equal(db.rows("SELECT COUNT(*) n FROM sqlite_master WHERE name LIKE 'sqlite_stat%'")[0].n, 0, 'no planner statistics');
   const growing = ['import_jobs', 'sync_records', 'workout_sets', 'workout_sessions', 'user_data', 'programs', 'auth_sessions', 'oauth_accounts', 'account_lifecycle_work', 'account_lifecycle_credentials', 'oauth_reauth_tickets', 'personal_restore_records', 'personal_restore_roots', 'personal_restore_chunks', 'personal_restore_operations', 'sync_mutation_receipts', 'users'];
   const scans = [];
@@ -414,6 +449,13 @@ for (const mode of ['network', 'server', 'invalid_grant']) {
     }
   }
   assert.ok(!exists(db, victim), 'purge statements were exercised');
+  assert.equal(db.rows("SELECT COUNT(*) n FROM personal_restore_operations WHERE operation_id LIKE 'term%' AND cleanup_done=0")[0].n, 300 - 256, 'terminal payload-free operations marked (256 per run)');
+  // Every maintenance statement over the cleanup set must seek the partial cleanup index (bounded by the backlog).
+  db.resetMetrics(); { let t; await worker.scheduled({ cron: '*/15 * * * *' }, { ...env, DB: db }, { waitUntil(p) { t = p; } }); await t; }
+  const cleanupStatements = db.trace.filter(({ sql }) => sql.includes('cleanup_done=0'));
+  assert.ok(cleanupStatements.length >= 3);
+  for (const { sql } of cleanupStatements) assert.ok(db.raw.prepare('EXPLAIN QUERY PLAN ' + sql).all(...Array((sql.match(/\?/g) || []).length).fill('x')).some(r => /INDEX personal_restore_cleanup_due/.test(r.detail)), 'cleanup statement uses the partial index: ' + sql.slice(0, 90));
+  assert.equal(db.rows("SELECT COUNT(*) n FROM personal_restore_operations WHERE operation_id LIKE 'term%' AND cleanup_done=0")[0].n, 0, 'backlog fully marked');
   assert.deepEqual(scans, [], 'no full scan of a growing table in cron/digest/purge paths');
 }
 

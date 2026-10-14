@@ -140,28 +140,36 @@ Mechanism (Option A, approved 2026-10-14; purge algorithm and its single atomic 
 
 | Stored AI responses | Invocations (email/Google/Apple) | Max D1 statements / invocation | Max external fetches / invocation |
 |---|---|---|---|
-| 0 | 1 | 37 | 0 (Apple: 1) |
-| 1–30 | 2 | 37 | n |
-| 49–50 | 3 | 37 | 40 |
-| 100 | 4 | 37 | 40 |
-| 300 | 9 | 37 | 40 |
+| 0 | 1 | 38 | 0 (Apple: 1) |
+| 1–30 | 2 | 38 | n |
+| 49–50 | 3 | 38 | 40 |
+| 100 | 4 | 38 | 40 |
+| 300 | 9 | 38 | 40 |
 
-Request paths: `DELETE_NOW` <= 30 D1 statements. Throughput: one owner per minute; a 300-response account occupies the
+Request paths: `DELETE_NOW` <= 30 D1 statements. Purge invocations <= 38 D1 statements (upstream step: +1 budget charge;
+final: +1 read-only budget pre-check before the Apple revoke). Throughput: one owner per minute; a 300-response account occupies the
 purge for ~9 minutes.
 
 Daily D1 rows read by the background triggers on statistics-free databases (no `ANALYZE`; production has no
 `sqlite_stat*`), steady state, `node scripts/ops/project-cron-d1-usage.mjs` (real Worker statements replayed with SQLite
-`.scanstats`):
+`.scanstats`). Size n = n ledger rows, n receipts, n retained restore records, n EXPIRED + n/10 CANCELLED abandoned
+restores (100 freshly expired), n/10 credentials/tickets/sessions:
 
-| Work rows / receipts / restore records | Before (`cca37b8`) | After |
-|---|---|---|
-| 1,000 | 3,399,450 rows/day (68% of Free) | 152,074 (3.0%) |
-| 10,000 | 32,819,460 (656%) | 152,164 (3.0%) |
-| 100,000 | 327,019,560 (6,540%) | 153,064 (3.1%) |
+| n | Before (`cca37b8`) | Guardian round 2 code (`0e09c2f`) | After |
+|---|---|---|---|
+| 1,000 | 3,505,050 rows/day (70% of Free) | 1,208,074 (24%) | 200,074 (4.0%) |
+| 10,000 | 33,875,460 (678%) | 10,712,164 (214%) | 200,164 (4.0%) |
+| 100,000 | 337,579,560 (6,752%) | 105,753,064 (2,115%) | 201,064 (4.0%) |
+
+Background writes: every purge write (upstream steps and final erase) and every maintenance delete is charged to its
+daily cap (60,000 + 15,000); only the lifecycle expiry deletes (short-lived credentials/tickets created by user actions)
+are uncharged.
 
 Causes fixed by `0014`: index-less scans of `account_lifecycle_work` every minute; restore maintenance scanning all
 retained `personal_restore_records` without planner statistics (now driven from cleanup-eligible operations through
-partial indexes, `CROSS JOIN` fixes the loop order); owner deletes scanning `auth_sessions` (no `user_id` index).
+partial indexes, `CROSS JOIN` fixes the loop order); abandoned (EXPIRED/CANCELLED) restore operations re-walked forever
+(now marked `cleanup_done` once payload-free, 256 per run = 24,576/day, and leave the index); owner deletes scanning
+`auth_sessions` (no `user_id` index).
 Behaviour note: roots/chunks cleanup now targets cleanup-eligible operations only (as payload cleanup already did); a
 protected (committed/undo) restore's rare record-less roots stay until account erase instead of being deleted early.
 

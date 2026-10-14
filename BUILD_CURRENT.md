@@ -174,7 +174,7 @@ User decision: stay on Workers Free; Option A approved (bounded durable purge). 
   `ACCOUNT_PURGE_DAILY_BUDGET`. UNKNOWN/RUNNING fail-closed unchanged.
 - Import re-upload / concurrent publication no longer drops a stored `openai_response_id`: the old id moves into the
   ledger (`RETURNED`, `import_job_id`) in the same atomic batch.
-- 15-minute maintenance: lifecycle expiry cleanup + overdue log moved here; daily 25,000 rows-written cap. Restore
+- 15-minute maintenance: lifecycle expiry cleanup + overdue log moved here; daily rows-written cap (15,000 since the round-1 decision). Restore
   cleanup queries driven by partial indexes (`CROSS JOIN`), roots/chunks limited to cleanup-eligible operations.
 - Digest: `D1_WRITE_BUDGET_HIGH`. Migration `0014_free_plan_capacity` (additive). Constants `worker/free-plan-limits.js`.
 Verification: full `npm test` PASS (+ new `test:free-plan`: 0–300 responses x email/Google/Apple, faults at every step,
@@ -189,3 +189,11 @@ VERIFIED (runbook §4b). No production migration/deploy.
   same budget), then the normal gated erase; mobile copy states it. (3) capacity estimate before Apple revoke.
   (4) alias-aware scan check. (5) tests for the DB-level open-ledger gate, purge-now UNKNOWN race, fail-closed without
   0014 (incl. partial). (6) mobile PURGING copy per state. Maintenance budget charge failures are logged.
+- 2026-10-14 Guardian round 2 DURDURULDU → fixes: (1) BLOCKING — EXPIRED/CANCELLED restore operations were never
+  removed from the cleanup index, so 15-minute maintenance re-walked every abandoned restore (Guardian: 10,000 → 195% of
+  the Free daily read quota) and the projection did not seed them (false 3% claim). 0014 adds
+  `personal_restore_operations.cleanup_done`; payload-free terminal operations are marked (256/run) and leave the partial
+  index (state/protocol unchanged); the page loop stops at the first empty page. Projection now seeds n EXPIRED + n/10
+  CANCELLED: 4.0% of Free at 1k/10k/100k (round-2 code: 24%/214%/2,115%; original: 70%/678%/6,752%). (2) upstream-step
+  writes charged to the purge budget; (3) operator charges bounded by present rows; (4) budget pre-check before the
+  Apple revoke; (5) operator hold-guard test; records corrected. Purge invocations ≤ 38 D1 statements.

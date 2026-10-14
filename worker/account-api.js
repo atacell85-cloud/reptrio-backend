@@ -386,6 +386,13 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
  const held="EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>?)",now=new Date().toISOString();
  const pending=await env.DB.prepare("SELECT (SELECT COUNT(*) FROM account_lifecycle_work WHERE user_id=? AND state IN ('RUNNING','UNKNOWN')) AS open,(SELECT COUNT(*) FROM account_lifecycle_work WHERE user_id=? AND state='RETURNED') AS returned,(SELECT COUNT(*) FROM import_jobs WHERE user_id=? AND openai_response_id IS NOT NULL) AS stored").bind(userId,userId,userId).first();
  if(Number(pending?.open))throw Object.assign(coded('ACCOUNT_PURGE_UPSTREAM_UNRESOLVED'),{status:503});
+ if(Number(pending?.returned)||Number(pending?.stored)){
+  // Upstream-step writes (ledger inserts, import id clears, RESOLVED updates, users row) are charged to today's purge
+  // budget too (worst case x5), so background writes never exceed the daily cap.
+  const cost=(2*Number(pending.stored||0)+PURGE_UPSTREAM_DELETES+2)*5,today=now.slice(0,10);
+  const charged=await env.DB.prepare("INSERT INTO d1_write_budget(day,scope,rows_written) SELECT ?,'purge',? WHERE ?<=? ON CONFLICT(day,scope) DO UPDATE SET rows_written=d1_write_budget.rows_written+excluded.rows_written WHERE d1_write_budget.rows_written+excluded.rows_written<=?").bind(today,cost,cost,PURGE_DAILY_ROWS_WRITTEN,PURGE_DAILY_ROWS_WRITTEN).run();
+  if(charged.meta.changes!==1)throw Object.assign(coded('ACCOUNT_PURGE_DAILY_BUDGET'),{status:503});
+ }
  if(Number(pending?.stored)){
   // Move stored import responses into the durable cleanup ledger (one RETURNED row per distinct id) before any upstream
   // effect; the id leaves import_jobs only in the same atomic batch that records it in the ledger. Dedupe only against
@@ -418,6 +425,9 @@ export async function purgeAccountData(env,userId,{preflight=false,lease}={}){
  const owned=[...tables,'users'];
  const estimate=Number((await env.DB.prepare(`SELECT ${owned.map(table=>`(SELECT COUNT(*) FROM ${table} WHERE ${table==='users'?'id':'user_id'}=?)*(1+(SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='${table}'))`).join('+')} AS rows_written`).bind(...owned.map(()=>userId)).first())?.rows_written||0);
  if(estimate>PURGE_DAILY_ROWS_WRITTEN)throw Object.assign(coded('ACCOUNT_PURGE_PLAN_CAPACITY'),{status:503,estimate});
+ // Read-only budget pre-check, also before the Apple revoke (the atomic charge in the final batch stays authoritative).
+ const spent=Number((await env.DB.prepare("SELECT rows_written FROM d1_write_budget WHERE day=? AND scope='purge'").bind(new Date().toISOString().slice(0,10)).first())?.rows_written||0);
+ if(spent+estimate>PURGE_DAILY_ROWS_WRITTEN)throw Object.assign(coded('ACCOUNT_PURGE_DAILY_BUDGET'),{status:503});
  const config=oauthConfig(env,'apple');
  for(const row of context.apple){
   if(!config.ready)throw Object.assign(coded('APPLE_REVOKE_UNAVAILABLE'),{status:503});

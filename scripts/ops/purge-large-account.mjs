@@ -2,7 +2,7 @@
 // exceed the Workers Free daily purge write cap) in bounded chunks. Prints guarded `wrangler d1 execute` commands; it
 // never executes anything.
 // Every chunk is two commands, run in order:
-//   1. charge: reserves the chunk's worst-case rows written (rows x 5: <= 4 indexes + the row) in TODAY's shared purge
+//   1. charge: reserves the chunk's worst-case rows written (min(rows, present) x 5: <= 4 indexes + the row) in TODAY's shared purge
 //      budget (d1_write_budget scope 'purge', cap 60,000). Expect "changes": 1. If 0, the day's budget is spent: stop
 //      and continue after 00:00 UTC. A charge without its delete only over-counts (safe).
 //   2. delete: at most --rows owner rows of one bulk table, only while the account is still PURGING with that hold
@@ -26,10 +26,12 @@ export function buildChunkSQL({ user, evidence, rows = 4000, day = new Date().to
   if (!DAY.test(String(day))) throw new Error('--day must be YYYY-MM-DD (UTC)');
   const n = Number(rows);
   if (!Number.isInteger(n) || n < 1 || n > 5000) throw new Error('--rows must be an integer 1..5000');
-  const cost = n * WEIGHT, cap = PURGE_DAILY_ROWS_WRITTEN;
-  const charge = `INSERT INTO d1_write_budget(day,scope,rows_written) SELECT '${day}','purge',${cost} WHERE ${cost}<=${cap} ON CONFLICT(day,scope) DO UPDATE SET rows_written=d1_write_budget.rows_written+excluded.rows_written WHERE d1_write_budget.rows_written+excluded.rows_written<=${cap};`;
+  const cap = PURGE_DAILY_ROWS_WRITTEN;
   const held = `EXISTS(SELECT 1 FROM users WHERE id='${user}' AND account_status='PURGING' AND deleted_at IS NULL AND purge_error='ACCOUNT_PURGE_PLAN_CAPACITY')`;
-  return BULK_TABLES.map(table => ({ table, charge, delete: `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE user_id='${user}' LIMIT ${n}) AND ${held};` }));
+  // Charge only the rows this chunk can actually delete (an empty table costs 0), x WEIGHT.
+  const cost = table => `(SELECT MIN(${n},COUNT(*))*${WEIGHT} FROM ${table} WHERE user_id='${user}')`;
+  const charge = table => `INSERT INTO d1_write_budget(day,scope,rows_written) SELECT '${day}','purge',${cost(table)} WHERE ${cost(table)}<=${cap} ON CONFLICT(day,scope) DO UPDATE SET rows_written=d1_write_budget.rows_written+excluded.rows_written WHERE d1_write_budget.rows_written+excluded.rows_written<=${cap};`;
+  return BULK_TABLES.map(table => ({ table, charge: charge(table), delete: `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE user_id='${user}' LIMIT ${n}) AND ${held};` }));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

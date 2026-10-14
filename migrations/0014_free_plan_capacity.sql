@@ -15,11 +15,16 @@ CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS lifecycle_credentials_expiry ON account_lifecycle_credentials(expires_at);
 CREATE INDEX IF NOT EXISTS oauth_reauth_tickets_expiry ON oauth_reauth_tickets(expires_at);
 
+-- Terminal (EXPIRED/CANCELLED) restore operations stay as protocol state, but once their payload rows are gone the
+-- 15-minute maintenance marks them cleaned so they leave the cleanup index (otherwise every abandoned restore would be
+-- re-walked every 15 minutes forever).
+ALTER TABLE personal_restore_operations ADD COLUMN cleanup_done INTEGER NOT NULL DEFAULT 0;
+
 -- Restore maintenance drives from expired operations (outer loop, forced by CROSS JOIN) through these partial indexes,
 -- independent of planner statistics; (expires_at,user_id,operation_id) also yields the delete order without a sort.
 -- Each WHERE clause matches the maintenance query's term exactly so SQLite can use the partial index.
 CREATE INDEX IF NOT EXISTS personal_restore_cleanup_due ON personal_restore_operations(expires_at,user_id,operation_id)
-  WHERE state NOT IN ('COMMITTED','UNDONE','UNDO_READY','UNDO_PREVIEWING');
+  WHERE state NOT IN ('COMMITTED','UNDONE','UNDO_READY','UNDO_PREVIEWING') AND cleanup_done=0;
 CREATE INDEX IF NOT EXISTS personal_restore_sync_due ON personal_restore_operations(expires_at,user_id,operation_id)
   WHERE purpose='SYNC';
 
