@@ -159,3 +159,4 @@ Release gates: Workers Paid UNVERIFIED (user decision: precondition, not assumed
 
 2026-10-14 Guardian follow-up (HIGH audit `DURDURULDU` → fixes): explicit OpenAI rejection allowlist; invalid/expired DELETE_NOW proof answers 401 before the 409 upstream refusal; digest reports exact per-state counts (ids capped at 50); runbook checks 0004–0007 indexes before ledger repair. Tests extended (409 stays UNKNOWN, 413 rejected, bad proof 401, 73 UNKNOWN counted exactly).
 - Guardian round 2 GEÇTİ (2026-10-14). Follow-up test-only: expired DELETE_NOW proof answers 401 before the 409 refusal (kills Guardian mutant N4). Known informational limit: digest lists ≤50 opaque ids across states (counts exact).
+- CI 2026-10-14: draft PR #14 Worker CI run 38540862540 PASS. Mobile counterpart PR #40 CI BLOCKED by GitHub billing (job not started).
