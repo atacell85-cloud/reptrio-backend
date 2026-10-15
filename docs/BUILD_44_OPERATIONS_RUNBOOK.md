@@ -8,7 +8,7 @@ user's explicit release instruction. Evidence date: 2026-10-14.
 | # | Precondition | How it is verified | State 2026-10-14 |
 |---|---|---|---|
 | P1 | Purge fits the **actual** plan (Workers Free, user decision 2026-10-14: no Paid subscription) | §4: <= 40 D1 statements and <= 40 external fetches per invocation, daily write budgets, statistics-free plans (`npm run test:free-plan`) | **Locally verified** (real Worker code + SQLite with Free limits enforced) |
-| P2 | Cron CPU <= 10 ms (Workers Free) on real Cloudflare | §4b procedure after deploy | **NOT VERIFIED** (cannot be measured locally) |
+| P2 | Cron CPU <= 10 ms (Workers Free) on real Cloudflare | §5b isolated test (2026-10-15) + §4b after deploy | **MEASURED, limit exceeded without termination**: 32/32 invocations `ok`, 0 `exceededCpu`; idle purge <= 9 ms and digest <= 6 ms within the limit, but maintenance 10–21 ms and purge work steps 12–26 ms are above 10 ms (§5b). Not a clean PASS; release decision by the user |
 | P3 | `OPS_ALERT_EMAIL` set (Worker var) to an inbox someone reads | `wrangler.jsonc` `vars` → applied by the Build 44 deploy | **Configured** `support@reptrio.com`; delivery test PASS (§2a); production cron delivery pending (§2b) |
 | P4 | Production D1 backed up (Time Travel bookmark recorded) | `wrangler d1 time-travel info a2-workout-pilot` | Not done (take it immediately before step 3; Time Travel available, see §5) |
 | P5 | Integrated HIGH Guardian `GEÇTİ` on both integration branches | Guardian report | See mobile `docs/tasks/BUILD_44_INTEGRATION.md` |
@@ -269,7 +269,8 @@ step, 45 stored ids deleted as 40 + 5, Apple account signs a real client-secret 
 Cost: Workers Free + D1 Free, no billing change. Quotas are account-wide: seed 2,635 rows (~6k rows written incl.
 indexes) + the test's own purge/maintenance writes (~10k) count toward the shared 100,000/day; run it on a quiet day.
 
-Steps (each needs explicit approval; run **before** the production deploy, then delete everything):
+Steps (each needs explicit approval; run **before** the production deploy, then delete everything). `entry.mjs` maps the
+test crons `*/5` and `*/10` onto the production maintenance and digest names so all three triggers run within minutes:
 1. `node scripts/ops/cputest/build-seed.mjs` (local; writes `.tmp-cputest/`, gitignored).
 2. `npx wrangler d1 create reptrio-cputest` → put the id into the config's `database_id`.
 3. `npx wrangler d1 migrations apply reptrio-cputest --remote -c scripts/ops/cputest/wrangler.cputest.jsonc`.
@@ -285,3 +286,31 @@ Steps (each needs explicit approval; run **before** the production deploy, then 
    3 test crons + 3 production crons > 5 makes the production deploy fail.
 If the purge trigger exceeds the limit: lower `PURGE_UPSTREAM_DELETES` / the final-erase step and repeat (code change,
 own Guardian scope).
+
+### 5b. Isolated CPU test result (2026-10-15 06:40–07:13 UTC; executed with explicit approval, resources deleted)
+
+Worker `a2-workout-cputest` (version `bd6e1ff2`, no workers.dev URL) + D1 `reptrio-cputest`, fake accounts only,
+throwaway Apple key, `OPENAI_API_KEY=sk-cputest-invalid` (OpenAI answers 401). Production untouched (version
+`2b15b60d`, 86 users, ledger 4 rows, 7 rows written that day before and after). Source: `wrangler tail` per invocation
+(`cpuTime`, `outcome`), cross-checked with GraphQL `workersInvocationsAdaptive` (31 invocations, all `success`,
+p50 7.2 ms, p90 18.5 ms, p99 26.6 ms). Summary: `node scripts/ops/cputest/analyze-tail.mjs <tail.jsonl>`.
+
+| Trigger / step | Invocations | CPU (ms) | Outcome | vs 10 ms |
+|---|---|---|---|---|
+| Purge, idle (nothing due; 4 D1 statements) | 18 | min 3, median 4, p90 8, max 9 | all `ok` | within, margin 10–70% |
+| Purge, final erase (email account, 300 sync records, one atomic batch) and Apple revoke + final erase (ES256 client-secret JWT, sealed token decrypt, Apple answered 200, account erased) | 2 | 12 and 17 (logs do not say which is which) | `ok` | **over** |
+| Purge, upstream step (45 ids adopted into the ledger, budget charge, 1 DELETE answered 401, then retries) | 3 | 26, 18, 26 | `ok` | **over** |
+| Purge, upstream step with 40 confirmed deletes | 0 | NOT MEASURED (needs a real OpenAI key; 40 fetches add to the 18–26 ms above) | — | NOT MEASURED |
+| Maintenance, first run with backlog (1,000 receipts, 1,000 restore records cleaned) | 1 | 21 | `ok` | **over** |
+| Maintenance, idle (14 D1 statements) | 4 | 14, 12, 10, 10 | `ok` | **at / over** |
+| Daily digest (5 statements; no e-mail routed) | 3 | 3, 5, 6 | `ok` | within |
+
+Not a PASS: no invocation was terminated, but Cloudflare only promises "built-in flexibility" for infrequent overruns
+and terminates a Worker that hits the limit "consistently". The idle cost tracks the D1 statement count (about 2–3 ms
+fixed plus ~0.5 ms per statement), so maintenance (96 runs/day) sits at the limit every run; purge work steps run only
+while an account is being deleted (minutes per account). If the platform does cut a run: purge progress is durable
+and the final erase is one atomic batch (no partial erase), the account just takes longer (`ACCOUNT_PURGE_OVERDUE`);
+maintenance deletes are idempotent and resume next run. Mitigation options (code change, own Guardian scope): fewer
+statements per maintenance run (e.g. skip idle sub-steps, alternate them between runs), smaller purge steps.
+D1 usage of the test: 13,828 rows written (seed 10,918), 30,544 read; account total that day stayed < 14,000 / 100,000.
+Cleanup verified: `a2-workout-cputest` and `reptrio-cputest` deleted; account crons 0 / 5 (production needs 3).

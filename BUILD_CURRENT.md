@@ -214,3 +214,6 @@ VERIFIED (runbook §4b). No production migration/deploy.
   account gets the intended `SYNC_CLIENT_UPGRADE_REQUIRED`.
 - Isolated Cloudflare CPU test prepared, not deployed: `scripts/ops/cputest/` (§5a). No migration, deploy, data change,
   merge or TestFlight.
+- 2026-10-15 isolated Cloudflare CPU test executed (approved; test resources deleted): 32/32 invocations `ok`, 0
+  `exceededCpu`; idle purge <= 9 ms, digest <= 6 ms; maintenance 10–21 ms and purge work steps 12–26 ms exceed the
+  nominal 10 ms (runbook §5b). The 40-delete upstream step is NOT MEASURED (needs a real OpenAI key). Not a clean PASS.
