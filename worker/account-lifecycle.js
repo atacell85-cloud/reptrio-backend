@@ -24,10 +24,16 @@ export async function activeAccountDB(db,userId){
  };
  const gate={accountLifecycleGuarded:true,accountLifecycleUserId:userId,prepare,batch:items=>db.batch(items)};wrapped.add(gate);origins.set(gate,db);if(!userId)known.set(key,gate);return gate;
 }
-export async function lifecycleReady(db){
- const cols=(await db.prepare('PRAGMA table_info(users)').all()).results||[];
+// One D1 round trip (Workers Free CPU is dominated by the number of D1 calls): the users columns and the lifecycle
+// tables' SQL in a single snapshot. The checks are unchanged; any missing column/table fails closed.
+const READY_SQL="SELECT (SELECT json_group_array(name) FROM pragma_table_info('users')) AS cols,(SELECT json_group_array(json_object('name',name,'sql',sql)) FROM sqlite_master WHERE type='table' AND name IN ('account_lifecycle_work','account_lifecycle_credentials','oauth_reauth_tickets','d1_write_budget')) AS tables";
+export async function lifecycleReady(db){lifecycleReadyCheck(await db.prepare(READY_SQL).first());}
+const MINUTE_PROBE_SQL=`SELECT (SELECT id FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=? AND (purge_retry_at IS NULL OR purge_retry_at<=?) AND (purge_lease_until IS NULL OR purge_lease_until<=?) ORDER BY purge_at LIMIT 1) AS due_id,
+ EXISTS(SELECT 1 FROM account_lifecycle_work WHERE state='RUNNING' AND expires_at<=?) AS stale,${READY_SQL.slice('SELECT '.length)}`;
+export function lifecycleReadyCheck(row){
+ const cols=JSON.parse(row?.cols||'[]').map(name=>({name}));
  const required=['account_status','credential_origin','email_verified_at','deletion_requested_at','purge_at','purge_lease','purge_lease_until','purge_attempts','purge_retry_at','purge_error'];
- const schema=(await db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name IN ('account_lifecycle_work','account_lifecycle_credentials','oauth_reauth_tickets','d1_write_budget')").all()).results||[];
+ const schema=JSON.parse(row?.tables||'[]');
  const w=schema.find(row=>row.name==='account_lifecycle_work'),budget=schema.find(row=>row.name==='d1_write_budget');
  // Migration 0014 (Free-plan cleanup ledger + daily write budget) is required: fail closed without it.
  if(!budget||!['day','scope','rows_written','lease'].every(c=>new RegExp(`\\b${c}\\b`).test(budget.sql)))throw Object.assign(new Error('ACCOUNT_LIFECYCLE_UNAVAILABLE'),{code:'ACCOUNT_LIFECYCLE_UNAVAILABLE',status:503});
@@ -161,30 +167,40 @@ async function beginImmediatePurge(env,userId,recoveryCredentialId){
 // report before the final erase batch deleted the users row.
 export async function executePurge(env,userId){
  const stamp=new Date(),now=stamp.toISOString(),lease=randomToken(24);
- const acquired=await env.DB.prepare(`UPDATE users SET account_status='PURGING',purge_lease=?,purge_lease_until=?,purge_attempts=purge_attempts+1 WHERE id=? AND deleted_at IS NULL AND ((account_status='PENDING_DELETION' AND purge_at<=?) OR (account_status='PURGING' AND (purge_lease_until IS NULL OR purge_lease_until<=?))) AND (purge_retry_at IS NULL OR purge_retry_at<=?)`).bind(lease,new Date(stamp.getTime()+PURGE_LEASE_MS).toISOString(),userId,now,now,now).run();
- if(acquired.meta.changes!==1)return {ok:false,code:'ACCOUNT_PURGE_BUSY'};
- try{await purgeAccountData(env,userId,{lease});return {ok:true,accountStatus:'DELETED'};}catch(cause){
+ const acquire=env.DB.prepare(`UPDATE users SET account_status='PURGING',purge_lease=?,purge_lease_until=?,purge_attempts=purge_attempts+1 WHERE id=? AND deleted_at IS NULL AND ((account_status='PENDING_DELETION' AND purge_at<=?) OR (account_status='PURGING' AND (purge_lease_until IS NULL OR purge_lease_until<=?))) AND (purge_retry_at IS NULL OR purge_retry_at<=?)`).bind(lease,new Date(stamp.getTime()+PURGE_LEASE_MS).toISOString(),userId,now,now,now);
+ // The lease is acquired as the first statement of purgeAccountData's snapshot batch (one D1 round trip); nothing else
+ // in this invocation runs unless it changed exactly this row.
+ try{await purgeAccountData(env,userId,{lease,acquire});return {ok:true,accountStatus:'DELETED'};}catch(cause){
+  if(cause.code==='ACCOUNT_PURGE_BUSY'&&cause.notAcquired)return {ok:false,code:'ACCOUNT_PURGE_BUSY'};
   const code=cause.code||'ACCOUNT_PURGE_FAILED';
+  // An upstream step hands back its (not yet run) confirmed-deletes statement: it is recorded in ONE atomic batch with
+  // the users-row update below (one D1 round trip; Workers Free cron CPU), so progress is never lost or half-written.
+  const record=cause.record?[cause.record]:[];
   if(code==='ACCOUNT_PURGE_IN_PROGRESS'){
-   await env.DB.prepare("UPDATE users SET purge_lease_until=NULL,purge_retry_at=NULL,purge_attempts=0,purge_error='ACCOUNT_PURGE_IN_PROGRESS' WHERE id=? AND purge_lease=? AND account_status='PURGING'").bind(userId,lease).run();
+   await env.DB.batch([...record,env.DB.prepare("UPDATE users SET purge_lease_until=NULL,purge_retry_at=NULL,purge_attempts=0,purge_error='ACCOUNT_PURGE_IN_PROGRESS' WHERE id=? AND purge_lease=? AND account_status='PURGING'").bind(userId,lease)]);
    console.log(JSON.stringify({event:'account_purge_progress',deleted:cause.progress||0}));return {ok:false,code};
   }
-  const owner=await env.DB.prepare('SELECT purge_attempts FROM users WHERE id=? AND purge_lease=?').bind(userId,lease).first();
+  // purge_attempts as read after this invocation's acquire (upstream failures carry it; otherwise it is read here).
+  const attempts=Number.isFinite(cause.attempts)?cause.attempts:(await env.DB.prepare('SELECT purge_attempts FROM users WHERE id=? AND purge_lease=?').bind(userId,lease).first())?.purge_attempts;
   // A spent daily write budget resumes at the next UTC day; other failures back off exponentially (max 1 day).
-  const retryAt=code==='ACCOUNT_PURGE_DAILY_BUDGET'?new Date(Date.UTC(stamp.getUTCFullYear(),stamp.getUTCMonth(),stamp.getUTCDate()+1)).getTime():Date.now()+Math.min(86400000,60000*2**Math.min(10,owner?.purge_attempts||1));
-  await env.DB.prepare(`UPDATE users SET purge_lease_until=NULL,purge_retry_at=?,purge_error=? WHERE id=? AND purge_lease=? AND account_status='PURGING'`).bind(new Date(retryAt).toISOString(),code,userId,lease).run();
-  console.warn(JSON.stringify({event:'account_purge_retry',code,attempt:owner?.purge_attempts||1}));return {ok:false,code};
+  const retryAt=code==='ACCOUNT_PURGE_DAILY_BUDGET'?new Date(Date.UTC(stamp.getUTCFullYear(),stamp.getUTCMonth(),stamp.getUTCDate()+1)).getTime():Date.now()+Math.min(86400000,60000*2**Math.min(10,attempts||1));
+  await env.DB.batch([...record,env.DB.prepare(`UPDATE users SET purge_lease_until=NULL,purge_retry_at=?,purge_error=? WHERE id=? AND purge_lease=? AND account_status='PURGING'`).bind(new Date(retryAt).toISOString(),code,userId,lease)]);
+  console.warn(JSON.stringify({event:'account_purge_retry',code,attempt:attempts||1}));return {ok:false,code};
  }
 }
 // The lease outlives the bounded upstream step (PURGE_UPSTREAM_TIME_MS + one provider timeout).
 const PURGE_LEASE_MS=120000;
 export async function purgeDueAccounts(env){
  try{
- await lifecycleReady(env.DB);const now=new Date().toISOString();
- await env.DB.prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='WORKER_INTERRUPTED' WHERE state='RUNNING' AND expires_at<=?").bind(now).run();
- // One owner per invocation leaves room for complete guarded cleanup on the smallest D1 allowance.
- const rows=(await env.DB.prepare(`SELECT id FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=? AND (purge_retry_at IS NULL OR purge_retry_at<=?) AND (purge_lease_until IS NULL OR purge_lease_until<=?) ORDER BY purge_at LIMIT 1`).bind(now,now,now).all()).results||[];
- for(const row of rows)await executePurge(env,row.id);
+ const now=new Date().toISOString();
+ // Workers Free cron CPU (10 ms): one read decides the minute. Readiness snapshot, the next due owner (one owner per
+ // invocation leaves room for complete guarded cleanup on the smallest D1 allowance) and whether interrupted work needs
+ // the UNKNOWN sweep. Nothing to do = this single D1 call. Readiness is still checked before any write.
+ const probe=await env.DB.prepare(MINUTE_PROBE_SQL).bind(now,now,now,now).first();
+ if(!probe?.due_id&&!Number(probe?.stale))return;
+ lifecycleReadyCheck(probe);
+ if(Number(probe.stale))await env.DB.prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='WORKER_INTERRUPTED' WHERE state='RUNNING' AND expires_at<=?").bind(now).run();
+ if(probe.due_id)await executePurge(env,probe.due_id);
  }catch(cause){console.warn(JSON.stringify({event:'account_purge_unavailable',code:cause.code||'DATABASE_UNAVAILABLE'}));}
 }
 // 15-minute maintenance invocation (not the minute purge budget): expired credentials/tickets and overdue logging.

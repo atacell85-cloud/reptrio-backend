@@ -1,8 +1,9 @@
 import { purgeDueAccounts, lifecycleMaintenance, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
 import { runOperationalDigest, OPS_DIGEST_CRON } from './ops-alerts.js';
 import { MAINTENANCE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
-import { cleanupPersonalOperations } from './personal-restore-api.js';
-import { cleanupMutationReceipts } from './record-sync-transport.js';
+import { cleanupPersonalOperations, PERSONAL_CLEANUP_RECORDS_FROM, PERSONAL_CLEANUP_RECORDS_PAGE, PERSONAL_CLEANUP_RECORD_PAGES, PERSONAL_CLEANUP_AFTER_RECORDS } from './personal-restore-api.js';
+import { cleanupMutationReceipts, RECEIPT_CLEANUP_SQL } from './record-sync-transport.js';
+import { STORAGE_TABLE_NAMES, personalRestoreSchemaStatus, recordSchemaStatus, receiptSchemaStatus } from './record-sync-storage.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
 import { handleAiConsentRequest, hasAiImportConsent, assertAiImportConsent } from './ai-import-consent.js';
 import { handlePasswordResetRequest } from './password-reset.js';
@@ -108,7 +109,51 @@ function supersededResponse(env, userId, importId, next, now) {
 // 15-minute maintenance under a daily D1 rows-written budget (Workers Free: 100,000/day shared with the app).
 // Each write statement runs only if its worst case still fits; actual rows (x (1 + indexes)) are charged afterwards.
 const MAINTENANCE_STATEMENT_ROWS = 256;
+// Workers Free cron CPU (10 ms) is dominated by D1 round trips, so the run is: ONE read (overdue count, today's budget,
+// index counts, storage schema, how many payload rows are due), ONE batch with the same cleanup statements in the same
+// order (a D1 batch runs sequentially in one transaction, so later steps see earlier deletions) and, only if rows were
+// written, one budget charge. Any failure falls back to the unchanged sequential run (a failed batch changed nothing).
+const MAINTENANCE_PROBE_SQL = `SELECT (SELECT COUNT(*) FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=?) AS overdue,
+  (SELECT rows_written FROM d1_write_budget WHERE day = ? AND scope = 'maintenance') AS spent,
+  (SELECT json_group_object(tbl_name, n) FROM (SELECT tbl_name, COUNT(*) AS n FROM sqlite_master WHERE type = 'index' GROUP BY tbl_name)) AS indexes,
+  (SELECT json_group_array(json_object('name', name, 'sql', sql)) FROM sqlite_master WHERE type IN ('table','index') AND name IN (${STORAGE_TABLE_NAMES})) AS storage,
+  (SELECT COUNT(*) FROM (SELECT 1 ${PERSONAL_CLEANUP_RECORDS_FROM} LIMIT ${MAINTENANCE_STATEMENT_ROWS * PERSONAL_CLEANUP_RECORD_PAGES})) AS records_due`;
 async function budgetedMaintenance(env) {
+  const raw = lifecycleRawDB(env.DB), now = new Date().toISOString(), day = now.slice(0, 10);
+  let probe, plan;
+  try {
+    probe = await raw.prepare(MAINTENANCE_PROBE_SQL).bind(new Date(Date.now() - 3600000).toISOString(), day, now).first();
+    const tables = JSON.parse(probe.storage || '[]'), indexes = JSON.parse(probe.indexes || '{}');
+    const personal = personalRestoreSchemaStatus(tables);
+    const receipts = personal !== 'unsupported' && recordSchemaStatus(tables) === 'ready' && receiptSchemaStatus(tables) === 'ready';
+    // Same statements as the sequential run: lifecycle expiry (uncharged, as before), receipts, then restore cleanup.
+    plan = [['DELETE FROM account_lifecycle_credentials WHERE expires_at<=?', 0], ['DELETE FROM oauth_reauth_tickets WHERE expires_at<=?', 0]];
+    if (receipts) plan.push([RECEIPT_CLEANUP_SQL, 1]);
+    if (personal === 'ready') {
+      for (let page = 0; page < Math.min(PERSONAL_CLEANUP_RECORD_PAGES, Math.ceil(Number(probe.records_due || 0) / MAINTENANCE_STATEMENT_ROWS)); page++) plan.push([PERSONAL_CLEANUP_RECORDS_PAGE, 1]);
+      for (const sql of PERSONAL_CLEANUP_AFTER_RECORDS) plan.push([sql, 1]);
+    }
+    // Rows written = affected rows x (1 + indexes of the target table); unknown tables are charged 5 per row.
+    plan = plan.map(([sql, charged]) => ({ sql, w: charged ? 1 + (indexes[(/^\s*(?:DELETE\s+FROM|UPDATE|INSERT\s+INTO)\s+(\w+)/i.exec(sql) || [])[1]] ?? 4) : 0 }));
+  } catch { return sequentialMaintenance(env); }
+  if (Number(probe.overdue)) console.warn(JSON.stringify({ event: 'account_purge_overdue', count: Number(probe.overdue) }));
+  // A statement is included only while the worst case of everything included so far still fits the daily cap.
+  const spent = Number(probe.spent || 0);
+  let worst = 0, skipped = 0;
+  const included = plan.filter(step => {
+    if (step.w && spent + worst + MAINTENANCE_STATEMENT_ROWS * step.w > MAINTENANCE_DAILY_ROWS_WRITTEN) { skipped++; return false; }
+    worst += MAINTENANCE_STATEMENT_ROWS * step.w; return true;
+  });
+  let results;
+  try { results = await raw.batch(included.map(step => raw.prepare(step.sql).bind(now))); } catch { return sequentialMaintenance(env); }
+  const charged = included.reduce((sum, step, i) => sum + Number(results[i]?.meta?.changes || 0) * step.w, 0);
+  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(cause => console.warn(JSON.stringify({ event: 'maintenance_budget_charge_failed', code: cause.code || 'DATABASE_UNAVAILABLE', charged })));
+  if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
+}
+
+// Unchanged sequential maintenance (fallback when the probe or the batch fails, e.g. partially migrated schemas).
+// Exported for the differential test (scripts/free-plan-capacity-test.mjs).
+export async function sequentialMaintenance(env) {
   const raw = lifecycleRawDB(env.DB), day = new Date().toISOString().slice(0, 10);
   await lifecycleMaintenance(env);
   let spent, indexes;

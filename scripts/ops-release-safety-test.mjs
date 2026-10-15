@@ -8,6 +8,7 @@ import { purgeDueAccounts, backgroundRejected } from '../worker/account-lifecycl
 import { runOperationalDigest, OPS_DIGEST_CRON } from '../worker/ops-alerts.js';
 import { buildReconcileSQL } from './ops/reconcile-ai-work.mjs';
 import { readFileSync } from 'node:fs';
+import { PURGE_UPSTREAM_DELETES } from '../worker/free-plan-limits.js';
 
 // Deploy config: the digest recipient must be configured (user decision 2026-10-14; runbook §2a).
 const wranglerVars = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')).vars;
@@ -203,13 +204,13 @@ const due = (db, u) => db.raw.prepare('UPDATE users SET purge_at=?,purge_retry_a
     }
     db.raw.prepare("UPDATE users SET account_status='PENDING_DELETION',purge_at=? WHERE id=?").run(new Date(Date.now() - 1).toISOString(), u.user.id);
     openaiDeletes = []; let invocations = 0, maxD1 = 0, maxFetch = 0;
-    while (db.rows('SELECT 1 FROM users WHERE id=?', u.user.id).length && invocations < 20) {
+    while (db.rows('SELECT 1 FROM users WHERE id=?', u.user.id).length && invocations < Math.ceil(2 * n / PURGE_UPSTREAM_DELETES) + 5) {
       const before = openaiDeletes.length; db.resetMetrics(); await purgeDueAccounts(env); invocations++;
       maxD1 = Math.max(maxD1, db.metrics.queries); maxFetch = Math.max(maxFetch, openaiDeletes.length - before);
     }
     assert.equal(db.rows('SELECT * FROM users WHERE id=?', u.user.id).length, 0, `account with ${2 * n} stored responses is erased`);
     assert.equal(new Set(openaiDeletes).size, 2 * n, 'every stored response deleted upstream exactly once');
-    assert.equal(invocations, Math.ceil(2 * n / 40) + 1);
+    assert.equal(invocations, Math.ceil(2 * n / PURGE_UPSTREAM_DELETES) + 1);
     assert.ok(maxD1 <= 40 && maxFetch <= 40, `Free per-invocation margin: d1=${maxD1} fetch=${maxFetch}`);
     rows.push({ storedResponses: 2 * n, invocations, maxD1PerInvocation: maxD1, maxFetchPerInvocation: maxFetch });
   }

@@ -19,8 +19,10 @@ const response = (body, status = 200) => new Response(storageJSON(body), { statu
 const rejection = cause => response({ code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }, cause.status || 503);
 const identity = (kind, key) => JSON.stringify([kind, key]);
 
+export const STORAGE_STATE_SQL='SELECT storage_schema_version FROM sync_account_state WHERE user_id = ?';
+export const STORAGE_TABLE_NAMES="'personal_restore_record_target','personal_restore_journal_target','sync_account_state','sync_records','sync_mutation_receipts','personal_restore_operations','personal_restore_roots','personal_restore_records','personal_restore_chunks','personal_restore_identity_journal'";
 export async function storageTables(db) {
-  const tables=(await db.prepare("SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') AND name IN ('personal_restore_record_target','personal_restore_journal_target','sync_account_state','sync_records','sync_mutation_receipts','personal_restore_operations','personal_restore_roots','personal_restore_records','personal_restore_chunks','personal_restore_identity_journal')").all()).results || [];
+  const tables=(await db.prepare(`SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') AND name IN (${STORAGE_TABLE_NAMES})`).all()).results || [];
   if(personalRestoreSchemaStatus(tables)==='unsupported')fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);return tables;
 }
 export function recordSchemaStatus(tables) {
@@ -57,7 +59,8 @@ export async function readRecordState(db,userId,mutationId=undefined) {
 }
 
 // Account deletion needs only schema/state version before external cleanup, never account payload assembly.
-export async function storageCleanupMode(db,userId,schemaRows=null) {
+// `state`: the caller's already-read sync_account_state row for userId (null = none; undefined = read it here).
+export async function storageCleanupMode(db,userId,schemaRows=null,state=undefined) {
   const tables = schemaRows || await storageTables(db);
   const readiness = recordSchemaStatus(tables);
   const receipts = receiptSchemaStatus(tables);
@@ -66,7 +69,7 @@ export async function storageCleanupMode(db,userId,schemaRows=null) {
   if (receipts === 'unsupported' || (receipts === 'ready' && readiness !== 'ready')) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   if (readiness === 'missing') return 'legacy';
   if (readiness !== 'ready') fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
-  const state = await db.prepare('SELECT storage_schema_version FROM sync_account_state WHERE user_id = ?').bind(userId).first();
+  if (state === undefined) state = await db.prepare(STORAGE_STATE_SQL).bind(userId).first();
   if (state && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   return personal==='ready'?'personal':receipts === 'ready' ? 'receipts' : 'records';
 }

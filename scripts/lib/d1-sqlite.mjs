@@ -46,10 +46,18 @@ export function createD1(options = {}) {
     async batch(statements) {
       if (beforeBatch) await beforeBatch(statements);
       metrics.batches++;
+      // Like D1, a batch may mix reads and writes; reads return their rows (`results`). A read hook runs before the
+      // batch starts (a concurrent request can only interleave before the batch's single transaction).
+      const reads = statements.map(item => sqlite.prepare(item.sql).columns().length > 0);
+      for (const [index, item] of statements.entries()) if (reads[index] && beforeRead) await beforeRead(item.sql);
       sqlite.exec('BEGIN');
       try {
         const results = [];
-        for (const item of statements) { measure(item.sql, item.values, true); check(item.sql); const info = sqlite.prepare(item.sql).run(...item.values); if(item.sql.includes('WITH ordered AS')) metrics.orderOnlyRows+=Number(info.changes); results.push({ success: true, meta: { changes: Number(info.changes) } }); }
+        for (const [index, item] of statements.entries()) {
+          measure(item.sql, item.values, !reads[index]); check(item.sql);
+          if (reads[index]) { const rows = sqlite.prepare(item.sql).all(...item.values); returned(rows); results.push({ success: true, results: rows, meta: { changes: 0 } }); continue; }
+          const info = sqlite.prepare(item.sql).run(...item.values); if(item.sql.includes('WITH ordered AS')) metrics.orderOnlyRows+=Number(info.changes); results.push({ success: true, meta: { changes: Number(info.changes) } });
+        }
         sqlite.exec('COMMIT');
         return results;
       } catch (error) {

@@ -217,3 +217,19 @@ VERIFIED (runbook §4b). No production migration/deploy.
 - 2026-10-15 isolated Cloudflare CPU test executed (approved; test resources deleted): 32/32 invocations `ok`, 0
   `exceededCpu`; idle purge <= 9 ms, digest <= 6 ms; maintenance 10–21 ms and purge work steps 12–26 ms exceed the
   nominal 10 ms (runbook §5b). The 40-delete upstream step is NOT MEASURED (needs a real OpenAI key). Not a clean PASS.
+
+## 2026-10-15 — Build 44 Workers Free cron CPU optimisation (HIGH; user decision B)
+
+- Area: account purge (minute cron), 15-minute maintenance, readiness check. No user-visible change, no schema change.
+- Same SQL and gates, fewer D1 round trips: minute probe (idle = 1 trip), one-statement `lifecycleReady`, purge
+  snapshot batch (lease acquire, reads, sync state, SQL-gated upstream charge), progress record batched with the users
+  update, maintenance probe + one batch with sequential fallback. `PURGE_UPSTREAM_DELETES` 40 -> 5 (a 300-response
+  account now takes ~61 minutes; production accounts have <= 16).
+- Real Cloudflare (isolated Worker, runbook §5c): idle minute 1–3 ms, maintenance 3–8 ms, digest 3–7 ms (all < 10 ms);
+  purge work steps 7–21 ms (above 10 ms, infrequent, 0 `exceededCpu`).
+- Tests: `npm test` PASS (15 suites); new section-9 tests (differential maintenance, stale sweep, lease race, backoff,
+  snapshot failure, exact/single-step charge, storage version, cumulative cap, fallbacks, readiness column).
+  Mutation: implementer 27 targeted mutants + Guardian round-1/2 survivors (7) re-run, all killed.
+- Guardian: round 1 DURDURULDU (3 MAJOR: two untested guards, final code unmeasured) -> fixed; round 2 GEÇTİ (no
+  BLOCKING/MAJOR; MINOR test gaps a-c and LOW-d closed with tests 9j-9m).
+- Device checks: none (server-only). Production check after deploy: §4b.

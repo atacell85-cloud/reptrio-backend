@@ -271,5 +271,7 @@ export async function recordMutation(request,env,userId) {
 export async function cleanupMutationReceipts(env) {
   const tables=await storageTables(env.DB);
   if (recordSchemaStatus(tables)!=='ready' || receiptSchemaStatus(tables)!=='ready') return;
-  await env.DB.prepare(`DELETE FROM sync_mutation_receipts WHERE (user_id,mutation_id) IN (SELECT user_id,mutation_id FROM sync_mutation_receipts WHERE expires_at<=? ORDER BY expires_at,user_id,mutation_id LIMIT 256)`).bind(new Date().toISOString()).run();
+  await env.DB.prepare(RECEIPT_CLEANUP_SQL).bind(new Date().toISOString()).run();
 }
+// Shared with the 15-minute batched maintenance (worker/index.js).
+export const RECEIPT_CLEANUP_SQL=`DELETE FROM sync_mutation_receipts WHERE (user_id,mutation_id) IN (SELECT user_id,mutation_id FROM sync_mutation_receipts WHERE expires_at<=? ORDER BY expires_at,user_id,mutation_id LIMIT 256)`;

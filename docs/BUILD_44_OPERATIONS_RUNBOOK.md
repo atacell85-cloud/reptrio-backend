@@ -7,8 +7,8 @@ user's explicit release instruction. Evidence date: 2026-10-14.
 
 | # | Precondition | How it is verified | State 2026-10-14 |
 |---|---|---|---|
-| P1 | Purge fits the **actual** plan (Workers Free, user decision 2026-10-14: no Paid subscription) | §4: <= 40 D1 statements and <= 40 external fetches per invocation, daily write budgets, statistics-free plans (`npm run test:free-plan`) | **Locally verified** (real Worker code + SQLite with Free limits enforced) |
-| P2 | Cron CPU <= 10 ms (Workers Free) on real Cloudflare | §5b isolated test (2026-10-15) + §4b after deploy | **MEASURED, limit exceeded without termination**: 32/32 invocations `ok`, 0 `exceededCpu`; idle purge <= 9 ms and digest <= 6 ms within the limit, but maintenance 10–21 ms and purge work steps 12–26 ms are above 10 ms (§5b). Not a clean PASS; release decision by the user |
+| P1 | Purge fits the **actual** plan (Workers Free, user decision 2026-10-14: no Paid subscription) | §4: <= 40 D1 statements and <= 5 external OpenAI deletes per invocation (40 until 2026-10-15, lowered for cron CPU, §5c), daily write budgets, statistics-free plans (`npm run test:free-plan`) | **Locally verified** (real Worker code + SQLite with Free limits enforced) |
+| P2 | Cron CPU <= 10 ms (Workers Free) on real Cloudflare | §5c isolated test of the optimised code (2026-10-15) + §4b after deploy | **MEASURED**: always-running triggers within the limit (idle minute 1–3 ms, maintenance 3–8 ms, digest 3–7 ms); purge work steps run only while an account is deleted and stay above 10 ms (upstream step 10–21 ms, final erase 7–15 ms); 0 `exceededCpu`. Release decision by the user (§5c) |
 | P3 | `OPS_ALERT_EMAIL` set (Worker var) to an inbox someone reads | `wrangler.jsonc` `vars` → applied by the Build 44 deploy | **Configured** `support@reptrio.com`; delivery test PASS (§2a); production cron delivery pending (§2b) |
 | P4 | Production D1 backed up (Time Travel bookmark recorded) | `wrangler d1 time-travel info a2-workout-pilot` | Not done (take it immediately before step 3; Time Travel available, see §5) |
 | P5 | Integrated HIGH Guardian `GEÇTİ` on both integration branches | Guardian report | See mobile `docs/tasks/BUILD_44_INTEGRATION.md` |
@@ -131,7 +131,7 @@ Mechanism (Option A, approved 2026-10-14; purge algorithm and its single atomic 
 - `DELETE_NOW` and recovery "purge now" only move the account to `PURGING` (irreversible; sessions revoked) and answer
   `202 {accountStatus:'PURGING', purgeComplete:false}`. Completion is never reported by a request.
 - The minute cron runs one bounded step per invocation for one owner: EITHER upstream cleanup (stored import response
-  ids move atomically into the `account_lifecycle_work` ledger; <= 40 OpenAI deletes; confirmed 200/404 deletes are
+  ids move atomically into the `account_lifecycle_work` ledger; <= 5 OpenAI deletes (`PURGE_UPSTREAM_DELETES`, §5c); confirmed 200/404 deletes are
   recorded in one statement; `purge_error=ACCOUNT_PURGE_IN_PROGRESS`, next step next minute, no backoff) OR the final
   erase (Apple revoke, then the atomic batch). Failures back off exponentially (max 1 day); a lost lease (120 s) is
   retaken; repeated deletes are idempotent (404 = already absent).
@@ -145,15 +145,18 @@ Mechanism (Option A, approved 2026-10-14; purge algorithm and its single atomic 
 
 | Stored AI responses | Invocations (email/Google/Apple) | Max D1 statements / invocation | Max external fetches / invocation |
 |---|---|---|---|
-| 0 | 1 | 38 | 0 (Apple: 1) |
-| 1–30 | 2 | 38 | n |
-| 49–50 | 3 | 38 | 40 |
-| 100 | 4 | 38 | 40 |
-| 300 | 9 | 38 | 40 |
+| 0 | 1 | 37 | 0 (Apple: 1) |
+| 1–5 | 2 | 37 | n |
+| 10 | 3 | 37 | 5 |
+| 30 | 7 | 37 | 5 |
+| 49–50 | 11 | 37 | 5 |
+| 100 | 21 | 37 | 5 |
+| 300 | 61 | 37 | 5 |
 
-Request paths: `DELETE_NOW` <= 30 D1 statements. Purge invocations <= 38 D1 statements (upstream step: +1 budget charge;
-final: +1 read-only budget pre-check before the Apple revoke). Throughput: one owner per minute; a 300-response account occupies the
-purge for ~9 minutes.
+(`npm run test:free-plan` matrix, 2026-10-15; every statement of a batch counted.) Request paths: `DELETE_NOW` <= 30 D1
+statements. D1 round trips per purge invocation (what drives CPU, §5c): idle 1; upstream step 3 (+1 adoption batch on the
+first step); final erase 4. Throughput: one owner per minute, 5 stored responses per minute; production accounts have
+0–16 stored responses (all done in <= 5 minutes); a 300-response account occupies the purge for ~61 minutes.
 
 Daily D1 rows read by the background triggers on statistics-free databases (no `ANALYZE`; production has no
 `sqlite_stat*`), steady state, `node scripts/ops/project-cron-d1-usage.mjs` (real Worker statements replayed with SQLite
@@ -199,13 +202,27 @@ about 6 days at the 60,000/day purge cap.
   before picking one: K stuck accounts cost about 1,440 x K rows read/day (about 3,470 would exhaust the Free 5M/day).
   They are alerted by `ACCOUNT_PURGE_OVERDUE` (and `ACCOUNT_PURGE_MANUAL_REQUIRED`); act when the overdue count exceeds
   ~100. Follow-up: an index/query that skips backed-off owners.
-- **Extreme stored-response counts stall silently.** An upstream step charges (2 x stored + 42) x 5 rows; with about
+- **Extreme stored-response counts stall silently.** An upstream step charges (2 x stored + 7) x 5 rows; with about
   5,990+ stored response ids that exceeds the 60,000 daily cap, so the account repeats `ACCOUNT_PURGE_DAILY_BUDGET`
   every day without `MANUAL_REQUIRED`. Unrealistic (imports are rate-limited); treat `ACCOUNT_PURGE_DAILY_BUDGET` in the
   overdue digest for more than 2 consecutive days as a manual case. The §4c tool reduces only bulk tables; an account
   whose non-bulk tables alone exceed the cap also needs a manual plan.
+- **Long upstream cleanups look overdue (CPU change 2026-10-15).** 5 deletes per minute: an account with more than
+  ~300 stored responses is still purging after 1 hour and appears in `ACCOUNT_PURGE_OVERDUE`. Expected; check that its
+  `purge_error` is `ACCOUNT_PURGE_IN_PROGRESS` and the stored count falls.
+- **Upstream charge before schema validation (Guardian CPU round, MINOR-1).** The upstream budget charge is part of the
+  purge snapshot batch, so an account that then fails validation (`ACCOUNT_CLEANUP_SCHEMA_UNSUPPORTED`,
+  `SYNC_STORAGE_SCHEMA_UNSUPPORTED`, consent tables) is charged (10 x stored + 35) rows per retry (exponential backoff).
+  Not reachable with the Build 44 schema (storage version is always 1); it over-counts the budget, never under-counts.
+- **No backoff if the final record+retry batch itself fails (LOW).** The step is retried after the 120 s lease;
+  upstream deletes are idempotent (404), nothing is lost.
+- **Duplicate `account_purge_overdue` log when batched maintenance falls back to the sequential run (LOW).**
+- **One large account holds the single purge slot (LOW).** One owner per minute: while a 300-response account runs
+  its ~61 upstream minutes, other due accounts wait behind it (they are picked after it finishes, oldest `purge_at` first).
+- **Migrations out of order (LOW).** A schema with the lifecycle tables but without `sync_account_state` (impossible with
+  linear migrations) makes the purge snapshot fail; the account backs off (fail closed, no effect).
 
-### 4b. CPU (10 ms per cron invocation on Free) — NOT VERIFIED
+### 4b. CPU (10 ms per cron invocation on Free) — measured on an isolated Worker (§5b, §5c); production check after deploy
 
 Local Node CPU per purge invocation (includes in-process SQLite, which D1 executes outside the Worker, and JIT warm-up)
 was 2.5–12 ms; this is not Cloudflare CPU time and proves nothing either way. Verify on the deployed Worker only:
@@ -314,3 +331,56 @@ maintenance deletes are idempotent and resume next run. Mitigation options (code
 statements per maintenance run (e.g. skip idle sub-steps, alternate them between runs), smaller purge steps.
 D1 usage of the test: 13,828 rows written (seed 10,918), 30,544 read; account total that day stayed < 14,000 / 100,000.
 Cleanup verified: `a2-workout-cputest` and `reptrio-cputest` deleted; account crons 0 / 5 (production needs 3).
+
+### 5c. CPU optimisation and re-measurement (2026-10-15 08:30–11:37 UTC; user decision B; resources deleted)
+
+Isolated `a2-workout-cputest` + `reptrio-cputest` only (fake `.invalid` accounts, throwaway Apple key, invalid OpenAI
+key); production untouched (version `2b15b60d`, 86 users, ledger 4 rows, 7 rows written that day). Account D1 writes that
+day stayed < 37,000 / 100,000 (small seed `build-seed.mjs --small`). Kit: `scripts/ops/cputest/` (`profile*-entry.mjs`
+one cost component per cron trigger; `split-entry.mjs` network vs no-network; `measure-entry.mjs` the unchanged
+production handlers, OpenAI deletes really sent to api.openai.com and answered to the code as the provider's 404
+"already absent", so the full successful-delete path runs without a real key; `analyze-tail.mjs`).
+
+Cost components (Workers Free, `wrangler tail` cpuTime per invocation, n >= 10 each):
+
+| Component | CPU (ms) median / max |
+|---|---|
+| Empty invocation (bundle startup is not counted) | 0 / 0 |
+| 1 D1 query | 1 / 2 |
+| 10 sequential D1 queries | 5 / 9 |
+| 10 queries in one `batch()` / 25 deletes in one `batch()` | 1 / 3 and 2 / 7 |
+| Full-SQL schema read (~40 objects) | 1 / 2 |
+| Real external fetch (api.openai.com, 401): 5 / 10 / 20 / 40 | 2 / 4, 5 / 8, 12 / 21, 20 / 21 |
+| Service-binding mock fetch x 40 (underestimates real fetches) | 4 / 7 |
+| Real purge upstream step with 5 deletes, in-process answers (no network) | 8 / 17 |
+
+Changes (behaviour and SQL unchanged; D1 round trips reduced; Guardian CPU round):
+- Minute purge: one probe read (next due owner, interrupted-work flag, readiness snapshot); nothing due = 1 round trip.
+- `lifecycleReady`: one statement (users columns via `pragma_table_info` + lifecycle tables' SQL); same checks.
+- Purge step: lease acquire + owner, links, schema, pending counts, ledger page, purge budget, sync state and the
+  upstream budget charge (SQL-gated: lease held, no open outcome, work left, cost <= cap) in one snapshot batch; the
+  confirmed-deletes record runs in one batch with the users-row update; `PURGE_UPSTREAM_DELETES` 40 -> 5.
+- Maintenance: one probe read + one batch of the same statements in the same order (+ one charge if rows were written);
+  any failure falls back to the unchanged sequential run. Differential test: batched == sequential end state.
+
+Result on Cloudflare (final code, version `a6b365fc`, 2026-10-15 11:14–11:37 UTC):
+
+| Trigger / step | n | CPU (ms) min / median / p90 / max | > 10 ms | Before (§5b) |
+|---|---|---|---|---|
+| Minute purge, nothing due (1,440/day) | 9 | 1 / 2 / 3 / 3 | 0 | 3–9 |
+| Maintenance (first run cleaned the backlog; 96/day) | 8 | 3 / 5 / 8 / 8 | 0 | 10–21 |
+| Daily digest | 23 | 3 / 4 / 6 / 7 | 0 | 3–6 |
+| Purge final erase (email 150 records; Apple revoke + erase) | 4 | 7 / 8–13 / 15 / 15 | 2 | 12–17 |
+| Purge upstream step, 5 real deletes | 10 | 10 / 15 / 21 / 21 | 8 | 18–26 with 1 delete; ~35+ projected with 40 |
+
+All 4 test accounts erased (incl. the Apple account and both upstream accounts), bystander intact, no
+`account_purge_unavailable`, no maintenance fallback, 0 `exceededCpu` (54 invocations; 160+ over the whole day's tests).
+Margin: always-running triggers 20–90% below the limit; purge work steps exceed the nominal 10 ms by up to 2x.
+
+Remaining CPU risk (accepted only by the user's release decision): purge work steps run only while an account is being
+deleted (production accounts: 0–16 stored responses = <= 4 upstream steps + 1 final, once per account), i.e. infrequent
+bursts that Cloudflare's "built-in flexibility" has tolerated in every test; if the platform cuts one, progress is
+durable and the final erase is one atomic batch (no partial erase), the account only takes longer (alerted). The
+remaining step cost is not explained by D1 round trips (3 vs 5 trips gave the same median); likely first-use code
+compilation in a fresh isolate plus real fetches. Further reduction would need fewer deletes per step (throughput) or a
+smaller code path; not done in Build 44.
