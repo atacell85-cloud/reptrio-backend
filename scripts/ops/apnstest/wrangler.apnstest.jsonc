@@ -1,0 +1,27 @@
+// Build 45 B45-APNs-01 isolated APNs feasibility Worker. A SEPARATE throwaway Worker and D1 database; delete both when
+// the feasibility test is over. Differences from production (wrangler.jsonc), all deliberate:
+// - name/database: `a2-workout-apnstest` / `reptrio-apnstest` (never `a2-workout-pilot`).
+// - workers.dev URL only (no routes/custom domains, no preview URLs, no static assets); every route needs the
+//   APNSTEST_TOKEN secret.
+// - no queues, no rate limiters, no mail keys, no OpenAI key: it can only reach APNs.
+// - one cron (the minute step). Workers Free allows 5 crons per account; production needs 3 after the Build 44 deploy.
+// - APNS_TEAM_ID is public; APNS_KEY_ID / APNS_PRIVATE_KEY are Worker secrets added by the user (never in the repo).
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "a2-workout-apnstest",
+  "main": "./entry.mjs",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": { "APNS_TEAM_ID": "C4P47F32C8" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "reptrio-apnstest",
+      "database_id": "eeff9885-3413-4ae6-a232-3b7d2324a65a",
+      "migrations_dir": "../../../migrations"
+    }
+  ]
+}

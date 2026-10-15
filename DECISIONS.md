@@ -1,5 +1,10 @@
 # Reptrio backend karar kaydı
 
+### 2026-10-16 — B45-APNs-01 izole fizibilite başladı (kullanıcı görevi; kalıcı mimari DEĞİL)
+
+- Dal `build45/apns-feasibility`: aday `worker/apns.js`, `worker/live-activity-end.js`, `migrations/0015_live_activity_end.sql` production Worker'a/cron'lara bağlanmadı, production D1'e uygulanmadı. İzole test Worker `a2-workout-apnstest` + test D1 `reptrio-apnstest` (yalnız APNs'e erişebilir; `APNSTEST_TOKEN` korumalı).
+- Kanıtlanan: Workers → APNs HTTP/2 (her iki host `403 MissingProviderToken` + `apns-id`); gerçek D1 yolu; Voltra ContentState için doğrulanmış `end` içeriği. Kalıcı mimariye geçiş koşulu: gerçek APNs anahtarıyla `BadDeviceToken` ve gerçek cihazda sandbox `end` push'unun etkinliği kapatması (Build 44 fiziksel kabulünden sonra). Ayrıntı: `docs/BUILD_45_APNS_01_FEASIBILITY.md`.
+
 ### 2026-10-16 — Repo birleştirmesi Build 45 sonrasına ertelendi (kullanıcı kararı)
 
 - Backend kodunun `reptrio-mobile` altında tek repoya taşınması Build 45'ten sonraya ertelendi (mobil `DECISIONS.md` 2026-10-13 sıralaması değişti; Build 45'in önkoşulu yalnız Build 44 kabulü). Bu repo, PR #14 ve canlı Worker/D1 olduğu gibi kalır. Plan kaydıdır; taşıma, merge, migration veya deploy başlatmaz.
