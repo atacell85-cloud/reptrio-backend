@@ -1,0 +1,38 @@
+// Build 44 Cloudflare CPU test (runbook §4b "isolated test"). A SEPARATE throwaway Worker and D1 database; never deploy
+// this config without the user's explicit approval, and delete both after the measurement.
+// Differences from production (wrangler.jsonc), all deliberate:
+// - name/database: `a2-workout-cputest` / `reptrio-cputest` (never `a2-workout-pilot`); database_id is filled in after
+//   `wrangler d1 create reptrio-cputest`.
+// - no routes/custom domains, no preview URLs, no static assets: reachable only by its own cron triggers.
+// - no queue producer/consumer: must never consume the production `a2-import-jobs` queue.
+// - rate limiter namespaces 9001-9003 (production uses 1001-1003; namespaces are account-wide).
+// - no OPS_ALERT_EMAIL and no ZEPTOMAIL_API_KEY: the digest logs `ops_alert_unrouted` instead of mailing support@.
+// - same three crons as production: Workers Free allows 5 per account; production has 0 until the Build 44 deploy, which
+//   adds 3, so this Worker MUST be deleted before the production deploy (3 + 3 > 5 makes that deploy fail).
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "a2-workout-cputest",
+  "main": "../../../worker/index.js",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": { "crons": ["*/15 * * * *", "* * * * *", "0 6 * * *"] },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    "RECORD_TRANSPORT_ENABLED": "true",
+    "PERSONAL_RESTORE_ENABLED": "true"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "reptrio-cputest",
+      "database_id": "FILL_AFTER_wrangler_d1_create",
+      "migrations_dir": "../../../migrations"
+    }
+  ],
+  "ratelimits": [
+    { "name": "ACCOUNT_LIFECYCLE_LIMITER", "namespace_id": "9003", "simple": { "limit": 6, "period": 60 } },
+    { "name": "AI_IMPORT_LIMITER", "namespace_id": "9001", "simple": { "limit": 4, "period": 60 } },
+    { "name": "PASSWORD_RESET_LIMITER", "namespace_id": "9002", "simple": { "limit": 5, "period": 60 } }
+  ]
+}

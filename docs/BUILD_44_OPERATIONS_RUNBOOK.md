@@ -10,7 +10,7 @@ user's explicit release instruction. Evidence date: 2026-10-14.
 | P1 | Purge fits the **actual** plan (Workers Free, user decision 2026-10-14: no Paid subscription) | §4: <= 40 D1 statements and <= 40 external fetches per invocation, daily write budgets, statistics-free plans (`npm run test:free-plan`) | **Locally verified** (real Worker code + SQLite with Free limits enforced) |
 | P2 | Cron CPU <= 10 ms (Workers Free) on real Cloudflare | §4b procedure after deploy | **NOT VERIFIED** (cannot be measured locally) |
 | P3 | `OPS_ALERT_EMAIL` set (Worker var) to an inbox someone reads | `wrangler.jsonc` `vars` → applied by the Build 44 deploy | **Configured** `support@reptrio.com`; delivery test PASS (§2a); production cron delivery pending (§2b) |
-| P4 | Production D1 backed up (Time Travel bookmark recorded) | `wrangler d1 time-travel info a2-workout-pilot` | Not done |
+| P4 | Production D1 backed up (Time Travel bookmark recorded) | `wrangler d1 time-travel info a2-workout-pilot` | Not done (take it immediately before step 3; Time Travel available, see §5) |
 | P5 | Integrated HIGH Guardian `GEÇTİ` on both integration branches | Guardian report | See mobile `docs/tasks/BUILD_44_INTEGRATION.md` |
 
 User decision 2026-10-14 (superseding the earlier Paid precondition): stay on Workers Free; the release condition is that
@@ -53,7 +53,12 @@ Order (each step only on explicit release instruction):
    `recovery.html` 200, one `ops_digest_*` log line after the next 06:00 UTC, §4b CPU check of the minute trigger.
 
 Rollback: before step 6, nothing user-visible changed (additive schema). After step 6, redeploy the previous version
-(`wrangler rollback`); additive columns remain harmless. Data rollback = Time Travel restore to the P4 bookmark (destroys
+(`wrangler rollback 2b15b60d-cf74-4217-a796-3ac85aaa7ffa`, Build 43); additive columns remain harmless. Cron triggers
+are not part of a version and that version has no `scheduled()` handler: after the rollback check
+`/workers/scripts/a2-workout/schedules`; if the three crons remain, remove them (a deploy whose config has
+`"triggers": {"crons": []}`), otherwise every trigger fails. Accounts already `PURGING` then wait (fail-closed) until
+Build 44 is redeployed. Data written by Build 44 to the new tables is ignored by Build 43; Build 43 legacy sync keeps
+writing `user_data`. Data rollback = Time Travel restore to the P4 bookmark (destroys
 writes made after it; only with explicit approval).
 
 ## 2. Alert routing (existing infrastructure)
@@ -135,7 +140,7 @@ Mechanism (Option A, approved 2026-10-14; purge algorithm and its single atomic 
   accepted this charge. Larger accounts (about 12,000+ sync records: `sync_records` has 4 indexes, 5 rows written per
   row) are held with `ACCOUNT_PURGE_PLAN_CAPACITY` (nothing erased; digest `ACCOUNT_PURGE_MANUAL_REQUIRED`) for §4c; a
   spent budget resumes at 00:00 UTC (`ACCOUNT_PURGE_DAILY_BUDGET`). The 15-minute maintenance has its own 15,000
-  rows/day cap, so >= 25,000 rows/day always remain for the app (production 2026-10-14: ~500 writes/day).
+  rows/day cap, so >= 25,000 rows/day always remain for the app (Build 44 record sync writes only changed records; Build 43 legacy sync peaked at 50,024 rows on 2026-10-14, see §5).
   User decision 2026-10-14 (after the Guardian finding): raise the cap + manual procedure for larger accounts.
 
 | Stored AI responses | Invocations (email/Google/Apple) | Max D1 statements / invocation | Max external fetches / invocation |
@@ -209,10 +214,74 @@ was 2.5–12 ms; this is not Cloudflare CPU time and proves nothing either way. 
 2. Workers Logs (observability enabled): `account_purge_progress` / `account_purge_retry` lines show the step; compare
    with `$workers.cpuTimeMs` of the same invocation.
 3. A controlled production deletion (e.g. a dedicated test account with stored responses) is needed to exercise the
-   upstream step; it creates/erases production data and requires explicit user approval. Without it, the first real
+   upstream step; it creates/erases production data and requires explicit user approval. Preferred instead: the isolated test in §5a (no production data). Without either, the first real
    deletion is the evidence.
 If CPU exceeds the limit: the step is cut by the platform; durable progress means no data loss, but the account will
 not finish. Reduce `PURGE_UPSTREAM_DELETES` and redeploy (explicit instruction).
 
 Sources: https://developers.cloudflare.com/workers/platform/limits/ ,
 https://developers.cloudflare.com/d1/platform/limits/ , https://developers.cloudflare.com/d1/platform/pricing/
+
+## 5. Release preflight (2026-10-15, read-only; nothing applied)
+
+Production reads only (`SELECT`/`PRAGMA`, `d1 info`, `d1 insights`, `time-travel info`, Workers/GraphQL read APIs).
+No migration, deploy, data change, merge or TestFlight upload.
+
+| Check | Result |
+|---|---|
+| Migration ledger | unchanged: `0001`–`0003` + `0004_import_job_raw_files` only |
+| 0004–0007 objects (§1 step 2) | all present: `oauth_accounts.refresh_token_ciphertext/refresh_token_updated_at/email_trusted`, `mobile_oauth_codes`, `oauth_reauth_tickets`, `password_reset_tokens`, the four indexes; no `0008`+ object; no `sqlite_stat*` |
+| Rehearsal (DDL read from `sqlite_master`, no export lock) | ledger repair → pending exactly `0008`…`0014` in this order → all apply; schema (tables, columns, types, defaults, PKs, indexes incl. partial predicates) **identical** to a fresh `0001`–`0014` install; `foreign_key_check`/`integrity_check` clean |
+| Data volume | 86 users, 294 sets, 23 `user_data`, 2.37 MB: `ALTER`/`CREATE INDEX` are instant |
+| Time Travel | available (bookmark readable). Free plan retention **7 days**; restore is destructive/in place and returns an undo bookmark |
+| Worker scripts / crons | 3 Workers (`a2-workout`, `eksenda-web`, `reptrio-marketing`), **0 crons** today; Build 44 adds 3 (Free limit 5/account) |
+| Deployed version (rollback target) | `2b15b60d-cf74-4217-a796-3ac85aaa7ffa` = Build 43 backend `21fa48f` (2026-10-07); it has no `scheduled()` handler |
+| Secrets/bindings | every `env.*` the Build 44 code reads exists in production (secrets + vars + bindings); `wrangler deploy --dry-run` bundles (357 KiB) |
+| Existing request CPU (7 days, `a2-workout`) | 888 requests, 0 errors, CPU p50 0.9 ms, p99 31.6 ms, max 42.9 ms, all `success` — Free tolerates infrequent overruns ("built-in flexibility"), but a trigger that exceeds 10 ms **consistently** is terminated |
+
+**D1 writes today (Build 43 legacy sync) — new finding.** `rows_written` per day: 1.3k–6.7k typical, **43,192
+(2026-10-12) and 50,024 (2026-10-14)**. Source (`d1 insights`): the legacy push rewrites every set of the account
+(`DELETE … WHERE user_id` + one `INSERT INTO workout_sets` per set, 2 rows each); one active account (246 sets,
+`sync_version` 1638) pushed ~68 times on 2026-10-14. If that account doubles its sets at the same push rate, the
+Free 100,000 rows/day is exhausted and D1 stops for every user until 00:00 UTC. Build 44 removes this: `/api/sync/push`
+goes to `recordPush`, which writes only changed records (local measurement, 255 sets: first push 277 row changes once,
+unchanged re-push 1, one edited set 2). Consequences for the release:
+- the "~500 writes/day" in §4 understated Build 43 days; the >= 25,000 rows/day app headroom holds for Build 44 sync;
+- deploy early in the UTC day (before heavy use) so pre-deploy legacy writes + post-deploy budgets stay < 100,000.
+
+**Deployed-client compatibility (in memory, production `user_data` payloads, nothing written anywhere).** Each of the 23
+stored payloads was pushed to the Build 44 `recordPush` on a local SQLite copy as the deployed apps do after deploy:
+22 accounts (schema 4: 1, schema 5: 17, schema 8 = Build 42 app: 4) → first push 200, pull byte-identical, next push
+200. 1 account (schema 5, inactive since 2026-08-24) → `409 SYNC_CLIENT_UPGRADE_REQUIRED` (rule at
+`record-sync-storage.js:338`: its stored sessions already use the object `sets` shape a schema-5 client cannot write
+safely). Intended fail-closed behaviour; its data is pulled unchanged; it syncs again after updating the client.
+
+### 5a. Isolated Cloudflare CPU test (prepared, NOT deployed)
+
+Goal: real Workers Free CPU for the minute purge (final erase, 40-delete upstream step, Apple revoke), the 15-minute
+maintenance and the 06:00 digest, without touching `a2-workout-pilot`. Files: `scripts/ops/cputest/wrangler.cputest.jsonc`
+(separate Worker `a2-workout-cputest` + D1 `reptrio-cputest`; no routes, assets, queue, alert e-mail; own rate-limit
+namespaces) and `scripts/ops/cputest/build-seed.mjs` (fake `*.invalid` accounts through the real API; throwaway P-256
+key, not an Apple credential). Seed validated locally with the real cron handlers: final-erase account erased in one
+step, 45 stored ids deleted as 40 + 5, Apple account signs a real client-secret JWT and stays `PURGING`/
+`APPLE_REVOKE_FAILED` (Apple rejects the throwaway key: fail-closed, nothing erased), bystander intact, backlog cleaned.
+
+Cost: Workers Free + D1 Free, no billing change. Quotas are account-wide: seed 2,635 rows (~6k rows written incl.
+indexes) + the test's own purge/maintenance writes (~10k) count toward the shared 100,000/day; run it on a quiet day.
+
+Steps (each needs explicit approval; run **before** the production deploy, then delete everything):
+1. `node scripts/ops/cputest/build-seed.mjs` (local; writes `.tmp-cputest/`, gitignored).
+2. `npx wrangler d1 create reptrio-cputest` → put the id into the config's `database_id`.
+3. `npx wrangler d1 migrations apply reptrio-cputest --remote -c scripts/ops/cputest/wrangler.cputest.jsonc`.
+4. Secrets on the TEST Worker only: `APPLE_OAUTH_PRIVATE_KEY` < `.tmp-cputest/apple-test-key.p8`,
+   `APPLE_OAUTH_CLIENT_ID=com.reptrio.cputest`, `APPLE_OAUTH_TEAM_ID=CPUTEST000`, `APPLE_OAUTH_KEY_ID=CPUTEST000`.
+   Optional `OPENAI_API_KEY` (typed by the owner with `wrangler secret put … -c …`; never pasted in chat): with it every
+   fake id answers 404 and all 40 deletes run; without it the upstream step stops after its first 401 (step not covered).
+5. `npx wrangler deploy -c scripts/ops/cputest/wrangler.cputest.jsonc`, then
+   `npx wrangler d1 execute reptrio-cputest --remote --file .tmp-cputest/seed.sql -c …`.
+6. Observe >= 15 minutes plus one 06:00 UTC run: Workers Logs `$workers.cpuTimeMs`/`outcome` per trigger
+   (`* * * * *`, `*/15 * * * *`, `0 6 * * *`). PASS = no `exceededCpu`, and p99 <= 10 ms for the purge trigger.
+7. `npx wrangler delete -c …` and `npx wrangler d1 delete reptrio-cputest`. **Mandatory before the production deploy:**
+   3 test crons + 3 production crons > 5 makes the production deploy fail.
+If the purge trigger exceeds the limit: lower `PURGE_UPSTREAM_DELETES` / the final-erase step and repeat (code change,
+own Guardian scope).

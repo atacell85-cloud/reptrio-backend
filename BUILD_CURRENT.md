@@ -202,3 +202,15 @@ VERIFIED (runbook §4b). No production migration/deploy.
   marked operations are not visited (R3 mutant killed); runbook §4d records two bounded, alerted open risks (stuck due
   accounts re-read every minute; extreme stored-response counts stall with DAILY_BUDGET). Earlier lines in this entry
   that say "3%" / "17/18 mutants" are superseded by the round-2 bullet (4.0%, abandoned restores included).
+
+## 2026-10-15 — Build 44 release preflight (internal/release, LOW: docs + unused ops tooling, no runtime change)
+
+- Read-only production preflight recorded in `docs/BUILD_44_OPERATIONS_RUNBOOK.md` §5: ledger unchanged, 0004–0007
+  objects present, ledger repair + `0008`–`0014` rehearsal identical to a fresh install, Time Travel available (Free: 7
+  days), 0 crons today, rollback target version `2b15b60d` (Build 43, no `scheduled()`; crons must be removed after a
+  rollback), all secrets present, dry-run bundle OK.
+- New finding: Build 43 legacy sync wrote 50,024 rows on 2026-10-14 (one account, full rewrite per push); Build 44
+  `recordPush` writes only changed records. 22/23 stored payloads pass the Build 44 push in memory; 1 inactive schema-5
+  account gets the intended `SYNC_CLIENT_UPGRADE_REQUIRED`.
+- Isolated Cloudflare CPU test prepared, not deployed: `scripts/ops/cputest/` (§5a). No migration, deploy, data change,
+  merge or TestFlight.
