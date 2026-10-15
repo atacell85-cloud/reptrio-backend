@@ -1,14 +1,36 @@
+import { purgeDueAccounts, lifecycleMaintenance, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
+import { runOperationalDigest, OPS_DIGEST_CRON } from './ops-alerts.js';
+import { MAINTENANCE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
+import { cleanupPersonalOperations, PERSONAL_CLEANUP_RECORDS_FROM, PERSONAL_CLEANUP_RECORDS_PAGE, PERSONAL_CLEANUP_RECORD_PAGES, PERSONAL_CLEANUP_AFTER_RECORDS } from './personal-restore-api.js';
+import { cleanupMutationReceipts, RECEIPT_CLEANUP_SQL } from './record-sync-transport.js';
+import { STORAGE_TABLE_NAMES, personalRestoreSchemaStatus, recordSchemaStatus, receiptSchemaStatus } from './record-sync-storage.js';
 import { currentUser, handleAccountRequest } from './account-api.js';
+import { handleAiConsentRequest, hasAiImportConsent, assertAiImportConsent } from './ai-import-consent.js';
+import { handlePasswordResetRequest } from './password-reset.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 export default {
+  async scheduled(event,env,ctx) {
+    // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
+    // The daily operational digest has its own trigger and budget; purge and maintenance are unchanged.
+    ctx.waitUntil(event.cron === '* * * * *'
+      ? purgeDueAccounts(env)
+      : event.cron === OPS_DIGEST_CRON
+        ? runOperationalDigest(env, event.scheduledTime)
+        : budgetedMaintenance(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/runtime-config.js') return runtimeConfig(request);
+    const passwordResetResponse = await handlePasswordResetRequest(request, env, ctx, url.pathname);
+    if (passwordResetResponse) return passwordResetResponse;
     const accountResponse = await handleAccountRequest(request, env, url.pathname);
     if (accountResponse) return accountResponse;
+    const aiConsentResponse = await handleAiConsentRequest(request, env, url.pathname);
+    if (aiConsentResponse) return aiConsentResponse;
+    env={...env,DB:await activeAccountDB(env.DB)};
     if (url.pathname === '/api/health') return health(request, env);
     if (url.pathname === '/api/import/parse') return parseImport(request, env);
     if (url.pathname === '/api/import/jobs') return createImportJob(request, env, ctx);
@@ -19,8 +41,9 @@ export default {
   },
 
   async queue(batch, env) {
+    env={...env,DB:await activeAccountDB(env.DB)};
     for (const message of batch.messages) {
-      await processImportJob(env, message.body?.jobId);
+      await processImportJob(env, message.body?.jobId, message.body?.userId);
       message.ack();
     }
   }
@@ -39,6 +62,12 @@ function runtimeConfig(request) {
 async function parseImport(request, env) {
   if (request.method !== 'POST') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' });
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return apiError('UNSUPPORTED_CONTENT_TYPE', 415);
+  // The legacy parse route used to be unauthenticated; never let it bypass consent or account ownership.
+  if (!env.DB) return apiError('AUTH_REQUIRED', 401);
+  const user = await currentUser(request, env);
+  if (!user) return apiError('AUTH_REQUIRED', 401);
+  if (!sameOrigin(request)) return apiError('AUTH_ORIGIN_INVALID', 403);
+  if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
   const requestId = crypto.randomUUID();
   const started = Date.now();
   const config = importConfig(env);
@@ -50,10 +79,12 @@ async function parseImport(request, env) {
     if (!body?.importId || !body?.normalizedDocument?.blocks?.length) throw coded('OPENAI_INVALID_RESPONSE');
     if (bytes(JSON.stringify(body.normalizedDocument)) > config.maxInputBytes) throw coded('DOCUMENT_TOO_LARGE');
 
-    const { payload, upstream, attempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: body, requestId });
+    await assertAiImportConsent(env, user.id);
+    const { payload, upstream, attempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: body, requestId, beforeAttempt: () => assertAiImportConsent(env, user.id) });
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, body.importId, body.normalizedDocument);
+    await assertAiImportConsent(env,user.id);
     return json({ preview, observability: observability({ requestId, config, payload, upstream, attempts, started, status: 'ok' }) }, 200, { 'X-Import-Request-Id': requestId });
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
@@ -63,6 +94,90 @@ async function parseImport(request, env) {
   }
 }
 
+// Cleanup-ledger row (RETURNED = stored upstream, deletion pending) for the response currently referenced by an import
+// job, when that reference is about to be replaced by `next` (null = cleared). Active owners only; never duplicates a
+// pending ledger row (a request's own, about-to-resolve background row does not count). Account purge deletes RETURNED rows upstream (200/404 only) before erasing the account.
+function supersededResponse(env, userId, importId, next, now) {
+  return lifecycleRawDB(env.DB).prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id)
+    SELECT 'superseded-'||lower(hex(randomblob(16))),j.user_id,'RETURNED',j.openai_response_id,?,?,j.id FROM import_jobs j
+    WHERE j.user_id = ? AND j.id = ? AND j.openai_response_id IS NOT NULL AND (? IS NULL OR j.openai_response_id <> ?)
+      AND EXISTS(SELECT 1 FROM users u WHERE u.id = j.user_id AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id = j.user_id AND w.response_id = j.openai_response_id AND w.state = 'RETURNED' AND w.import_job_id IS NOT NULL)`)
+    .bind(now, now, userId, importId, next, next);
+}
+
+// 15-minute maintenance under a daily D1 rows-written budget (Workers Free: 100,000/day shared with the app).
+// Each write statement runs only if its worst case still fits; actual rows (x (1 + indexes)) are charged afterwards.
+const MAINTENANCE_STATEMENT_ROWS = 256;
+// Workers Free cron CPU (10 ms) is dominated by D1 round trips, so the run is: ONE read (overdue count, today's budget,
+// index counts, storage schema, how many payload rows are due), ONE batch with the same cleanup statements in the same
+// order (a D1 batch runs sequentially in one transaction, so later steps see earlier deletions) and, only if rows were
+// written, one budget charge. Any failure falls back to the unchanged sequential run (a failed batch changed nothing).
+const MAINTENANCE_PROBE_SQL = `SELECT (SELECT COUNT(*) FROM users WHERE account_status IN ('PENDING_DELETION','PURGING') AND purge_at<=?) AS overdue,
+  (SELECT rows_written FROM d1_write_budget WHERE day = ? AND scope = 'maintenance') AS spent,
+  (SELECT json_group_object(tbl_name, n) FROM (SELECT tbl_name, COUNT(*) AS n FROM sqlite_master WHERE type = 'index' GROUP BY tbl_name)) AS indexes,
+  (SELECT json_group_array(json_object('name', name, 'sql', sql)) FROM sqlite_master WHERE type IN ('table','index') AND name IN (${STORAGE_TABLE_NAMES})) AS storage,
+  (SELECT COUNT(*) FROM (SELECT 1 ${PERSONAL_CLEANUP_RECORDS_FROM} LIMIT ${MAINTENANCE_STATEMENT_ROWS * PERSONAL_CLEANUP_RECORD_PAGES})) AS records_due`;
+async function budgetedMaintenance(env) {
+  const raw = lifecycleRawDB(env.DB), now = new Date().toISOString(), day = now.slice(0, 10);
+  let probe, plan;
+  try {
+    probe = await raw.prepare(MAINTENANCE_PROBE_SQL).bind(new Date(Date.now() - 3600000).toISOString(), day, now).first();
+    const tables = JSON.parse(probe.storage || '[]'), indexes = JSON.parse(probe.indexes || '{}');
+    const personal = personalRestoreSchemaStatus(tables);
+    const receipts = personal !== 'unsupported' && recordSchemaStatus(tables) === 'ready' && receiptSchemaStatus(tables) === 'ready';
+    // Same statements as the sequential run: lifecycle expiry (uncharged, as before), receipts, then restore cleanup.
+    plan = [['DELETE FROM account_lifecycle_credentials WHERE expires_at<=?', 0], ['DELETE FROM oauth_reauth_tickets WHERE expires_at<=?', 0]];
+    if (receipts) plan.push([RECEIPT_CLEANUP_SQL, 1]);
+    if (personal === 'ready') {
+      for (let page = 0; page < Math.min(PERSONAL_CLEANUP_RECORD_PAGES, Math.ceil(Number(probe.records_due || 0) / MAINTENANCE_STATEMENT_ROWS)); page++) plan.push([PERSONAL_CLEANUP_RECORDS_PAGE, 1]);
+      for (const sql of PERSONAL_CLEANUP_AFTER_RECORDS) plan.push([sql, 1]);
+    }
+    // Rows written = affected rows x (1 + indexes of the target table); unknown tables are charged 5 per row.
+    plan = plan.map(([sql, charged]) => ({ sql, w: charged ? 1 + (indexes[(/^\s*(?:DELETE\s+FROM|UPDATE|INSERT\s+INTO)\s+(\w+)/i.exec(sql) || [])[1]] ?? 4) : 0 }));
+  } catch { return sequentialMaintenance(env); }
+  if (Number(probe.overdue)) console.warn(JSON.stringify({ event: 'account_purge_overdue', count: Number(probe.overdue) }));
+  // A statement is included only while the worst case of everything included so far still fits the daily cap.
+  const spent = Number(probe.spent || 0);
+  let worst = 0, skipped = 0;
+  const included = plan.filter(step => {
+    if (step.w && spent + worst + MAINTENANCE_STATEMENT_ROWS * step.w > MAINTENANCE_DAILY_ROWS_WRITTEN) { skipped++; return false; }
+    worst += MAINTENANCE_STATEMENT_ROWS * step.w; return true;
+  });
+  let results;
+  try { results = await raw.batch(included.map(step => raw.prepare(step.sql).bind(now))); } catch { return sequentialMaintenance(env); }
+  const charged = included.reduce((sum, step, i) => sum + Number(results[i]?.meta?.changes || 0) * step.w, 0);
+  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(cause => console.warn(JSON.stringify({ event: 'maintenance_budget_charge_failed', code: cause.code || 'DATABASE_UNAVAILABLE', charged })));
+  if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
+}
+
+// Unchanged sequential maintenance (fallback when the probe or the batch fails, e.g. partially migrated schemas).
+// Exported for the differential test (scripts/free-plan-capacity-test.mjs).
+export async function sequentialMaintenance(env) {
+  const raw = lifecycleRawDB(env.DB), day = new Date().toISOString().slice(0, 10);
+  await lifecycleMaintenance(env);
+  let spent, indexes;
+  try {
+    spent = Number((await raw.prepare("SELECT rows_written FROM d1_write_budget WHERE day = ? AND scope = 'maintenance'").bind(day).first())?.rows_written || 0);
+    indexes = Object.fromEntries(((await raw.prepare("SELECT tbl_name, COUNT(*) AS n FROM sqlite_master WHERE type = 'index' GROUP BY tbl_name").all()).results || []).map(row => [row.tbl_name, Number(row.n)]));
+  } catch (cause) { console.warn(JSON.stringify({ event: 'maintenance_budget_unavailable', code: cause.code || 'DATABASE_UNAVAILABLE' })); return; }
+  // Rows written = affected rows x (1 + indexes of the target table); unknown tables are charged 5 per row.
+  const weight = sql => 1 + (indexes[(/^\s*(?:DELETE\s+FROM|UPDATE|INSERT\s+INTO)\s+(\w+)/i.exec(sql) || [])[1]] ?? 4);
+  let charged = 0, skipped = 0;
+  // Explicit delegation (D1 statements are class instances; spreading would drop their prototype methods).
+  const wrap = (st, w) => ({ unwrap: st, bind: (...v) => wrap(st.bind(...v), w), first: (...a) => st.first(...a), all: (...a) => st.all(...a), raw: (...a) => st.raw(...a),
+    run: async () => {
+      if (w && spent + charged + MAINTENANCE_STATEMENT_ROWS * w > MAINTENANCE_DAILY_ROWS_WRITTEN) { skipped++; return { success: true, meta: { changes: 0 } }; }
+      const result = await st.run(); if (w) charged += Number(result?.meta?.changes || 0) * w; return result;
+    } });
+  const budgeted = { prepare: sql => wrap(raw.prepare(sql), /^\s*(?:DELETE|UPDATE|INSERT)\b/i.test(sql) ? weight(sql) : 0), batch: items => raw.batch(items.map(item => item.unwrap || item)) };
+  // Sequential, so a statement starts only while its worst case fits: the daily cap is never exceeded.
+  await cleanupMutationReceipts({ ...env, DB: budgeted });
+  await cleanupPersonalOperations({ ...env, DB: budgeted });
+  if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(cause => console.warn(JSON.stringify({ event: 'maintenance_budget_charge_failed', code: cause.code || 'DATABASE_UNAVAILABLE', charged })));
+  if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
+}
+
 async function createImportJob(request, env, ctx) {
   if (request.method !== 'POST') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' });
   const contentType = request.headers.get('content-type')?.toLowerCase() || '';
@@ -70,6 +185,8 @@ async function createImportJob(request, env, ctx) {
   const user = await currentUser(request, env);
   if (!user) return apiError('AUTH_REQUIRED', 401);
   if (!sameOrigin(request)) return apiError('AUTH_ORIGIN_INVALID', 403);
+  // Validate permission BEFORE parsing multipart, storing the user's file metadata or queuing a job.
+  if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
   const config = importConfig(env);
   const body = contentType.startsWith('multipart/form-data') ? await readImportForm(request, config) : await readJson(request, config.maxInputBytes);
   if (!body?.importId || !body?.normalizedDocument?.blocks?.length) return apiError('OPENAI_INVALID_RESPONSE', 400);
@@ -77,30 +194,41 @@ async function createImportJob(request, env, ctx) {
   if (bytes(normalizedJson) > config.maxInputBytes) return apiError('DOCUMENT_TOO_LARGE', 413);
   const now = new Date().toISOString();
   const source = body.normalizedDocument;
-  await env.DB.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, raw_file_name, raw_file_type, raw_file_size, attempts, created_at, updated_at)
+  // Re-upload of an existing import id: its previous stored response moves into the cleanup ledger in the same atomic
+  // batch that clears it, so no upstream object loses its only reference.
+  await env.DB.batch([supersededResponse(env, user.id, body.importId, null, now), env.DB.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, raw_file_name, raw_file_type, raw_file_size, attempts, created_at, updated_at)
     VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, 0, ?, ?)
     ON CONFLICT(user_id, id) DO UPDATE SET status = 'queued', error_code = NULL, preview_json = NULL, observability_json = NULL, openai_response_id = NULL, normalized_document_json = excluded.normalized_document_json, source_json = excluded.source_json, raw_file_name = excluded.raw_file_name, raw_file_type = excluded.raw_file_type, raw_file_size = excluded.raw_file_size, updated_at = excluded.updated_at`)
-    .bind(body.importId, user.id, JSON.stringify({ fileName: source.fileName, fileType: source.fileType, language: source.language || null }), normalizedJson, body.file?.name || null, body.file?.type || null, body.file?.size || null, now, now)
-    .run();
+    .bind(body.importId, user.id, JSON.stringify({ fileName: source.fileName, fileType: source.fileType, language: source.language || null }), normalizedJson, body.file?.name || null, body.file?.type || null, body.file?.size || null, now, now)]);
   if (body.file) {
+    let workId;
     if (!env.OPENAI_API_KEY) return apiError('OPENAI_API_KEY_MISSING', 503);
     try {
       const rawFile = await rawFileFromUpload(body.file, config);
-      const requestId = crypto.randomUUID();
       const started = Date.now();
+      await assertAiImportConsent(env, user.id);
+      workId=await beginBackgroundWork(env,user.id);
+      // The durable work id is the upstream correlation key (X-Client-Request-Id + metadata) for UNKNOWN reconciliation.
+      const requestId = workId;
       const { payload, upstream, attempts } = await createOpenAIBackgroundResponse({ apiKey: env.OPENAI_API_KEY, config, input: { importId: body.importId, normalizedDocument: body.normalizedDocument, rawFile }, requestId });
+      await backgroundReturned(env,workId,payload.id);
       const metadata = observability({ requestId, config, payload, upstream, attempts, started, status: payload.status || 'queued' });
-      await env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
-        .bind(payload.id, JSON.stringify(metadata), new Date().toISOString(), user.id, body.importId)
-        .run();
+      const published = new Date().toISOString();
+      // A concurrent upload of the same import id may already have published another response: keep it in the ledger.
+      const [, publication] = await env.DB.batch([supersededResponse(env, user.id, body.importId, payload.id, published), env.DB.prepare("UPDATE import_jobs SET status = 'processing', openai_response_id = ?, observability_json = ?, attempts = attempts + 1, updated_at = ? WHERE user_id = ? AND id = ?")
+        .bind(payload.id, JSON.stringify(metadata), published, user.id, body.importId)]);
+      if(publication.meta.changes!==1)throw coded('ACCOUNT_PENDING_DELETION');
+      await backgroundResolved(env,workId);
+      await assertAiImportConsent(env,user.id);
       return json({ importId: body.importId, status: 'queued' }, 202);
     } catch (error) {
+      if(workId){await (error.upstreamRejected?backgroundRejected(env,workId,error.status):backgroundUnknown(env,workId));await cleanupClosedBackgroundWork(env,workId);}
       const code = error.code || 'OPENAI_REQUEST_FAILED';
       await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE user_id = ? AND id = ?").bind(code, new Date().toISOString(), user.id, body.importId).run();
       return apiError(code, statusFor(code));
     }
   }
-  await enqueueImportJob(env, ctx, body.importId);
+  await enqueueImportJob(env, ctx, body.importId, user.id);
   return json({ importId: body.importId, status: 'queued' }, 202);
 }
 
@@ -110,16 +238,21 @@ async function handleImportJob(request, env, ctx, importId, retry) {
   if (retry) {
     if (request.method !== 'POST') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' });
     if (!sameOrigin(request)) return apiError('AUTH_ORIGIN_INVALID', 403);
+    if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
     const row = await env.DB.prepare('SELECT id FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
     if (!row) return apiError('IMPORT_JOB_NOT_FOUND', 404);
     await env.DB.prepare("UPDATE import_jobs SET status = 'queued', error_code = NULL, updated_at = ? WHERE user_id = ? AND id = ?").bind(new Date().toISOString(), user.id, importId).run();
-    await enqueueImportJob(env, ctx, importId);
+    await enqueueImportJob(env, ctx, importId, user.id);
     return json({ importId, status: 'queued' }, 202);
   }
   if (request.method !== 'GET') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
-  let row = await env.DB.prepare('SELECT id, status, error_code, source_json, normalized_document_json, preview_json, observability_json, openai_response_id, attempts, created_at, updated_at, completed_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
+  let row = await env.DB.prepare('SELECT user_id, id, status, error_code, source_json, normalized_document_json, preview_json, observability_json, openai_response_id, attempts, created_at, updated_at, completed_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
   if (!row) return apiError('IMPORT_JOB_NOT_FOUND', 404);
-  if (row.status === 'processing' && row.openai_response_id) row = await syncOpenAIBackgroundJob(env, row);
+  if (row.status === 'processing' && row.openai_response_id) {
+    if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
+    row = await syncOpenAIBackgroundJob(env, row);
+  }
+  if(!(await env.DB.prepare('SELECT id FROM users WHERE id=? AND deleted_at IS NULL').bind(user.id).first()))return apiError('AUTH_REQUIRED',401);
   return json({
     importId: row.id,
     status: row.status,
@@ -134,18 +267,25 @@ async function handleImportJob(request, env, ctx, importId, retry) {
   });
 }
 
-async function enqueueImportJob(env, ctx, jobId) {
-  if (env.IMPORT_QUEUE) await env.IMPORT_QUEUE.send({ jobId });
-  else ctx?.waitUntil?.(processImportJob(env, jobId));
+async function enqueueImportJob(env, ctx, jobId, userId) {
+  if (!jobId || !userId) return; // Old queue messages cannot acquire a different account's document.
+  if (env.IMPORT_QUEUE) await env.IMPORT_QUEUE.send({ jobId, userId });
+  else ctx?.waitUntil?.(processImportJob(env, jobId, userId));
 }
 
-async function processImportJob(env, jobId) {
-  if (!jobId) return;
-  const job = await env.DB.prepare('SELECT * FROM import_jobs WHERE id = ?').bind(jobId).first();
-  if (!job || !['queued', 'failed'].includes(job.status)) return;
+async function processImportJob(env, jobId, userId) {
+  if (!jobId || !userId) return;
+  const job = await env.DB.prepare('SELECT * FROM import_jobs WHERE id = ? AND user_id = ?').bind(jobId, userId).first();
+  if (!job || job.status !== 'queued') return; // A failed/revoked job resumes only after an explicit, newly authorized retry.
+  // A queued job grants no continuing permission: check owner again at execution time.
+  if (!(await hasAiImportConsent(env, job.user_id))) {
+    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = 'AI_CONSENT_REQUIRED', updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued','failed')")
+      .bind(new Date().toISOString(), jobId, job.user_id).run();
+    return;
+  }
   const now = new Date().toISOString();
   const attempts = Number(job.attempts || 0) + 1;
-  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ?").bind(attempts, now, jobId).run();
+  await env.DB.prepare("UPDATE import_jobs SET status = 'processing', attempts = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'queued'").bind(attempts, now, jobId, userId).run();
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
@@ -153,16 +293,18 @@ async function processImportJob(env, jobId) {
     if (!normalizedDocument?.blocks?.length) throw coded('OPENAI_INVALID_RESPONSE');
     const requestId = crypto.randomUUID();
     const started = Date.now();
-    const { payload, upstream, attempts: upstreamAttempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: { importId: job.id, normalizedDocument }, requestId });
+    await assertAiImportConsent(env, job.user_id);
+    const { payload, upstream, attempts: upstreamAttempts } = await requestOpenAI({ apiKey: env.OPENAI_API_KEY, config, input: { importId: job.id, normalizedDocument }, requestId, beforeAttempt: () => assertAiImportConsent(env, job.user_id) });
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, job.id, normalizedDocument);
+    await assertAiImportConsent(env, job.user_id);
     const metadata = observability({ requestId, config, payload, upstream, attempts: upstreamAttempts, started, status: 'ok' });
-    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(preview), JSON.stringify(metadata), new Date().toISOString(), new Date().toISOString(), job.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'").bind(JSON.stringify(preview), JSON.stringify(metadata), new Date().toISOString(), new Date().toISOString(), job.id, job.user_id).run();
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
     console.warn(JSON.stringify({ jobId, status: code, attempts }));
-    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ?").bind(code, new Date().toISOString(), job.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('processing','queued')").bind(code, new Date().toISOString(), job.id, job.user_id).run();
   }
 }
 
@@ -190,12 +332,14 @@ async function searchYouTube(request, env, url) {
   }
 }
 
-export async function requestOpenAI({ apiKey, config, input, requestId, fetchImpl = fetch, sleep = delay }) {
+export async function requestOpenAI({ apiKey, config, input, requestId, fetchImpl = fetch, sleep = delay, beforeAttempt = async () => {} }) {
   let attempts = 0;
   let lastError;
   while (attempts <= config.maxRetries) {
     attempts += 1;
     try {
+      // Revocation during rate-limit backoff must stop the NEXT OpenAI request, not only the first.
+      await beforeAttempt();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), config.timeoutMs);
       let upstream;
@@ -234,6 +378,8 @@ async function createOpenAIBackgroundResponse({ apiKey, config, input, requestId
   if (!upstream.ok) {
     const error = coded(mapOpenAIStatus(upstream.status));
     error.status = upstream.status;
+    // Only these definite request rejections mean OpenAI created no response object; anything else stays UNKNOWN.
+    error.upstreamRejected = [400, 401, 403, 404, 413, 415, 422, 429].includes(upstream.status);
     throw error;
   }
   return { payload: await upstream.json(), upstream, attempts: 1 };
@@ -253,6 +399,7 @@ async function syncOpenAIBackgroundJob(env, row) {
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
+    await assertAiImportConsent(env,row.user_id);
     const { payload, upstream } = await retrieveOpenAIResponse({ apiKey: env.OPENAI_API_KEY, responseId: row.openai_response_id });
     if (payload.status === 'queued' || payload.status === 'in_progress') return row;
     const normalizedDocument = parseJson(row.normalized_document_json);
@@ -260,15 +407,16 @@ async function syncOpenAIBackgroundJob(env, row) {
     let preview;
     try { preview = normalizeImportedPreview(JSON.parse(extractStructuredOutput(payload))); } catch (error) { if (error.code) throw error; throw coded('OPENAI_INVALID_RESPONSE'); }
     validatePreview(preview, row.id, normalizedDocument);
+    await assertAiImportConsent(env, row.user_id);
     const metadata = { ...(parseJson(row.observability_json) || {}), status: 'ok', model: payload.model || config.model, inputTokens: payload.usage?.input_tokens ?? null, outputTokens: payload.usage?.output_tokens ?? null, totalTokens: payload.usage?.total_tokens ?? null, openaiRequestId: upstream.headers?.get?.('x-request-id') || payload.id || row.openai_response_id };
     const now = new Date().toISOString();
-    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ?")
-      .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id)
+    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'")
+      .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id, row.user_id)
       .run();
     return { ...row, status: 'done', preview_json: JSON.stringify(preview), observability_json: JSON.stringify(metadata), error_code: null, updated_at: now, completed_at: now };
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
-    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ?").bind(code, new Date().toISOString(), row.id).run();
+    await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'").bind(code, new Date().toISOString(), row.id, row.user_id).run();
     return { ...row, status: 'failed', error_code: code, updated_at: new Date().toISOString() };
   }
 }
@@ -293,7 +441,9 @@ function requestBody(model, input, requestId, options = {}) {
     { type: 'input_text', text: JSON.stringify({ importId: input.importId, normalizedDocument: sanitize(input.normalizedDocument), note: input.rawFile ? 'The original uploaded file is attached as input_file. Use the original file as the primary source. If file parsing is imperfect, use normalizedDocument as extracted text/table helper context.' : 'No original file is attached. Use normalizedDocument as the source.' }) }
   ];
   if (input.rawFile?.base64) content.push({ type: 'input_file', filename: input.rawFile.name, file_data: `data:${input.rawFile.type || 'application/octet-stream'};base64,${input.rawFile.base64}` });
-  return { model, temperature: 0, metadata: { import_request_id: requestId }, background: Boolean(options.background), input: [{ role: 'developer', content: [{ type: 'input_text', text: prompt() }] }, { role: 'user', content }], text: { format: { type: 'json_schema', name: 'import_program_v1_1', strict: true, schema: responseSchema } } };
+  // Account deletion (issue #6): synchronous responses are not stored at OpenAI (their ids are not kept, so they could
+  // not be deleted later). Background responses must be stored; their ids are kept and deleted with the account.
+  return { model, temperature: 0, metadata: { import_request_id: requestId }, background: Boolean(options.background), store: Boolean(options.background), input: [{ role: 'developer', content: [{ type: 'input_text', text: prompt() }] }, { role: 'user', content }], text: { format: { type: 'json_schema', name: 'import_program_v1_1', strict: true, schema: responseSchema } } };
 }
 function prompt() { return `You are a strict workout-program extractor, not a coach.
 
@@ -490,7 +640,7 @@ async function rawFileFromUpload(file, config) {
 function supportedUploadFile(file) { return ['pdf', 'docx', 'xlsx'].includes(String(file.name || '').split('.').pop()?.toLowerCase()); }
 function contentTypeFor(name) { const ext = String(name || '').split('.').pop()?.toLowerCase(); return ext === 'pdf' ? 'application/pdf' : ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/octet-stream'; }
 function arrayBufferToBase64(buffer) { let binary = ''; const bytes = new Uint8Array(buffer); for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(binary); }
-function statusFor(code) { if (code === 'AI_IMPORT_RATE_LIMITED' || code === 'OPENAI_RATE_LIMITED') return 429; if (code === 'DOCUMENT_TOO_LARGE') return 413; if (code === 'OPENAI_API_KEY_MISSING') return 503; if (code === 'OPENAI_AUTH_FAILED') return 502; if (code === 'OPENAI_TIMEOUT') return 504; return 400; }
+function statusFor(code) { if (code === 'AI_CONSENT_REQUIRED') return 403; if (code === 'AI_IMPORT_RATE_LIMITED' || code === 'OPENAI_RATE_LIMITED') return 429; if (code === 'DOCUMENT_TOO_LARGE') return 413; if (code === 'OPENAI_API_KEY_MISSING') return 503; if (code === 'OPENAI_AUTH_FAILED') return 502; if (code === 'OPENAI_TIMEOUT') return 504; return 400; }
 function json(body, status = 200, headers = {}) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } }); }
 function apiError(code, status, headers) { return json({ code }, status, headers); }
 function sameOrigin(request) { const origin = request.headers.get('origin'); return !origin || origin === new URL(request.url).origin; }

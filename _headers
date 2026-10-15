@@ -1,0 +1,5 @@
+# Pre-launch search safety for static assets served by app.reptrio.com,
+# api.reptrio.com root/static paths, and the legacy workers.dev hostname.
+# Worker-generated /api/* responses are not affected by this file.
+/*
+  X-Robots-Tag: noindex, nofollow

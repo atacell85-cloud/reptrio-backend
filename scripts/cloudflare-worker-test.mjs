@@ -35,6 +35,7 @@ const providersReadyBody = await providersReady.json();
 const mobileDb = mockAccountDb();
 const mobileRegister = await worker.fetch(new Request('https://a2.example/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ email: 'mobile@example.test', password: 'password123' }) }), { ...baseEnv, DB: mobileDb });
 const mobileRegisterBody = await mobileRegister.json();
+if (mobileRegisterBody.user.onboardingEligible !== false) throw new Error('Legacy auth schema must expose false eligibility');
 const mobileMe = await worker.fetch(new Request('https://a2.example/api/me', { headers: { Authorization: `Bearer ${mobileRegisterBody.sessionToken || ''}` } }), { ...baseEnv, DB: mobileDb });
 const mobileMeBody = await mobileMe.json();
 const sourceReference = { page: null, sheet: null, cellRange: null, text: null };
@@ -106,7 +107,7 @@ const importNormalizationOk = normalizedImport.program.description === null
   && normalizedImport.unparsedContent.length === 0;
 
 const result = {
-  ok: health.ok && providersMissingBody.providers?.google === false && providersMissingBody.providers?.apple === false && providersReadyBody.providers?.google === true && providersReadyBody.providers?.apple === true && staticAsset.ok && invalidMethod.status === 405 && invalidContentType.status === 415 && missingSecret.status === 503 && oversized.status === 413 && limited.status === 429 && youtubeMissingSecret.status === 503 && youtubeOk.ok && youtubeOkBody.videos?.[0]?.videoId === 'abc123' && googleOauthUnconfigured.status === 303 && appleOauthUnconfigured.status === 303 && importNormalizationOk && mobileRegister.ok && Boolean(mobileRegisterBody.sessionToken) && mobileMe.ok && mobileMeBody.user?.email === 'mobile@example.test',
+  ok: health.ok && providersMissingBody.providers?.google === false && providersMissingBody.providers?.apple === false && providersReadyBody.providers?.google === true && providersReadyBody.providers?.apple === true && staticAsset.ok && invalidMethod.status === 405 && invalidContentType.status === 415 && missingSecret.status === 401 && oversized.status === 401 && limited.status === 401 && youtubeMissingSecret.status === 503 && youtubeOk.ok && youtubeOkBody.videos?.[0]?.videoId === 'abc123' && googleOauthUnconfigured.status === 303 && appleOauthUnconfigured.status === 303 && importNormalizationOk && mobileRegister.ok && Boolean(mobileRegisterBody.sessionToken) && mobileMe.ok && mobileMeBody.user?.email === 'mobile@example.test',
   health: await health.json(), providersMissing: providersMissingBody.providers, providersReady: providersReadyBody.providers, staticAsset: staticAsset.headers.get('content-type'), invalidMethod: invalidMethod.status, invalidContentType: invalidContentType.status, missingSecret: (await missingSecret.json()).code, oversized: (await oversized.json()).code, limited: (await limited.json()).code, youtubeMissingSecret: (await youtubeMissingSecret.json()).code, youtubeOk: youtubeOkBody.videos?.length || 0, googleOauthUnconfigured: googleOauthUnconfigured.headers.get('location'), appleOauthUnconfigured: appleOauthUnconfigured.headers.get('location'), importNormalizationOk, mobileTokenAuthOk: Boolean(mobileRegisterBody.sessionToken) && mobileMeBody.user?.email === 'mobile@example.test'
 };
 console.log(JSON.stringify(result, null, 2));
@@ -116,6 +117,7 @@ function mockAccountDb() {
   const state = { users: [], sessions: [] };
   return {
     prepare(sql) {
+      if (sql === 'PRAGMA table_info(users)') return { all: async () => ({ results: [{ name: 'id' }, { name: 'email' }] }) };
       return {
         bind(...values) {
           return {
@@ -130,9 +132,9 @@ function mockAccountDb() {
             },
             async run() {
               if (sql.startsWith('INSERT INTO users')) state.users.push({ id: values[0], email: values[1], password_hash: values[2], password_salt: values[3], created_at: values[4], deleted_at: null });
-              if (sql.startsWith('INSERT INTO auth_sessions')) state.sessions.push({ id: values[0], user_id: values[1], token_hash: values[2], created_at: values[3], expires_at: values[4] });
+              if (sql.startsWith('INSERT INTO auth_sessions')) state.sessions.push({ id: values[0],user_id:values[4],token_hash:values[1],created_at:values[2],expires_at:values[3] });
               if (sql.startsWith('DELETE FROM auth_sessions WHERE token_hash')) state.sessions = state.sessions.filter(item => item.token_hash !== values[0]);
-              return { success: true };
+              return { success: true,meta:{changes:1} };
             }
           };
         }
