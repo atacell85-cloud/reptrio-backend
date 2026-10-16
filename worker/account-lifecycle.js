@@ -214,9 +214,14 @@ export async function purgeDueAccounts(env,{liveActivityEnds=runLiveActivityEnds
  // the UNKNOWN sweep and whether a Live Activity end is due. Nothing to do = this single D1 call. Readiness is still
  // checked before any write.
  const probe=await minuteProbe(env.DB,now,nowMs);
- // The end push is time-critical and bounded (<= 5 sends); its failure never blocks the purge step.
- if(Number(probe?.live_activity)){try{await liveActivityEnds(env,{nowMs});}catch(cause){console.warn(JSON.stringify({event:'live_activity_end_failed',code:cause?.code||'DATABASE_UNAVAILABLE'}));}}
- if(!probe?.due_id&&!Number(probe?.stale))return;
+ // The end step is bounded (<= 3 sends) and its failure never blocks the purge step. Workers Free cron CPU (10 ms):
+ // measured on Cloudflare (staging, 2026-10-16) idle 1-2 ms, one end push 6-9 ms (12-15 ms on a cold isolate), so an
+ // end step and a purge step never share an invocation: when both are due they alternate by minute (each waits at most
+ // one minute; a long multi-step purge cannot starve the end push, nor the end push the purge).
+ const endDue=Number(probe?.live_activity)>0,purgeDue=Boolean(probe?.due_id)||Number(probe?.stale)>0;
+ const endTurn=endDue&&(!purgeDue||Math.floor(nowMs/60000)%2===0);
+ if(endTurn){try{await liveActivityEnds(env,{nowMs});}catch(cause){console.warn(JSON.stringify({event:'live_activity_end_failed',code:cause?.code||'DATABASE_UNAVAILABLE'}));}return;}
+ if(!purgeDue)return;
  lifecycleReadyCheck(probe);
  if(Number(probe.stale))await env.DB.prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='WORKER_INTERRUPTED' WHERE state='RUNNING' AND expires_at<=?").bind(now).run();
  if(probe.due_id)await executePurge(env,probe.due_id);

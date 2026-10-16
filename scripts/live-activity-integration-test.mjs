@@ -31,6 +31,11 @@ async function register(env, tag) {
   assert.equal(r.status, 201); return r.json();
 }
 const report = (workoutId, pushToken = TOKEN_A, activityMs = Date.now(), sentMs = Date.now()) => ({ workoutId, pushToken, environment: 'auto', activityAt: new Date(activityMs).toISOString(), sentAt: new Date(sentMs).toISOString() });
+// Runs fn once per simulated minute (Date.now advanced by one minute each time), starting at an even minute.
+async function minutes(n, fn) {
+  const real = Date.now; let t = Math.ceil(real() / (2 * MIN)) * 2 * MIN;
+  try { for (let i = 0; i < n; i++) { Date.now = () => t; await fn(i, t); t += MIN; } } finally { Date.now = real; }
+}
 const rows = (db, userId) => db.rows('SELECT workout_id,push_token,state,end_ms FROM live_activity_end WHERE user_id=? ORDER BY workout_id', userId);
 
 // 1. HTTP contract: session auth, method/type/origin/size/JSON validation, ownership.
@@ -126,8 +131,33 @@ const rows = (db, userId) => db.rows('SELECT workout_id,push_token,state,end_ms 
   const due = await register(env, 'la-purge');
   db.raw.prepare("UPDATE users SET account_status='PURGING',purge_at=? WHERE id=?").run(new Date(Date.now() - MIN).toISOString(), due.user.id);
   db.raw.prepare("UPDATE live_activity_end SET state='PENDING',end_ms=? WHERE user_id=?").run(Date.now() - MIN, u.user.id);
-  for (let i = 0; i < 5 && db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length; i++) await purgeDueAccounts(env, { liveActivityEnds: async () => { throw new Error('boom'); } });
+  // Both due: the steps alternate by minute (Workers Free CPU: never both in one invocation).
+  const turns = [];
+  await minutes(2, async (i, t) => {
+    const before = db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length;
+    let ended = 0;
+    await purgeDueAccounts(env, { liveActivityEnds: async () => { ended++; } });
+    turns.push([ended, before - db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length]);
+  });
+  assert.deepEqual(turns[0], [1, 0], 'even minute: end step only, purge waits');
+  assert.equal(turns[1][0], 0, 'odd minute: no end step');
+  // A failing end step never blocks the purge (it completes on the purge minutes).
+  await minutes(10, async () => { if (db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length) await purgeDueAccounts(env, { liveActivityEnds: async () => { throw new Error('boom'); } }); });
   assert.equal(db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length, 0, 'purge completed despite the failing end step');
+}
+
+// 4b. At most 3 end pushes per minute (Workers Free CPU); the rest go out the next minute.
+{
+  const { db, env } = setup();
+  const sent = [];
+  const fetchImpl = async () => { sent.push(1); return new Response(null, { status: 200, headers: { 'apns-id': 'x' } }); };
+  for (let i = 0; i < 4; i++) {
+    const u = await register(env, 'la-cap-run-' + i);
+    await call(env, '/api/live-activity/end', u.sessionToken, report('w1', ('c' + i).repeat(32), Date.now() - 40 * MIN, Date.now()));
+  }
+  assert.deepEqual(await runLiveActivityEnds(env, { fetchImpl, log: () => {} }), { sent: 3, rows: 3 });
+  assert.deepEqual(await runLiveActivityEnds(env, { nowMs: Date.now() + MIN, fetchImpl, log: () => {} }), { sent: 1, rows: 1 });
+  assert.equal(sent.length, 4);
 }
 
 // 5. Before migration 0015: the minute cron falls back to the unchanged probe; purge works; routes answer 503.

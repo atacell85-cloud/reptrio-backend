@@ -11,7 +11,7 @@ Worker (below). Build 44 branches and artifact are unchanged.
 |---|---|
 | `POST /api/live-activity/end` `{ workoutId, pushToken, environment, activityAt, sentAt }`, `POST /api/live-activity/end/cancel` `{ workoutId }` — session auth (`currentUser`, ACTIVE accounts only), JSON POST, same-origin, ≤ 2 KB body | `worker/live-activity-end.js` `handleLiveActivityRequest`, routed in `worker/index.js` after the ACTIVE-account DB gate |
 | Write only for an ACTIVE account (atomic `INSERT … SELECT … WHERE EXISTS(users ACTIVE)`); at most 3 rows per user (the reported workout always kept) | `SCHEDULE_SQL`, `TRIM_SQL` |
-| Minute step inside the existing `* * * * *` cron: one extra `EXISTS` term in the lifecycle minute probe (idle minute = still one D1 call); the step runs first, bounded (≤ 5 sends) and its failure never blocks the purge; no additional cron | `worker/account-lifecycle.js` `minuteProbe`, `purgeDueAccounts`; `LIVE_ACTIVITY_PROBE_SQL` |
+| Minute step inside the existing `* * * * *` cron: one extra `EXISTS` term in the lifecycle minute probe (idle minute = still one D1 call); bounded (≤ 3 sends), never in the same invocation as a purge step (both due → alternate by minute), its failure never blocks the purge; no additional cron | `worker/account-lifecycle.js` `minuteProbe`, `purgeDueAccounts`; `LIVE_ACTIVITY_PROBE_SQL` |
 | Before 0015 is applied: the probe falls back to the unchanged lifecycle probe (purge unaffected, retried every 15 min per isolate), routes answer 503 (the app backs off 10 min) | same |
 | `claimed_ms` race closed: `FINAL_SQL` finalizes only its own claim | `FINAL_SQL` |
 | Account deletion: no push for a non-ACTIVE account (`DUE_SQL`), table erased explicitly in the final purge (FK on/off) | `DUE_SQL`, `worker/account-api.js` `purgeAccountData` |
@@ -174,6 +174,19 @@ assets, queues, rate limiters, mail or OpenAI keys (AI import and mail flows una
 test accounts. Operator routes need `APNSTEST_TOKEN`: `POST /apnstest/probe`, `POST /apnstest/run` (one minute cron step),
 `GET /apnstest/rows` (token masked, no account ids). The device-test build sets `EXPO_PUBLIC_REPTRIO_API_BASE_URL` to
 the staging URL at bundle time; production builds never set it.
+
+## Measurements (staging on real Cloudflare, 2026-10-16, version from `2da9061`)
+- Real route + real minute cron: a report 31 min old → ended by the next cron through the folded probe (`auto`:
+  production 403 `BadEnvironmentKeyInToken` → sandbox 400 `BadDeviceToken` → `DEAD`, fake token); a fresh report stayed
+  `PENDING`; cross-origin → 403; no session → 401. Probe unchanged (sandbox ES256 PASS).
+- CPU (`wrangler tail` `cpuTime`): idle minute 1–2 ms; minute with one end push 6–9 ms (6 samples, `auto` and
+  `sandbox`); first invocations after a deploy (cold isolate + ES256 signing) 12 and 15 ms — all `outcome: ok`, but at or
+  above the Free 10 ms figure. Report request 7–10 ms (same order as other authenticated routes). Probe (4 APNs requests)
+  5 ms warm, 8–11 ms cold.
+- Consequences applied: ≤ 3 sends per minute (was 5); an end step and a purge step never share an invocation (both due →
+  alternate by minute). Residual: a cold-isolate minute can exceed 10 ms; if Cloudflare ever cancels such an invocation
+  the claim is swept after 2 min and retried (≤ 6 attempts), so the end comes a few minutes late; if the cancelled invocation had already sent, the retry is a second end push to an activity that is already ended (no effect).
+- D1: idle minute 1 read; per end push +3 statements; per changed report 1 batch (trim + upsert) + 1 read.
 
 ## Production activation (separate explicit permission; not done)
 Prerequisites: Build 44 production deploy (migrations ≤ 0014) done first; a **Sandbox & Production** APNs key (or a
