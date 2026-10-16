@@ -1,5 +1,13 @@
 # Reptrio — Güncel çalışma kaydı
 
+## Build 46 · B46-03 AI response cleanup after import (Option C) · 2026-10-17
+
+Branch `build46/integration` (from `build45/live-activity-end` `925b0d8`). HIGH (AI provider data, account-deletion ledger, cron maintenance). No migration, no new route, no new cron.
+- Completed background import: ONE D1 batch writes the `done` preview, opens a cleanup ledger row (`imported-…`, RETURNED, `import_job_id`) and drops `import_jobs.openai_response_id`; only the request whose `done` write won then deletes the stored OpenAI response (`ctx.waitUntil`, 10 s timeout). 200/404 → RESOLVED; any other outcome (5xx, network, missing key) → stays RETURNED, `last_error=OPENAI_CLEANUP_FAILED`, next attempt +1 h (`expires_at`).
+- 15-minute maintenance: the existing single probe read also returns at most one due `imported-` row of an ACTIVE owner; one delete per invocation, write charged to the maintenance budget; nothing extra when nothing is due. Deleting accounts are left to the unchanged purge (which deletes RETURNED rows upstream before erasing). Failed cleanups surface in the existing daily digest (`AI_CLEANUP_FAILED`).
+- Unchanged: preview served from D1 (user data untouched), failed/invalid jobs keep their id (purge-only, as before), synchronous imports (`store:false`), DELETE_NOW/purge gates, UNKNOWN reconciliation. A probe on a DB without `account_lifecycle_work` falls back to the unchanged sequential maintenance (no retry).
+- Tests: new `test:import-response-cleanup` (in `npm test`, incl. the exhausted-budget skip); 9 own targeted mutations killed. Independent HIGH Guardian **GEÇTİ** (14 mutations, 12 killed; survivors: budget gate → test added, ineffective dedupe defence → kept). Release condition: measure real Cloudflare CPU of the retry path and the poll `waitUntil` delete before production deploy. Real Cloudflare CPU of the maintenance retry not measured yet (no staging deploy in this slice).
+
 ## Build 45 · Live Activity end via APNs (sole Build 45 scope) · 2026-10-16
 
 Branch `build45/live-activity-end` (from `integration/build44` `d1be882` via `build45/apns-feasibility` `fcd547a`). HIGH (auth API, schema, cron, account erase). Details, production activation order and rollback: [Build 45 APNs](docs/BUILD_45_APNS_01_FEASIBILITY.md).

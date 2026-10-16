@@ -1,4 +1,4 @@
-import { purgeDueAccounts, lifecycleMaintenance, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB } from './account-lifecycle.js';
+import { purgeDueAccounts, lifecycleMaintenance, activeAccountDB, beginBackgroundWork, backgroundReturned, backgroundResolved, backgroundUnknown, backgroundRejected, cleanupClosedBackgroundWork, lifecycleRawDB, importedResponseStatements, cleanupImportedResponse, IMPORTED_RESPONSE_PREFIX } from './account-lifecycle.js';
 import { runOperationalDigest, OPS_DIGEST_CRON } from './ops-alerts.js';
 import { MAINTENANCE_DAILY_ROWS_WRITTEN } from './free-plan-limits.js';
 import { cleanupPersonalOperations, PERSONAL_CLEANUP_RECORDS_FROM, PERSONAL_CLEANUP_RECORDS_PAGE, PERSONAL_CLEANUP_RECORD_PAGES, PERSONAL_CLEANUP_AFTER_RECORDS } from './personal-restore-api.js';
@@ -121,13 +121,16 @@ const MAINTENANCE_PROBE_SQL = `SELECT (SELECT COUNT(*) FROM users WHERE account_
   (SELECT rows_written FROM d1_write_budget WHERE day = ? AND scope = 'maintenance') AS spent,
   (SELECT json_group_object(tbl_name, n) FROM (SELECT tbl_name, COUNT(*) AS n FROM sqlite_master WHERE type = 'index' GROUP BY tbl_name)) AS indexes,
   (SELECT json_group_array(json_object('name', name, 'sql', sql)) FROM sqlite_master WHERE type IN ('table','index') AND name IN (${STORAGE_TABLE_NAMES})) AS storage,
-  (SELECT COUNT(*) FROM (SELECT 1 ${PERSONAL_CLEANUP_RECORDS_FROM} LIMIT ${MAINTENANCE_STATEMENT_ROWS * PERSONAL_CLEANUP_RECORD_PAGES})) AS records_due`;
+  (SELECT COUNT(*) FROM (SELECT 1 ${PERSONAL_CLEANUP_RECORDS_FROM} LIMIT ${MAINTENANCE_STATEMENT_ROWS * PERSONAL_CLEANUP_RECORD_PAGES})) AS records_due,
+  (SELECT json_object('id', w.id, 'responseId', w.response_id) FROM account_lifecycle_work w WHERE w.state = 'RETURNED' AND w.id LIKE '${IMPORTED_RESPONSE_PREFIX}%' AND w.expires_at <= ?
+    AND EXISTS(SELECT 1 FROM users u WHERE u.id = w.user_id AND u.account_status = 'ACTIVE' AND u.deleted_at IS NULL) ORDER BY w.expires_at LIMIT 1) AS import_cleanup`;
 async function budgetedMaintenance(env) {
   const raw = lifecycleRawDB(env.DB), now = new Date().toISOString(), day = now.slice(0, 10);
-  let probe, plan;
+  let probe, plan, indexes;
   try {
-    probe = await raw.prepare(MAINTENANCE_PROBE_SQL).bind(new Date(Date.now() - 3600000).toISOString(), day, now).first();
-    const tables = JSON.parse(probe.storage || '[]'), indexes = JSON.parse(probe.indexes || '{}');
+    probe = await raw.prepare(MAINTENANCE_PROBE_SQL).bind(new Date(Date.now() - 3600000).toISOString(), day, now, now).first();
+    const tables = JSON.parse(probe.storage || '[]');
+    indexes = JSON.parse(probe.indexes || '{}');
     const personal = personalRestoreSchemaStatus(tables);
     const receipts = personal !== 'unsupported' && recordSchemaStatus(tables) === 'ready' && receiptSchemaStatus(tables) === 'ready';
     // Same statements as the sequential run: lifecycle expiry (uncharged, as before), receipts, then restore cleanup.
@@ -150,7 +153,15 @@ async function budgetedMaintenance(env) {
   });
   let results;
   try { results = await raw.batch(included.map(step => raw.prepare(step.sql).bind(now))); } catch { return sequentialMaintenance(env); }
-  const charged = included.reduce((sum, step, i) => sum + Number(results[i]?.meta?.changes || 0) * step.w, 0);
+  let charged = included.reduce((sum, step, i) => sum + Number(results[i]?.meta?.changes || 0) * step.w, 0);
+  // B46-03 retry: at most ONE failed/unattempted imported-response delete per invocation (ACTIVE owners only; a deleting
+  // account's rows belong to the purge). Found by the same probe read; skipped when today's budget cannot take its write.
+  const retry = parseJson(probe.import_cleanup);
+  const retryW = 1 + (indexes.account_lifecycle_work ?? 4);
+  if (retry?.id && retry.responseId && spent + charged + retryW <= MAINTENANCE_DAILY_ROWS_WRITTEN) {
+    const outcome = await cleanupImportedResponse(env, retry.id, retry.responseId).catch(() => null);
+    charged += Number(outcome?.changes || 0) * retryW;
+  }
   if (charged) await raw.prepare("INSERT INTO d1_write_budget(day, scope, rows_written) VALUES (?, 'maintenance', ?) ON CONFLICT(day, scope) DO UPDATE SET rows_written = d1_write_budget.rows_written + excluded.rows_written").bind(day, charged).run().catch(cause => console.warn(JSON.stringify({ event: 'maintenance_budget_charge_failed', code: cause.code || 'DATABASE_UNAVAILABLE', charged })));
   if (skipped) console.warn(JSON.stringify({ event: 'maintenance_budget_exhausted', skipped, day }));
 }
@@ -254,7 +265,7 @@ async function handleImportJob(request, env, ctx, importId, retry) {
   if (!row) return apiError('IMPORT_JOB_NOT_FOUND', 404);
   if (row.status === 'processing' && row.openai_response_id) {
     if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
-    row = await syncOpenAIBackgroundJob(env, row);
+    row = await syncOpenAIBackgroundJob(env, row, ctx);
   }
   if(!(await env.DB.prepare('SELECT id FROM users WHERE id=? AND deleted_at IS NULL').bind(user.id).first()))return apiError('AUTH_REQUIRED',401);
   return json({
@@ -399,7 +410,7 @@ async function retrieveOpenAIResponse({ apiKey, responseId, fetchImpl = fetch })
   return { payload: await upstream.json(), upstream };
 }
 
-async function syncOpenAIBackgroundJob(env, row) {
+async function syncOpenAIBackgroundJob(env, row, ctx) {
   const config = importConfig(env);
   try {
     if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
@@ -414,10 +425,19 @@ async function syncOpenAIBackgroundJob(env, row) {
     await assertAiImportConsent(env, row.user_id);
     const metadata = { ...(parseJson(row.observability_json) || {}), status: 'ok', model: payload.model || config.model, inputTokens: payload.usage?.input_tokens ?? null, outputTokens: payload.usage?.output_tokens ?? null, totalTokens: payload.usage?.total_tokens ?? null, openaiRequestId: upstream.headers?.get?.('x-request-id') || payload.id || row.openai_response_id };
     const now = new Date().toISOString();
-    await env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'")
-      .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id, row.user_id)
-      .run();
-    return { ...row, status: 'done', preview_json: JSON.stringify(preview), observability_json: JSON.stringify(metadata), error_code: null, updated_at: now, completed_at: now };
+    // B46-03: one atomic batch persists the preview, opens the cleanup ledger row and drops the stored response id; only
+    // the request whose `done` write won (and opened the row) deletes the response upstream, after the preview is durable.
+    const ledgerId = IMPORTED_RESPONSE_PREFIX + crypto.randomUUID();
+    const [done, opened] = await env.DB.batch([
+      env.DB.prepare("UPDATE import_jobs SET status = 'done', preview_json = ?, observability_json = ?, error_code = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'")
+        .bind(JSON.stringify(preview), JSON.stringify(metadata), now, now, row.id, row.user_id),
+      ...importedResponseStatements(env, { ledgerId, userId: row.user_id, importId: row.id, responseId: row.openai_response_id, completedAt: now }),
+    ]);
+    if (done.meta.changes === 1 && opened.meta.changes === 1) {
+      const cleanup = cleanupImportedResponse(env, ledgerId, row.openai_response_id).catch(() => {});
+      if (ctx?.waitUntil) ctx.waitUntil(cleanup); else await cleanup;
+    }
+    return { ...row, status: 'done', preview_json: JSON.stringify(preview), observability_json: JSON.stringify(metadata), error_code: null, openai_response_id: opened.meta.changes === 1 ? null : row.openai_response_id, updated_at: now, completed_at: now };
   } catch (error) {
     const code = error.code || 'OPENAI_REQUEST_FAILED';
     await env.DB.prepare("UPDATE import_jobs SET status = 'failed', error_code = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'processing'").bind(code, new Date().toISOString(), row.id, row.user_id).run();

@@ -69,6 +69,8 @@ writes made after it; only with explicit approval).
   `ACCOUNT_PURGE_DAILY_BUDGET`), `ACCOUNT_PURGE_CAPACITY` (due backlog >1440 = one owner/min/day), `AI_WORK_UNKNOWN`,
   `AI_WORK_STUCK_RUNNING` (>15 min: the minute cron is not running), `AI_CLEANUP_FAILED`, `D1_WRITE_BUDGET_HIGH`
   (previous UTC day used >= 80% of a background write cap).
+- B46-03: `AI_CLEANUP_FAILED` also lists `imported-…` rows (completed import, OpenAI delete failed). For ACTIVE accounts the
+  15-minute maintenance retries them (one per run, every ≥1 h); the alert clears by itself once a retry succeeds.
 - Delivery: ZeptoMail (`sendTransactionalEmail`) to `OPS_ALERT_EMAIL`; counts and opaque work ids only.
   Without a recipient the digest logs `ops_alert_unrouted` (never silent success).
 - `observability.enabled = true`: Workers Logs keep `ops_digest_*`, `account_purge_retry/overdue/unavailable` lines.

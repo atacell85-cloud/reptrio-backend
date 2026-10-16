@@ -1,5 +1,12 @@
 # Reptrio backend karar kaydı
 
+### 2026-10-17 — B46-03 içe aktarma sonrası OpenAI yanıtı silme (Seçenek C; Build 46)
+
+- Kullanıcı kararı (2026-10-14 Seçenek C, 2026-10-17 Build 46 talimatı): başarılı arka plan içe aktarmasının OpenAI'de saklanan yanıtı, önizleme D1'e kalıcı yazıldığı anda silinir. Tetik yalnız `done` yazımının kazanılmasıdır; başarısız/geçersiz işler değişmeden yalnız hesap silmede temizlenir.
+- Değişmez kural: yanıt kimliği `import_jobs`'tan yalnız ledger satırını açan aynı atomik batch'te ayrılır (purge adoption ile aynı). Kanıt yalnız 200/404; diğer her sonuç RETURNED kalır.
+- Yeniden deneme mevcut 15 dk bakımda, çağrı başına en çok 1 silme, yalnız ACTIVE hesaplar, günlük bakım bütçesinden; yeni cron, migration veya route yok. Workers Free'de kalınır.
+- Production deploy ayrıca onay ister; Build 44/45 backend'i ile birlikte gider.
+
 ### 2026-10-16 — Build 45 yalnız APNs ile Live Activity kapanışı (kullanıcı kararı)
 
 - Build 45 = sunucudan ActivityKit `end` push'u ile son anlamlı etkinlik + 30 dk sonra Live Activity kapanışı. Önceden Build 45'e bırakılan AI temizliği Seçenek C (içe aktarma sonrası anında AI yanıtı silme) **Build 46'ya (B46-03)** taşındı; B45-01 dış veri aktarımı B46-01 (mobil `docs/tasks/BUILD_46_QUEUE.md`). Repo birleştirmesi Build 45 sonrası.

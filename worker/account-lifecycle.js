@@ -262,6 +262,43 @@ export async function backgroundResolved(env,id){await lifecycleRawDB(env.DB).pr
 // Only a definite upstream rejection closes RUNNING work as nothing-stored; everything else stays UNKNOWN (fail closed).
 export async function backgroundRejected(env,id,status){await lifecycleRawDB(env.DB).prepare("UPDATE account_lifecycle_work SET state='RESOLVED',last_error=? WHERE id=? AND state='RUNNING'").bind(`UPSTREAM_REJECTED_${Number(status)}`,id).run();}
 export async function backgroundUnknown(env,id){await lifecycleRawDB(env.DB).prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='UPSTREAM_OUTCOME_UNKNOWN' WHERE id=? AND state='RUNNING'").bind(id).run();}
+// B46-03 (Option C): the stored OpenAI response of a COMPLETED background import is deleted right after its preview is
+// persisted. The ledger row ('imported-…', RETURNED, import_job_id set) is opened in the SAME D1 batch that writes the
+// `done` preview, and the response id leaves import_jobs only in that batch (same invariant as the purge adoption), so a
+// crash at any point leaves either the old state or a RETURNED row — never an untracked stored response. For these rows
+// expires_at is the next attempt time (expiry is only meaningful for RUNNING rows). A failed delete stays RETURNED: the
+// 15-minute maintenance retries one row per invocation (ACTIVE owners); account purge deletes any remaining row as before.
+export const IMPORTED_RESPONSE_PREFIX='imported-';
+export const IMPORTED_RESPONSE_RETRY_MS=3600000;
+export const IMPORTED_RESPONSE_FIRST_RETRY_MS=900000;
+export function importedResponseStatements(env,{ledgerId,userId,importId,responseId,completedAt}){
+ const db=lifecycleRawDB(env.DB);
+ const job="j.user_id=? AND j.id=? AND j.status='done' AND j.completed_at=? AND j.openai_response_id=?";
+ return [
+  db.prepare(`INSERT INTO account_lifecycle_work(id,user_id,state,response_id,created_at,expires_at,import_job_id)
+  SELECT ?,j.user_id,'RETURNED',j.openai_response_id,?,?,j.id FROM import_jobs j WHERE ${job}
+   AND EXISTS(SELECT 1 FROM users u WHERE u.id=j.user_id AND u.account_status='ACTIVE' AND u.deleted_at IS NULL)
+   AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id=j.user_id AND w.response_id=j.openai_response_id AND w.state='RETURNED' AND w.import_job_id IS NOT NULL)`)
+   .bind(ledgerId,completedAt,new Date(Date.parse(completedAt)+IMPORTED_RESPONSE_FIRST_RETRY_MS).toISOString(),userId,importId,completedAt,responseId),
+  db.prepare(`UPDATE import_jobs AS j SET openai_response_id=NULL WHERE ${job}
+   AND EXISTS(SELECT 1 FROM account_lifecycle_work w WHERE w.user_id=j.user_id AND w.response_id=j.openai_response_id AND w.state='RETURNED' AND w.import_job_id IS NOT NULL)`)
+   .bind(userId,importId,completedAt,responseId),
+ ];
+}
+// 200 deleted / 404 already absent are the only proofs; anything else keeps the row RETURNED with the next attempt time.
+export async function cleanupImportedResponse(env,id,responseId){
+ const db=lifecycleRawDB(env.DB);let deleted=false;
+ try{
+  if(!env.OPENAI_API_KEY)throw new Error('unconfigured');
+  const r=await fetch(`https://api.openai.com/v1/responses/${encodeURIComponent(responseId)}`,{method:'DELETE',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`},signal:AbortSignal.timeout(10000)});
+  deleted=r.ok||r.status===404;
+ }catch{}
+ const result=deleted
+  ?await db.prepare("UPDATE account_lifecycle_work SET state='RESOLVED',last_error=NULL WHERE id=? AND state='RETURNED' AND response_id=?").bind(id,responseId).run()
+  :await db.prepare("UPDATE account_lifecycle_work SET last_error='OPENAI_CLEANUP_FAILED',expires_at=? WHERE id=? AND state='RETURNED' AND response_id=?").bind(new Date(Date.now()+IMPORTED_RESPONSE_RETRY_MS).toISOString(),id,responseId).run();
+ console.log(JSON.stringify({event:'import_response_cleanup',outcome:deleted?'deleted':'failed'}));
+ return {deleted,changes:Number(result?.meta?.changes||0)};
+}
 export async function cleanupClosedBackgroundWork(env,id){
  const db=lifecycleRawDB(env.DB),row=await db.prepare("SELECT w.response_id,w.user_id FROM account_lifecycle_work w JOIN users u ON u.id=w.user_id WHERE w.id=? AND w.state='RETURNED' AND u.account_status<>'ACTIVE'").bind(id).first();
  if(!row)return;
