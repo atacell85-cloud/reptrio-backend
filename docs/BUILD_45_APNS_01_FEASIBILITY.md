@@ -33,7 +33,7 @@ suspended (iOS gives the app no timed wake-up; `staleDate` only marks it stale).
   `api.sandbox.push.apple.com` (424 ms). APNs does not accept HTTP/1.1, so the HTTP/2 path works from Workers.
 - **Real D1 path (test D1):** report → row `PENDING`, end = activity + 30:00; identical repeat → no write (revision 0);
   invalid token or missing `sentAt` → 400; minute step without a key → nothing claimed, `live_activity_end_unconfigured`
-  logged. Re-verified after the Guardian fixes; deployed test Worker version `fbe8a64d` = commit `14f5cf8` (clean tree).
+  logged. Re-verified on the deployed test Worker after the Guardian fixes (smoke: 401 without token, non-ISO time 400, report 200, probe 403 MissingProviderToken on both hosts); version and commit in the Guardian record below.
 
 ### Not yet proven (blocks the permanent architecture)
 1. **ES256 auth with the real APNs key:** `/probe` must return `400 BadDeviceToken` (not 403) for both hosts.
@@ -51,7 +51,8 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
 - Deadline = last meaningful activity + 30:00 in server time; never moves backwards (`MAX`), also when a rotated token
   arrives with an older activity time (late Watch event / reordered request). A report within 5 s of the stored
   activity is the same report (the server-time derivation absorbs network latency): no write, no re-arm, no second
-  push. A replayed old request body can only postpone the end (by the replay delay), never bring it forward; the client
+  push. Side effect: a genuinely newer activity within 5 s is absorbed, so the end can come up to 5 s early (not
+  cumulative; a token/environment change still writes with the maximum applied). A replayed old request body can only postpone the end (by the replay delay), never bring it forward; the client
   therefore stamps `sentAt` per HTTP attempt, uses a short timeout and no persisted replay queue.
 - Continuation of the same workout moves the deadline; a send is claimed and finalized **by revision**, so a report that
   lands during a send is never marked sent and is re-armed for its new deadline.

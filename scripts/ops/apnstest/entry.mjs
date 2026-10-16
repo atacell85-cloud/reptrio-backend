@@ -4,7 +4,7 @@
 //                   without a provider token APNs answers 403 MissingProviderToken (proves the HTTP/2 path reached
 //                   APNs; APNs does not speak HTTP/1.1); with APNS_* configured it answers 400 BadDeviceToken (proves
 //                   key id, team id, .p8 and topic are accepted). No device is contacted.
-// - POST /schedule  { workoutId, pushToken, environment, activityAt } for the fixed test user (real D1 path).
+// - POST /schedule  { workoutId, pushToken, environment, activityAt, sentAt } (ISO with zone) for the fixed test user.
 // - POST /cancel    { workoutId }
 // - POST /run       one minute step now (same code as the cron).
 // - GET  /rows      scheduler rows with the push token masked.

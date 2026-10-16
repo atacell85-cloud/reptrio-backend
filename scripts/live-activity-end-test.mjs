@@ -95,6 +95,9 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   await t.report(T0 + 20 * MIN, TOKEN_A, T0 + 20 * MIN);
   await t.report(T0 + 5 * MIN, TOKEN_B, T0 + 21 * MIN);
   assert.equal(t.row().push_token, TOKEN_B); assert.equal(t.row().end_ms, T0 + 50 * MIN, 'deadline kept, not moved backwards');
+  assert.equal(t.row().activity_ms, T0 + 20 * MIN, 'stored activity keeps its maximum (a later in-between report cannot lower the end)');
+  await t.report(T0 + 12 * MIN, TOKEN_B, T0 + 21 * MIN);
+  assert.equal(t.row().end_ms, T0 + 50 * MIN, 'in-between report after an older rotation: still not earlier');
   await t.run(T0 + 50 * MIN); assert.equal(t.row().state, 'SENT');
   await t.report(T0 + 20 * MIN, TOKEN_A, T0 + 51 * MIN);
   assert.equal(t.row().state, 'PENDING', 'new token after SENT: a new activity is armed');
@@ -319,13 +322,54 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   const day = new Date(T0).toISOString();
   assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 120 * MIN - 1).toISOString() }, T0).stale, undefined, '119:59.999 still valid');
   assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 120 * MIN).toISOString() }, T0).stale, true, '120:00 stale');
-  for (const bad of ['2026-10-16', 'Oct 16 2026 10:00', '2026-10-16T10:00:00', day.replace('Z', '+0000')]) {
+  for (const bad of ['2026-10-16', 'Oct 16 2026 10:00', '2026-10-16T10:00:00', day.replace('Z', '+0000'), day.replace('Z', 'z'), '2026-10-16T10:00:00.0000Z', day + '\n']) {
     assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: bad, sentAt: day }, T0).error, 'LIVE_ACTIVITY_INVALID', bad);
   }
   assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: '2026-10-16T13:00:00+03:00', sentAt: day }, T0).activityMs, T0, 'explicit offset accepted');
   const t = setup({ configured: false }); await t.report(T0);
   await t.run(T0 + 150 * MIN - 1); assert.ok(t.row(), 'kept until 150 min after the last report');
   await t.run(T0 + 150 * MIN); assert.equal(t.row(), undefined);
+}
+
+// 18. Guardian R3: exact tolerance boundary (derived activity = server now - (sentAt - activityAt), here exact).
+{
+  const t = setup(); await t.report(T0, TOKEN_A, T0);
+  const base = t.row();
+  await t.report(T0 + 5000, TOKEN_A, T0 + 10 * MIN);
+  assert.deepEqual(t.row(), base, '+5000 ms: same report, no write');
+  await t.report(T0 + 5001, TOKEN_A, T0 + 10 * MIN);
+  assert.equal(t.row().end_ms, T0 + 5001 + LIVE_ACTIVITY_DORMANT_MS, '+5001 ms: newer activity moves the end');
+  // A workout continued minutes later is never absorbed.
+  await t.report(T0 + 15 * MIN, TOKEN_A, T0 + 15 * MIN);
+  assert.equal(t.row().end_ms, T0 + 45 * MIN);
+}
+
+// 19. Guardian R3: two overlapping minute steps (cron + manual /run). Only one claims a row; a run that finishes after
+// a newer revision was claimed by the other never overwrites it.
+{
+  const t = setup(); await t.report(T0);
+  await Promise.all([t.run(T0 + 30 * MIN), t.run(T0 + 30 * MIN)]);
+  assert.equal(t.pushes.length, 1, 'no double push from overlapping runs');
+  const u = setup(); await u.report(T0);
+  const gate = () => { let release; const wait = new Promise(resolve => { release = resolve; }); return { wait, release }; };
+  const gA = gate(), gB = gate();
+  let call = 0;
+  u.setRespond(async () => {
+    call++;
+    if (call === 1) { await gA.wait; return new Response(null, { status: 200 }); }                    // run A
+    await gB.wait; return new Response(JSON.stringify({ reason: 'ServiceUnavailable' }), { status: 503 }); // run B
+  });
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const runA = u.run(T0 + 40 * MIN);
+  while (call < 1) await tick();
+  await u.report(T0 + 5 * MIN, TOKEN_A, T0 + 40 * MIN); // newer revision, still due (end T0+35)
+  const runB = u.run(T0 + 40 * MIN);                    // run B claims the new revision and is held in flight
+  while (call < 2) await tick();
+  gA.release(); await runA;                             // run A (old revision) finishes while B is SENDING
+  assert.equal(u.row().state, 'SENDING', 'run A did not touch the row run B holds');
+  gB.release(); await runB;                             // APNs 503 for B
+  assert.equal(u.pushes.length, 2);
+  assert.equal(u.row().state, 'PENDING', 'run B\'s outcome is kept'); assert.ok(u.row().retry_ms > T0 + 40 * MIN);
 }
 
 // 15. D1 cost: an idle minute is one batch (sweep + expiry + due read); a send adds claim + final.
