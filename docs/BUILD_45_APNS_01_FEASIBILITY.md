@@ -129,3 +129,12 @@ npx wrangler d1 delete reptrio-apnstest
 - `0015` sits in the shared `migrations/` directory on this branch only; it is applied only by an explicit
   `wrangler d1 migrations apply` (no CI step applies migrations) and it reserves the 0015 slot for this feature.
 - Build 44 risk: none (separate branches, separate Worker/D1, no production change).
+
+## Review record
+- Independent HIGH Guardian: R1 DURDURULDU (2 MAJOR: slow phone clock; Sandbox-only key fallback / user step) → R2
+  (MINOR: latency jitter re-armed SENT rows; Forbidden retried) → R3–R5 (test gaps only) → **R6 GEÇTİ**. Final targeted
+  mutation run: 42/42 killed; remaining survivors equivalent.
+- Before production wiring (non-blocking for the sandbox test): pin `apns-expiration` exactly (now + 300 s) in tests;
+  bind the claim (`claimed_ms`) in `FINAL_SQL` so a send that outlived its lease cannot overwrite an overlapping claim
+  of the same revision (worst case today: one extra end push to an already ended activity, 15 min later); add the table
+  to the final account erase explicitly; fold `DUE_SQL` into the production minute probe and measure cron CPU.
