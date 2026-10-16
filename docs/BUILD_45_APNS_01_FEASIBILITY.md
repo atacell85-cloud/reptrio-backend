@@ -49,11 +49,15 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
 
 ## Safety rules (each tested)
 - Deadline = last meaningful activity + 30:00 in server time; never moves backwards (`MAX`), also when a rotated token
-  arrives with an older activity time (late Watch event / reordered request). Identical reports write nothing.
+  arrives with an older activity time (late Watch event / reordered request). A report within 5 s of the stored
+  activity is the same report (the server-time derivation absorbs network latency): no write, no re-arm, no second
+  push. A replayed old request body can only postpone the end (by the replay delay), never bring it forward; the client
+  therefore stamps `sentAt` per HTTP attempt, uses a short timeout and no persisted replay queue.
 - Continuation of the same workout moves the deadline; a send is claimed and finalized **by revision**, so a report that
   lands during a send is never marked sent and is re-armed for its new deadline.
 - **Residual (in-flight race):** a report that arrives while the end push is already on its way is re-armed correctly,
-  but the push already sent still ends the activity on the phone; the app restarts it at its next foreground.
+  but the push already sent still ends the activity on the phone; the app is expected to restart it at its next
+  foreground (current coordinator behaviour; unverified for this path until the client is wired).
 - New token → re-armed (new activity, or a dead token replaced) — the deadline still follows the last activity, so a
   Live Activity re-created without new activity after 30:00 is ended within a minute. That matches the app's local
   rule (it never shows an activity for a dormant draft); wiring must keep that invariant to avoid a re-create/end loop.
@@ -65,7 +69,7 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
 - A report whose activity is ≥ 120 min old (auto-close) is stale: it removes the row only if the stored activity is
   stale too; rows nobody updates expire 150 min after their last report.
 - APNs outcomes (Apple "Handling notification responses"): 410 Unregistered/ExpiredToken, BadDeviceToken,
-  DeviceTokenNotForTopic → `DEAD`; 403 (auth, BadEnvironmentKeyIdInToken) → retry in 15 min; 429 / 5xx → retry in
+  DeviceTokenNotForTopic, 403 Forbidden (Apple: do not retry), any other 400/404 → `DEAD`; 403 (auth, BadEnvironmentKeyIdInToken) → retry in 15 min; 429 / 5xx → retry in
   15 min (Apple's guidance); network / 400 IdleTimeout → 1,2,4,8,15 min; max 6 attempts → `FAILED`. `auto` tries
   production, then sandbox on BadDeviceToken (development-signed builds get sandbox tokens) or
   BadEnvironmentKeyIdInToken (Sandbox-only key). Interrupted sends are swept after 2 min.
@@ -103,7 +107,11 @@ Never commit, paste into chat or log the .p8. Then the operator runs `POST /prob
 | Production only | 400 BadDeviceToken | 403 BadEnvironmentKeyIdInToken |
 
 `400 BadDeviceToken` = key id, team, .p8 and topic accepted. Any other 403 (InvalidProviderToken, …) = key problem.
-Then `POST /run` on the fake-token `auto` row: expect production → sandbox fallback → `DEAD` (BadDeviceToken).
+Then check the fake-token `auto` row: the every-minute cron processes it within a minute of the key being added, so
+read `GET /rows` (expect `DEAD`, last_error `400:BadDeviceToken` after production → sandbox fallback) rather than
+relying on `/run`. The row expires 150 min after its report — re-`/schedule` it first if the key arrives later.
+Each Worker isolate signs its own provider token within a 40-min bucket; whether APNs counts that as too many token
+updates is unverified (a 429 is retried in 15 min).
 
 ### Cleanup (when the feasibility test is over; not needed before the Build 44 deploy: 1 + 3 ≤ 5 crons)
 ```

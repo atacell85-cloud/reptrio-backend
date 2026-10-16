@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { brotliDecompressSync } from 'node:zlib';
 import { createD1 } from './lib/d1-sqlite.mjs';
-import { scheduleLiveActivityEnd, cancelLiveActivityEnd, runLiveActivityEnds, LIVE_ACTIVITY_DORMANT_MS, parseSchedule } from '../worker/live-activity-end.js';
+import { scheduleLiveActivityEnd, cancelLiveActivityEnd, runLiveActivityEnds, LIVE_ACTIVITY_DORMANT_MS, parseSchedule, retryDelayMs } from '../worker/live-activity-end.js';
 import { providerToken, endPayload, classify, LIVE_ACTIVITY_TOPIC, END_CONTENT_STATE } from '../worker/apns.js';
 
 const MIN = 60_000;
@@ -280,6 +280,52 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   await t.report(T0 + 40 * MIN, TOKEN_B, T0 + 40 * MIN, 'w2');
   t.db.raw.prepare("DELETE FROM users WHERE id='u1'").run();
   assert.equal(t.db.rows('SELECT COUNT(*) n FROM live_activity_end')[0].n, 0);
+}
+
+// 16. Guardian R2: the same report re-sent with different network latency (e.g. after an app relaunch cleared the
+// in-memory dedup) is the same activity: no write, no re-arm of a SENT row, no second push. > 5 s newer still counts.
+{
+  const t = setup();
+  await t.report(T0, TOKEN_A, T0); await t.run(T0 + 30 * MIN);
+  const sent = t.row();
+  for (const jitter of [170, 1200, 4999]) await t.report(T0, TOKEN_A, T0 + 31 * MIN, 'w1', 'production', 0).then(() =>
+    scheduleLiveActivityEnd(t.env, 'u1', { workoutId: 'w1', pushToken: TOKEN_A, environment: 'production', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 31 * MIN - jitter).toISOString() }, T0 + 31 * MIN));
+  assert.deepEqual(t.row(), sent, 'latency jitter changes nothing');
+  await t.run(T0 + 32 * MIN); assert.equal(t.pushes.length, 1, 'no second push');
+  await scheduleLiveActivityEnd(t.env, 'u1', { workoutId: 'w1', pushToken: TOKEN_A, environment: 'production', activityAt: new Date(T0 + 6000).toISOString(), sentAt: new Date(T0 + 6000).toISOString() }, T0 + 33 * MIN);
+  // Jitter together with another change (environment) on a SENT row still does not re-arm it.
+  const j = setup(); await j.report(T0); await j.run(T0 + 30 * MIN);
+  await scheduleLiveActivityEnd(j.env, 'u1', { workoutId: 'w1', pushToken: TOKEN_A, environment: 'sandbox', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 31 * MIN - 1000).toISOString() }, T0 + 31 * MIN);
+  assert.equal(j.row().apns_env, 'sandbox'); assert.equal(j.row().state, 'SENT', 'jitter + env change: still SENT');
+  await j.run(T0 + 32 * MIN); assert.equal(j.pushes.length, 1);
+  assert.equal(t.row().state, 'PENDING', 'a real newer activity (> 5 s) re-arms');
+  // An environment-only change is written (revision bump) even without new activity.
+  const before = t.row().revision;
+  await scheduleLiveActivityEnd(t.env, 'u1', { workoutId: 'w1', pushToken: TOKEN_A, environment: 'sandbox', activityAt: new Date(T0 + 6000).toISOString(), sentAt: new Date(T0 + 6000).toISOString() }, T0 + 33 * MIN);
+  assert.equal(t.row().apns_env, 'sandbox'); assert.equal(t.row().revision, before + 1);
+}
+
+// 17. Guardian R2 boundaries: Forbidden / unknown 400 are not retried; the network backoff caps at 15 min; the
+// 120-minute stale bound and the 150-minute expiry are exact; only ISO instants with a zone are accepted.
+{
+  for (const [status, reason] of [[403, 'Forbidden'], [400, 'SomethingNew'], [404, 'BadPath']]) {
+    const t = setup(); await t.report(T0); t.setRespond(reply(status, reason));
+    await t.run(T0 + 30 * MIN);
+    assert.equal(t.row().state, 'DEAD', `${status} ${reason}: not retried`);
+  }
+  assert.equal(classify({ status: 0, reason: 'InvalidTokenFormat' }), 'dead');
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(n => retryDelayMs('retry', n) / MIN), [1, 2, 4, 8, 15, 15]);
+  assert.equal(retryDelayMs('throttled', 1), 15 * MIN); assert.equal(retryDelayMs('auth', 3), 15 * MIN);
+  const day = new Date(T0).toISOString();
+  assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 120 * MIN - 1).toISOString() }, T0).stale, undefined, '119:59.999 still valid');
+  assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0 + 120 * MIN).toISOString() }, T0).stale, true, '120:00 stale');
+  for (const bad of ['2026-10-16', 'Oct 16 2026 10:00', '2026-10-16T10:00:00', day.replace('Z', '+0000')]) {
+    assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: bad, sentAt: day }, T0).error, 'LIVE_ACTIVITY_INVALID', bad);
+  }
+  assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: '2026-10-16T13:00:00+03:00', sentAt: day }, T0).activityMs, T0, 'explicit offset accepted');
+  const t = setup({ configured: false }); await t.report(T0);
+  await t.run(T0 + 150 * MIN - 1); assert.ok(t.row(), 'kept until 150 min after the last report');
+  await t.run(T0 + 150 * MIN); assert.equal(t.row(), undefined);
 }
 
 // 15. D1 cost: an idle minute is one batch (sweep + expiry + due read); a send adds claim + final.

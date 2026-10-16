@@ -2,7 +2,8 @@
 // Server-side end of a Live Activity ~30 minutes after the last meaningful workout activity, for a locked/suspended
 // iPhone. The app reports { workoutId, pushToken, environment, activityAt }; a minute step sends the ActivityKit `end`
 // push once the deadline passes. Safety rules (each is tested in scripts/live-activity-end-test.mjs):
-// - The deadline never moves backwards: activity_ms = MAX(stored, reported) (late Watch events, reordered requests).
+// - The deadline never moves backwards: activity_ms = MAX(stored, reported) (late Watch events, reordered requests);
+//   a report within 5 s of the stored activity is the same report (latency jitter) and writes nothing.
 // - A new push token rearms the row (new or re-tokened activity); a send is claimed by revision and finalized only for
 //   that revision, so a report that lands during a send is never marked sent.
 // - Phone clocks are never trusted as absolute times: the client sends activityAt AND its own sentAt; the server uses
@@ -19,6 +20,10 @@ export const LIVE_ACTIVITY_MAX_AGE_MS = 120 * 60 * 1000;
 const SENDING_LEASE_MS = 2 * 60 * 1000;
 export const LIVE_ACTIVITY_SENDS_PER_RUN = 5;
 const MAX_ATTEMPTS = 6;
+// The server derives activity time from the request (server now - elapsed), so the same report re-sent differs by its
+// network latency. Changes below this tolerance are the same activity (no write, no re-arm, no second push).
+export const SAME_ACTIVITY_TOLERANCE_MS = 5000;
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const WORKOUT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export const SCHEDULE_SQL = `INSERT INTO live_activity_end(user_id,workout_id,push_token,apns_env,activity_ms,end_ms,revision,state,attempts,retry_ms,claimed_ms,last_error,updated_ms)
@@ -26,16 +31,16 @@ export const SCHEDULE_SQL = `INSERT INTO live_activity_end(user_id,workout_id,pu
  ON CONFLICT(user_id,workout_id) DO UPDATE SET
   state=CASE WHEN excluded.push_token<>push_token THEN 'PENDING'
              WHEN state='DEAD' THEN 'DEAD'
-             WHEN state IN ('SENT','FAILED') AND excluded.activity_ms<=activity_ms THEN state
+             WHEN state IN ('SENT','FAILED') AND excluded.activity_ms<=activity_ms+${SAME_ACTIVITY_TOLERANCE_MS} THEN state
              ELSE 'PENDING' END,
-  attempts=CASE WHEN excluded.push_token<>push_token OR (state IN ('SENT','FAILED') AND excluded.activity_ms>activity_ms) THEN 0 ELSE attempts END,
+  attempts=CASE WHEN excluded.push_token<>push_token OR (state IN ('SENT','FAILED') AND excluded.activity_ms>activity_ms+${SAME_ACTIVITY_TOLERANCE_MS}) THEN 0 ELSE attempts END,
   retry_ms=CASE WHEN excluded.push_token<>push_token THEN NULL ELSE retry_ms END,
   last_error=CASE WHEN excluded.push_token<>push_token THEN NULL ELSE last_error END,
   revision=revision+1,
   push_token=excluded.push_token, apns_env=excluded.apns_env,
   activity_ms=MAX(activity_ms,excluded.activity_ms), end_ms=MAX(activity_ms,excluded.activity_ms)+${LIVE_ACTIVITY_DORMANT_MS},
   updated_ms=excluded.updated_ms
- WHERE excluded.push_token<>push_token OR excluded.apns_env<>apns_env OR excluded.activity_ms>activity_ms`;
+ WHERE excluded.push_token<>push_token OR excluded.apns_env<>apns_env OR excluded.activity_ms>activity_ms+${SAME_ACTIVITY_TOLERANCE_MS}`;
 // Due rows (also usable as one term of the production minute probe so an idle minute costs no extra D1 trip).
 export const DUE_SQL = `SELECT user_id,workout_id,push_token,apns_env,revision,attempts FROM live_activity_end
  WHERE state='PENDING' AND end_ms<=?1 AND (retry_ms IS NULL OR retry_ms<=?1) ORDER BY end_ms LIMIT ${LIVE_ACTIVITY_SENDS_PER_RUN}`;
@@ -50,8 +55,10 @@ export function parseSchedule(input, nowMs) {
   const workoutId = typeof input?.workoutId === 'string' ? input.workoutId : '';
   const pushToken = typeof input?.pushToken === 'string' ? input.pushToken.toLowerCase() : '';
   const environment = ['sandbox', 'production', 'auto'].includes(input?.environment) ? input.environment : null;
-  const activity = typeof input?.activityAt === 'string' ? Date.parse(input.activityAt) : NaN;
-  const sent = typeof input?.sentAt === 'string' ? Date.parse(input.sentAt) : NaN;
+  // ISO instants with an explicit zone only (no runtime-local parsing).
+  const instant = value => typeof value === 'string' && ISO_INSTANT.test(value) ? Date.parse(value) : NaN;
+  const activity = instant(input?.activityAt);
+  const sent = instant(input?.sentAt);
   if (!WORKOUT_ID.test(workoutId) || !PUSH_TOKEN_PATTERN.test(pushToken) || !environment || !Number.isFinite(activity) || !Number.isFinite(sent)) return { error: 'LIVE_ACTIVITY_INVALID' };
   // Both times come from the same phone clock: their difference is how long ago the activity happened, whatever the
   // phone's offset. Negative (activity "after" sending) counts as now.

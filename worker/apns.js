@@ -66,8 +66,10 @@ export async function postLiveActivity({ host, token, jwt, payload, nowMs, expir
 // Reasons per Apple's "Handling notification responses from APNs".
 export function classify({ status, reason }) {
   if (status === 200) return 'sent';
+  if (reason === 'InvalidTokenFormat') return 'dead';
   if (status === 0 || reason === 'IdleTimeout') return 'retry';
-  if (status === 410 || reason === 'Unregistered' || reason === 'ExpiredToken' || reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic' || reason === 'InvalidTokenFormat') return 'dead';
+  // Apple: do not retry Forbidden.
+  if (status === 410 || reason === 'Unregistered' || reason === 'ExpiredToken' || reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic' || reason === 'Forbidden') return 'dead';
   if (status === 403) return 'auth';
   if (status === 429 || status >= 500) return 'throttled';
   // Remaining 400/413: the request itself is malformed; retrying the same request cannot succeed.
