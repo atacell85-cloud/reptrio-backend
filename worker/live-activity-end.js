@@ -1,5 +1,4 @@
-// Build 45 B45-APNs-01 CANDIDATE (feasibility branch; NOT wired into worker/index.js or the production crons).
-// Server-side end of a Live Activity ~30 minutes after the last meaningful workout activity, for a locked/suspended
+// Build 45: server-side end of a Live Activity ~30 minutes after the last meaningful workout activity, for a locked/suspended
 // iPhone. The app reports { workoutId, pushToken, environment, activityAt }; a minute step sends the ActivityKit `end`
 // push once the deadline passes. Safety rules (each is tested in scripts/live-activity-end-test.mjs):
 // - The deadline never moves backwards: activity_ms = MAX(stored, reported) (late Watch events, reordered requests);
@@ -13,7 +12,11 @@
 //   newer activity; auth failures retry in 15 min, 429/5xx in 15 min (Apple), network/IdleTimeout with short backoff.
 // - The push asks APNs to drop it after 5 minutes (best effort per Apple), lowering the chance that a phone offline at
 //   the deadline is closed by it much later.
+// Wiring: `POST /api/live-activity/end` and `/api/live-activity/end/cancel` (session auth, handleLiveActivityRequest);
+// the minute step runs inside the existing `* * * * *` cron only when the minute probe (LIVE_ACTIVITY_PROBE_SQL folded
+// into account-lifecycle.js MINUTE_PROBE_SQL) reports work, so an idle minute costs no extra D1 call.
 import { APNS_HOSTS, apnsConfig, classify, endPayload, postLiveActivity, providerToken, PUSH_TOKEN_PATTERN } from './apns.js';
+import { currentUser, error, isJsonPost, json, methodOrTypeError, sameOrigin } from './account-api.js';
 
 export const LIVE_ACTIVITY_DORMANT_MS = 30 * 60 * 1000;
 export const LIVE_ACTIVITY_MAX_AGE_MS = 120 * 60 * 1000;
@@ -28,9 +31,15 @@ export const SAME_ACTIVITY_TOLERANCE_MS = 5000;
 export const FALLBACK_REASONS = new Set(['BadDeviceToken', 'BadEnvironmentKeyInToken', 'BadEnvironmentKeyIdInToken']);
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const WORKOUT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+// Rows kept per user: the current workout plus the two most recently reported others (a finished workout is cancelled
+// by the app; this bound only caps abuse and multi-device leftovers, it never drops the reported workout).
+const ROWS_PER_USER = 3;
+const MAX_BODY_BYTES = 2048;
 
+// Written only for an ACTIVE account, atomically with the account check (a deleting account never gains a row).
 export const SCHEDULE_SQL = `INSERT INTO live_activity_end(user_id,workout_id,push_token,apns_env,activity_ms,end_ms,revision,state,attempts,retry_ms,claimed_ms,last_error,updated_ms)
- VALUES (?1,?2,?3,?4,?5,?5+${LIVE_ACTIVITY_DORMANT_MS},0,'PENDING',0,NULL,NULL,NULL,?6)
+ SELECT ?1,?2,?3,?4,?5,?5+${LIVE_ACTIVITY_DORMANT_MS},0,'PENDING',0,NULL,NULL,NULL,?6
+ WHERE EXISTS(SELECT 1 FROM users WHERE id=?1 AND account_status='ACTIVE' AND deleted_at IS NULL)
  ON CONFLICT(user_id,workout_id) DO UPDATE SET
   state=CASE WHEN excluded.push_token<>push_token THEN 'PENDING'
              WHEN state='DEAD' THEN 'DEAD'
@@ -44,15 +53,31 @@ export const SCHEDULE_SQL = `INSERT INTO live_activity_end(user_id,workout_id,pu
   activity_ms=MAX(activity_ms,excluded.activity_ms), end_ms=MAX(activity_ms,excluded.activity_ms)+${LIVE_ACTIVITY_DORMANT_MS},
   updated_ms=excluded.updated_ms
  WHERE excluded.push_token<>push_token OR excluded.apns_env<>apns_env OR excluded.activity_ms>activity_ms+${SAME_ACTIVITY_TOLERANCE_MS}`;
-// Due rows (also usable as one term of the production minute probe so an idle minute costs no extra D1 trip).
+const TRIM_SQL = `DELETE FROM live_activity_end WHERE user_id=?1 AND workout_id<>?2 AND workout_id NOT IN
+ (SELECT workout_id FROM live_activity_end WHERE user_id=?1 AND workout_id<>?2 ORDER BY updated_ms DESC LIMIT ${ROWS_PER_USER - 1})`;
+// Due rows of ACTIVE accounts only: an account in deletion (sessions revoked) is never pushed; its rows go with the
+// final erase or the 150-minute expiry.
 export const DUE_SQL = `SELECT user_id,workout_id,push_token,apns_env,revision,attempts FROM live_activity_end
- WHERE state='PENDING' AND end_ms<=?1 AND (retry_ms IS NULL OR retry_ms<=?1) ORDER BY end_ms LIMIT ${LIVE_ACTIVITY_SENDS_PER_RUN}`;
+ WHERE state='PENDING' AND end_ms<=?1 AND (retry_ms IS NULL OR retry_ms<=?1)
+  AND EXISTS(SELECT 1 FROM users WHERE users.id=live_activity_end.user_id AND users.account_status='ACTIVE' AND users.deleted_at IS NULL)
+ ORDER BY end_ms LIMIT ${LIVE_ACTIVITY_SENDS_PER_RUN}`;
+// The minute probe term (bound: now, now - send lease, now - expiry age): due sends, interrupted sends to sweep, rows
+// to expire. True only when the step has something to do.
+// Due PENDING rows count only for ACTIVE accounts (as DUE_SQL), so a deleting account's row does not wake the step
+// every minute. With APNs unconfigured, a due row still wakes it (logged `live_activity_end_unconfigured`) until the
+// row expires (150 min after its last report): one extra D1 batch per minute, bounded.
+export const LIVE_ACTIVITY_PROBE_SQL = `EXISTS(SELECT 1 FROM live_activity_end WHERE (state='PENDING' AND end_ms<=? AND (retry_ms IS NULL OR retry_ms<=?)
+  AND EXISTS(SELECT 1 FROM users WHERE users.id=live_activity_end.user_id AND users.account_status='ACTIVE' AND users.deleted_at IS NULL))
+  OR (state='SENDING' AND claimed_ms<=?) OR updated_ms<=?)`;
+export function liveActivityProbeBindings(nowMs) { return [nowMs, nowMs, nowMs - SENDING_LEASE_MS, nowMs - LIVE_ACTIVITY_MAX_AGE_MS - LIVE_ACTIVITY_DORMANT_MS]; }
 const SWEEP_SQL = `UPDATE live_activity_end SET state='PENDING',retry_ms=?1,last_error='SEND_INTERRUPTED' WHERE state='SENDING' AND claimed_ms<=?2`;
 const EXPIRE_SQL = `DELETE FROM live_activity_end WHERE updated_ms<=?1`;
 const CLAIM_SQL = `UPDATE live_activity_end SET state='SENDING',claimed_ms=?1,attempts=attempts+1
  WHERE user_id=?2 AND workout_id=?3 AND revision=?4 AND state='PENDING' AND end_ms<=?1`;
+// Finalized only by the claim that sent: a send that outlived its lease (swept, re-claimed at the same revision by a
+// later run) can no longer overwrite that newer claim.
 const FINAL_SQL = `UPDATE live_activity_end SET state=?1,retry_ms=?2,last_error=?3,apns_env=?4,claimed_ms=NULL
- WHERE user_id=?5 AND workout_id=?6 AND revision=?7 AND state='SENDING'`;
+ WHERE user_id=?5 AND workout_id=?6 AND revision=?7 AND state='SENDING' AND claimed_ms=?8`;
 
 export function parseSchedule(input, nowMs) {
   const workoutId = typeof input?.workoutId === 'string' ? input.workoutId : '';
@@ -84,8 +109,16 @@ export async function scheduleLiveActivityEnd(env, userId, input, nowMs = Date.n
     await env.DB.prepare('DELETE FROM live_activity_end WHERE user_id=?1 AND workout_id=?2 AND activity_ms<=?3').bind(userId, parsed.workoutId, nowMs - LIVE_ACTIVITY_MAX_AGE_MS).run();
     return { status: 200, code: 'LIVE_ACTIVITY_EXPIRED' };
   }
-  await env.DB.prepare(SCHEDULE_SQL).bind(userId, parsed.workoutId, parsed.pushToken, parsed.environment, parsed.activityMs, nowMs).run();
-  return { status: 200, code: 'LIVE_ACTIVITY_SCHEDULED', endAt: new Date(parsed.activityMs + LIVE_ACTIVITY_DORMANT_MS).toISOString() };
+  const [, written] = await env.DB.batch([
+    env.DB.prepare(TRIM_SQL).bind(userId, parsed.workoutId),
+    env.DB.prepare(SCHEDULE_SQL).bind(userId, parsed.workoutId, parsed.pushToken, parsed.environment, parsed.activityMs, nowMs),
+  ]);
+  // No write = the same activity again (tolerance) or an inactive account; both answer with the stored deadline.
+  const row = await env.DB.prepare('SELECT end_ms FROM live_activity_end WHERE user_id=?1 AND workout_id=?2').bind(userId, parsed.workoutId).first();
+  // Never 401 here: the session is valid (the app would sign the user out). No row = the account is not ACTIVE (the
+  // route's session check already excludes that) or a concurrent cancel/expiry removed it; nothing is scheduled.
+  if (!row) return { status: 200, code: 'LIVE_ACTIVITY_NOT_SCHEDULED' };
+  return { status: 200, code: 'LIVE_ACTIVITY_SCHEDULED', endAt: new Date(row.end_ms).toISOString(), changed: Boolean(written?.meta?.changes) };
 }
 
 export async function cancelLiveActivityEnd(env, userId, workoutId) {
@@ -127,9 +160,37 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     else if (attempts >= MAX_ATTEMPTS) state = 'FAILED';
     else retry = nowMs + retryDelayMs(outcome, attempts);
     const finalEnv = row.apns_env === 'auto' && outcome === 'sent' ? used : row.apns_env;
-    await env.DB.prepare(FINAL_SQL).bind(state, retry, outcome === 'sent' ? null : `${result.status}:${result.reason || ''}`.slice(0, 80), finalEnv, row.user_id, row.workout_id, row.revision).run();
+    await env.DB.prepare(FINAL_SQL).bind(state, retry, outcome === 'sent' ? null : `${result.status}:${result.reason || ''}`.slice(0, 80), finalEnv, row.user_id, row.workout_id, row.revision, nowMs).run();
     // Never log the push token or the provider token.
     log({ event: 'live_activity_end', outcome, status: result.status, reason: result.reason, apnsId: Boolean(result.apnsId), env: used });
   }
   return { sent, rows: rows.length };
+}
+
+// HTTP: the session identifies the user; nothing in the body can name another account. Native app requests carry no
+// Origin; a browser request must be same-origin (as every other authenticated JSON POST).
+export async function handleLiveActivityRequest(request, env, pathname) {
+  const action = ({ '/api/live-activity/end': 'schedule', '/api/live-activity/end/cancel': 'cancel' })[pathname];
+  if (!action) return null;
+  if (!isJsonPost(request)) return methodOrTypeError(request);
+  if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
+  const user = await currentUser(request, env);
+  if (!user) return error('AUTH_REQUIRED', 401);
+  let input;
+  try {
+    const text = await request.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return error('LIVE_ACTIVITY_INVALID', 413);
+    input = JSON.parse(text);
+  } catch { return error('LIVE_ACTIVITY_INVALID', 400); }
+  try {
+    const result = action === 'schedule' ? await scheduleLiveActivityEnd(env, user.id, input) : await cancelLiveActivityEnd(env, user.id, input?.workoutId);
+    const { status, ...rest } = result;
+    return json(rest, status);
+  } catch (cause) {
+    // Migration 0015 not applied yet: a distinct code, the only 503 on which the app backs off (and only before its
+    // first accepted report). Any other failure (D1 outage): generic 503, retried on the app's next sync.
+    const missing = /no such table: live_activity_end/.test(String(cause?.message || ''));
+    console.warn(JSON.stringify({ event: 'live_activity_end_request_failed', code: missing ? 'LIVE_ACTIVITY_NOT_MIGRATED' : cause?.code || 'DATABASE_UNAVAILABLE' }));
+    return error(missing ? 'LIVE_ACTIVITY_NOT_MIGRATED' : 'LIVE_ACTIVITY_UNAVAILABLE', 503);
+  }
 }

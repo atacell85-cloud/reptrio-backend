@@ -375,7 +375,7 @@ export async function purgeAccountData(env,userId,{preflight=false,lease,acquire
  // Workers Free cron CPU is dominated by D1 round trips, so the owner, its provider links, the schema, the upstream
  // state, the next ledger page and today's purge budget are read in ONE batch (one consistent snapshot); each statement
  // is unchanged.
- const schemaNames=[...ACCOUNT_TABLES,...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts','ai_import_consents','ai_import_consent_events','account_lifecycle_work','account_lifecycle_credentials','personal_restore_record_target','personal_restore_journal_target'];
+ const schemaNames=[...ACCOUNT_TABLES,...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts','ai_import_consents','ai_import_consent_events','account_lifecycle_work','account_lifecycle_credentials','personal_restore_record_target','personal_restore_journal_target','live_activity_end'];
  const now=new Date().toISOString(),today=now.slice(0,10);
  const held="EXISTS(SELECT 1 FROM users WHERE id=? AND account_status='PURGING' AND purge_lease=? AND purge_lease_until>?)";
  const reads=[
@@ -407,7 +407,9 @@ export async function purgeAccountData(env,userId,{preflight=false,lease,acquire
  const schemaRows=schemaRead.results||[];
  const cleanupMode=await storageCleanupMode(env.DB,userId,schemaRows,stateRead.results?.[0]??null),consentTables=await aiConsentDeletionTables(env,schemaRows);
  const lifecycle=schemaRows.some(row=>row.type==='table'&&row.name==='account_lifecycle_credentials')?['account_lifecycle_work','account_lifecycle_credentials']:[];
- const tables=[...consentTables,...(cleanupMode==='legacy'?LEGACY_ACCOUNT_TABLES:cleanupMode==='personal'?[...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES]:cleanupMode==='receipts'?['sync_mutation_receipts',...ACCOUNT_TABLES]:ACCOUNT_TABLES),...lifecycle];
+ // Build 45: Live Activity end rows are erased explicitly (the FK cascade does not run on FK-off paths).
+ const liveActivity=schemaRows.some(row=>row.type==='table'&&row.name==='live_activity_end')?['live_activity_end']:[];
+ const tables=[...consentTables,...(cleanupMode==='legacy'?LEGACY_ACCOUNT_TABLES:cleanupMode==='personal'?[...PERSONAL_RESTORE_TABLES,'sync_mutation_receipts',...ACCOUNT_TABLES]:cleanupMode==='receipts'?['sync_mutation_receipts',...ACCOUNT_TABLES]:ACCOUNT_TABLES),...lifecycle,...liveActivity];
  // Check every cleanup table/owner column before external side effects, including legacy tables.
  for(const table of tables){const row=schemaRows.find(row=>row.type==='table'&&row.name===table);if(!row?.sql||!/(?:\(|,)\s*["`\[]?user_id["`\]]?\s+(?:TEXT|INTEGER|BLOB|REAL|NUMERIC)\b/i.test(row.sql))throw Object.assign(coded('ACCOUNT_CLEANUP_SCHEMA_UNSUPPORTED'),{status:503});}
  if(preflight)return;

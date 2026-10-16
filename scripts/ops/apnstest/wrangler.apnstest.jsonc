@@ -1,11 +1,11 @@
-// Build 45 B45-APNs-01 isolated APNs feasibility Worker. A SEPARATE throwaway Worker and D1 database; delete both when
-// the feasibility test is over. Differences from production (wrangler.jsonc), all deliberate:
-// - name/database: `a2-workout-apnstest` / `reptrio-apnstest` (never `a2-workout-pilot`).
-// - workers.dev URL only (no routes/custom domains, no preview URLs, no static assets); every route needs the
-//   APNSTEST_TOKEN secret.
-// - no queues, no rate limiters, no mail keys, no OpenAI key: it can only reach APNs.
-// - one cron (the minute step). Workers Free allows 5 crons per account; production needs 3 after the Build 44 deploy.
-// - APNS_TEAM_ID is public; APNS_KEY_ID / APNS_PRIVATE_KEY are Worker secrets added by the user (never in the repo).
+// Build 45 isolated STAGING Worker: the unchanged production Worker code (via entry.mjs) on a SEPARATE throwaway D1.
+// Delete both when Build 45 device testing is over. Differences from production (wrangler.jsonc), all deliberate:
+// - name/database: `a2-workout-apnstest` / `reptrio-apnstest` (never `a2-workout`/`a2-workout-pilot`).
+// - workers.dev URL only (no routes/custom domains, no preview URLs, no static assets).
+// - no queues, rate limiters, mail or OpenAI keys: AI import, mail-based flows and imports are unavailable here.
+// - one cron, the production minute cron (account purge + Live Activity end). Workers Free allows 5 crons per account;
+//   production needs 3 after the Build 44 deploy.
+// - APNS_TEAM_ID is public; APNS_KEY_ID / APNS_PRIVATE_KEY / APNSTEST_TOKEN are Worker secrets (never in the repo).
 {
   "$schema": "../../../node_modules/wrangler/config-schema.json",
   "name": "a2-workout-apnstest",
@@ -15,7 +15,7 @@
   "preview_urls": false,
   "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
-  "vars": { "APNS_TEAM_ID": "C4P47F32C8" },
+  "vars": { "APNS_TEAM_ID": "C4P47F32C8", "RECORD_TRANSPORT_ENABLED": "true", "PERSONAL_RESTORE_ENABLED": "true" },
   "d1_databases": [
     {
       "binding": "DB",

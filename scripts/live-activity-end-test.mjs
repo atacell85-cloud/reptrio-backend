@@ -1,4 +1,4 @@
-// Build 45 B45-APNs-01 candidate: server-side Live Activity end (worker/live-activity-end.js, worker/apns.js) on real
+// Build 45: server-side Live Activity end (worker/live-activity-end.js, worker/apns.js) on real
 // SQLite with the repository migrations. Covers the deadline rule (30:00 from the last meaningful activity, never
 // backwards), late Watch events, continuation of the same workout, token rotation, a report racing a send, delayed /
 // undelivered end pushes, a new workout, offline/expiry, APNs outcomes (dead / auth / retry / sandbox fallback), the
@@ -138,7 +138,7 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.equal(t.pushes.length, 2, 'ended again 30 min after the continued activity');
   // The push itself expires after 5 minutes: an offline phone cannot be closed by it much later.
   const expiration = Number(t.pushes[0].init.headers['apns-expiration']);
-  assert.ok(expiration <= Math.floor((T0 + 30 * MIN) / 1000) + 300);
+  assert.equal(expiration, Math.floor((T0 + 30 * MIN) / 1000) + 300, 'exactly now + 300 s');
 }
 
 // 7. A new workout is a separate row; finishing a workout cancels its end push.
@@ -441,4 +441,4 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.equal(t.db.metrics.batches, 1); assert.equal(t.db.metrics.queries, 5);
 }
 
-console.log('Live Activity end (B45-APNs-01 candidate): 30:00 deadline, late Watch events, continuation, token rotation, send race, delayed/undelivered end push, new workout, offline expiry, APNs outcomes + sandbox fallback, lease sweep, validation/skew/120-min, exact request + decodable content-state, ES256 token, log hygiene, FK cascade and D1 cost passed.');
+console.log('Live Activity end (Build 45): 30:00 deadline, late Watch events, continuation, token rotation, send race, delayed/undelivered end push, new workout, offline expiry, APNs outcomes + sandbox fallback, lease sweep, validation/skew/120-min, exact request + decodable content-state, ES256 token, log hygiene, FK cascade and D1 cost passed.');

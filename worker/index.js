@@ -7,13 +7,15 @@ import { STORAGE_TABLE_NAMES, personalRestoreSchemaStatus, recordSchemaStatus, r
 import { currentUser, handleAccountRequest } from './account-api.js';
 import { handleAiConsentRequest, hasAiImportConsent, assertAiImportConsent } from './ai-import-consent.js';
 import { handlePasswordResetRequest } from './password-reset.js';
+import { handleLiveActivityRequest } from './live-activity-end.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 
 export default {
   async scheduled(event,env,ctx) {
-    // Keep account cleanup in a separate invocation from the existing 15-minute maintenance.
+    // Keep account cleanup in a separate invocation from the existing 15-minute maintenance. The minute cron also runs
+    // the Build 45 Live Activity end step (inside purgeDueAccounts' single probe; no additional cron).
     // The daily operational digest has its own trigger and budget; purge and maintenance are unchanged.
     ctx.waitUntil(event.cron === '* * * * *'
       ? purgeDueAccounts(env)
@@ -31,6 +33,8 @@ export default {
     const aiConsentResponse = await handleAiConsentRequest(request, env, url.pathname);
     if (aiConsentResponse) return aiConsentResponse;
     env={...env,DB:await activeAccountDB(env.DB)};
+    const liveActivityResponse = await handleLiveActivityRequest(request, env, url.pathname);
+    if (liveActivityResponse) return liveActivityResponse;
     if (url.pathname === '/api/health') return health(request, env);
     if (url.pathname === '/api/import/parse') return parseImport(request, env);
     if (url.pathname === '/api/import/jobs') return createImportJob(request, env, ctx);

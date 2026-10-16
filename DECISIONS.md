@@ -1,5 +1,11 @@
 # Reptrio backend karar kaydı
 
+### 2026-10-16 — Build 45 yalnız APNs ile Live Activity kapanışı (kullanıcı kararı)
+
+- Build 45 = sunucudan ActivityKit `end` push'u ile son anlamlı etkinlik + 30 dk sonra Live Activity kapanışı. Önceden Build 45'e bırakılan AI temizliği Seçenek C (içe aktarma sonrası anında AI yanıtı silme) **Build 46'ya (B46-03)** taşındı; B45-01 dış veri aktarımı B46-01 (mobil `docs/tasks/BUILD_46_QUEUE.md`). Repo birleştirmesi Build 45 sonrası.
+- Kalıcı entegrasyon `build45/live-activity-end` dalında: kimlik doğrulamalı `POST /api/live-activity/end` ve `/api/live-activity/end/cancel`, antrenman başına bir satır, kullanıcı başına en fazla 3 (bildirilen antrenman hiç silinmez), zamanlayıcı mevcut `* * * * *` cron'unun tek okumasına katlandı (yeni cron yok; tablo yoksa eski okuma, hesap silme akışı etkilenmez), `claimed_ms` yarışı kapatıldı, hesap son silmesinde tablo açıkça silinir, ACTIVE olmayan hesaba push gönderilmez.
+- Cihaz testi yalnız izole staging'de: `a2-workout-apnstest` aynı entegre Worker kodunu test D1 `reptrio-apnstest` üzerinde çalıştırır. Production D1 migration (0015), production deploy ve production APNs anahtarı ayrı açık izin ister; sıra ve rollback `docs/BUILD_45_APNS_01_FEASIBILITY.md`.
+
 ### 2026-10-16 — B45-APNs-01 izole fizibilite başladı (kullanıcı görevi; kalıcı mimari DEĞİL)
 
 - Dal `build45/apns-feasibility`: aday `worker/apns.js`, `worker/live-activity-end.js`, `migrations/0015_live_activity_end.sql` production Worker'a/cron'lara bağlanmadı, production D1'e uygulanmadı. İzole test Worker `a2-workout-apnstest` + test D1 `reptrio-apnstest` (yalnız APNs'e erişebilir; `APNSTEST_TOKEN` korumalı).

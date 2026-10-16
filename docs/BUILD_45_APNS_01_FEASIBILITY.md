@@ -1,9 +1,22 @@
-# Build 45 · B45-APNs-01 — Live Activity end via APNs: isolated feasibility
+# Build 45 — Live Activity end via APNs (feasibility → integration)
 
-Status: **FEASIBILITY IN PROGRESS — not a permanent architecture.** Branch `build45/apns-feasibility` in both repos
-(backend from `integration/build44` `d1be882`, mobile from `0b51e60`). Nothing here is wired into the production Worker
-(`worker/index.js`), its crons, the production D1 or the shipped app. Build 44 branches and the installed device build
-are unchanged.
+Status (2026-10-16): **integrated on branch `build45/live-activity-end`** in both repos (from `build45/apns-feasibility`,
+which comes from `integration/build44`: backend `d1be882`, mobile `0b51e60`). Build 45's sole scope (user decision;
+mobile `DECISIONS.md`). Wired into `worker/index.js` (routes) and the existing minute cron; **not** deployed to
+production, migration 0015 **not** applied to the production D1. Device testing runs against the isolated staging
+Worker (below). Build 44 branches and artifact are unchanged.
+
+## Integration (Build 45)
+| Piece | Where |
+|---|---|
+| `POST /api/live-activity/end` `{ workoutId, pushToken, environment, activityAt, sentAt }`, `POST /api/live-activity/end/cancel` `{ workoutId }` — session auth (`currentUser`, ACTIVE accounts only), JSON POST, same-origin, ≤ 2 KB body | `worker/live-activity-end.js` `handleLiveActivityRequest`, routed in `worker/index.js` after the ACTIVE-account DB gate |
+| Write only for an ACTIVE account (atomic `INSERT … SELECT … WHERE EXISTS(users ACTIVE)`); at most 3 rows per user (the reported workout always kept) | `SCHEDULE_SQL`, `TRIM_SQL` |
+| Minute step inside the existing `* * * * *` cron: one extra `EXISTS` term in the lifecycle minute probe (idle minute = still one D1 call); the step runs first, bounded (≤ 5 sends) and its failure never blocks the purge; no additional cron | `worker/account-lifecycle.js` `minuteProbe`, `purgeDueAccounts`; `LIVE_ACTIVITY_PROBE_SQL` |
+| Before 0015 is applied: the probe falls back to the unchanged lifecycle probe (purge unaffected, retried every 15 min per isolate), routes answer 503 (the app backs off 10 min) | same |
+| `claimed_ms` race closed: `FINAL_SQL` finalizes only its own claim | `FINAL_SQL` |
+| Account deletion: no push for a non-ACTIVE account (`DUE_SQL`), table erased explicitly in the final purge (FK on/off) | `DUE_SQL`, `worker/account-api.js` `purgeAccountData` |
+| Tests | `scripts/live-activity-end-test.mjs` (scheduler, `apns-expiration` pinned to now + 300 s), `scripts/live-activity-integration-test.mjs` (routes, cron fold, fallback, erase, claim race) |
+| Mobile | `src/live-activity.ios.tsx` (token persisted with the activity, report after every coordinator pass), `src/live-activity-end-schedule.ts`, `src/api.ts`; Info.plist `Voltra_EnablePushNotifications` |
 
 ## Goal
 End the Live Activity ~30 minutes after the last meaningful workout activity while the iPhone is locked and the app is
@@ -148,9 +161,42 @@ npx wrangler d1 delete reptrio-apnstest
 - Independent HIGH Guardian: R1 DURDURULDU (2 MAJOR: slow phone clock; Sandbox-only key fallback / user step) → R2
   (MINOR: latency jitter re-armed SENT rows; Forbidden retried) → R3–R5 (test gaps only) → **R6 GEÇTİ**. Final targeted
   mutation run: 42/42 killed; remaining survivors equivalent.
-- Before production wiring (non-blocking for the sandbox test): pin `apns-expiration` exactly (now + 300 s) in tests;
-  bind the claim (`claimed_ms`) in `FINAL_SQL` so a send that outlived its lease cannot overwrite an overlapping claim
-  of the same revision (worst case today: one extra end push to an already ended activity, 15 min later); add the table
-  to the final account erase explicitly; fold `DUE_SQL` into the production minute probe and measure cron CPU.
+- Pre-integration items — **done in Build 45 integration:** `apns-expiration` pinned (now + 300 s); claim bound in
+  `FINAL_SQL`; explicit table erase in the final purge; due check folded into the minute probe. Cron CPU / D1: measured
+  on the staging Worker (section "Measurements").
 - Real-key run (2026-10-16): Apple's live reason `BadEnvironmentKeyInToken` fixed in the fallback set; independent HIGH
   Guardian R7 **GEÇTİ** (11 mutants; the one survivor equivalent). Test Worker redeployed from the commit.
+
+## Staging Worker for the device test (Build 45)
+`a2-workout-apnstest` now runs the unchanged production Worker (`scripts/ops/apnstest/entry.mjs` → `worker/index.js`)
+on the test D1 `reptrio-apnstest`: all `/api/*` routes and the production minute cron (purge + Live Activity end). No
+assets, queues, rate limiters, mail or OpenAI keys (AI import and mail flows unavailable). Accounts there are throwaway
+test accounts. Operator routes need `APNSTEST_TOKEN`: `POST /apnstest/probe`, `POST /apnstest/run` (one minute cron step),
+`GET /apnstest/rows` (token masked, no account ids). The device-test build sets `EXPO_PUBLIC_REPTRIO_API_BASE_URL` to
+the staging URL at bundle time; production builds never set it.
+
+## Production activation (separate explicit permission; not done)
+Prerequisites: Build 44 production deploy (migrations ≤ 0014) done first; a **Sandbox & Production** APNs key (or a
+production key) — TestFlight/App Store builds have production tokens, which the current Sandbox-only key cannot reach.
+1. Backup: `npx wrangler d1 export a2-workout-pilot --remote --output <file>` (schema+data, operator machine only).
+2. Apply only 0015: `npx wrangler d1 migrations apply a2-workout-pilot --remote` (additive: one table + one index).
+   Verify: `SELECT name FROM sqlite_master WHERE name LIKE 'live_activity_end%'`.
+3. Secrets on `a2-workout`: `APNS_KEY_ID`, `APNS_PRIVATE_KEY` (user, `wrangler secret put`), var `APNS_TEAM_ID`.
+   Without them the cron logs `live_activity_end_unconfigured` and sends nothing.
+4. Deploy the Worker from the reviewed commit (`npm run cf:deploy`); crons stay 3.
+5. Verify: `POST /api/live-activity/end` with a real session → 200; Workers Logs `live_activity_end` events; minute cron
+   CPU in the dashboard.
+6. Then a production-API app build (TestFlight, separate permission).
+
+Rollback (each step independent, no user data at risk):
+- Kill switch: `npx wrangler secret delete APNS_PRIVATE_KEY` → no pushes (rows stay, expire after 150 min).
+- Code: `npx wrangler rollback <previous version id>` (the previous Worker ignores the table; the app backs off on 404).
+- Schema: leaving `live_activity_end` in place is harmless; if it must go: `DROP TABLE live_activity_end;` (contains only
+  push tokens and timestamps, no workout data) — only after the code rollback.
+- Clients: an app on the new build against a backend without the route stays on the local 30-min rule.
+
+## Build 45 integration review
+Independent HIGH Guardian (both repos): round 1 DURDURULDU — MAJOR client backoff on any 503 after a successful report
+(later sets unreported → possible end mid-workout); MINOR post-write 401 (app sign-out), logout cancel claim, wording,
+swallowed assertions, untested production guard; LOW dead code, probe woke for deleting accounts, untested retry/timeout.
+All fixed with tests; round 2 **GEÇTİ** (19/21 targeted mutants killed, two harmless LOW survivors).

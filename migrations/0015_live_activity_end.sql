@@ -1,4 +1,5 @@
--- Build 45 B45-APNs-01 CANDIDATE (feasibility branch only; not applied to production, not wired into worker/index.js).
+-- Build 45: Live Activity end via APNs (worker/live-activity-end.js). Production apply needs explicit permission and
+-- must precede the Worker deploy (before it, the Worker falls back safely: purge unchanged, end step off, routes 503).
 -- One row per (user, workout): the Live Activity push token and the server-side end deadline (last meaningful activity
 -- + 30 minutes). Additive only. The user FK cascades, so account deletion removes the rows with the user.
 CREATE TABLE IF NOT EXISTS live_activity_end (

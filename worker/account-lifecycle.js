@@ -1,5 +1,6 @@
 import { body, currentUser, error, isJsonPost, issueSession, json, methodOrTypeError, randomToken, sameOrigin, sessionToken, tokenDigest, purgeAccountData, applePurgePrerequisite, deletionContext, oauthConfig, openProviderToken } from './account-api.js';
 import { sendTransactionalEmail } from './transactional-email.js';
+import { LIVE_ACTIVITY_PROBE_SQL, liveActivityProbeBindings, runLiveActivityEnds } from './live-activity-end.js';
 const DAY=86400000, TTL=600000;
 const wrapped=new WeakSet(),origins=new WeakMap(),gates=new WeakMap();
 // Shared statement-level gate: rechecks ACTIVE inside the same SQL snapshot/CAS, including requests authenticated
@@ -190,13 +191,31 @@ export async function executePurge(env,userId){
 }
 // The lease outlives the bounded upstream step (PURGE_UPSTREAM_TIME_MS + one provider timeout).
 const PURGE_LEASE_MS=120000;
-export async function purgeDueAccounts(env){
+// Build 45: the Live Activity end step shares this read (one extra EXISTS term); built lazily because
+// live-activity-end.js and this module import each other.
+let liveActivityProbeOffUntil=0;
+async function minuteProbe(db,now,nowMs){
+ if(nowMs>=liveActivityProbeOffUntil){
+  try{return await db.prepare(`${MINUTE_PROBE_SQL},${LIVE_ACTIVITY_PROBE_SQL} AS live_activity`).bind(now,now,now,now,...liveActivityProbeBindings(nowMs)).first();}
+  catch(cause){
+   // Table missing (migration 0015 not applied yet): account purge keeps its unchanged probe; the end step is retried
+   // in this isolate after 15 minutes (two reads per minute only while the table is missing and the retry is due).
+   if(!/live_activity_end/.test(String(cause?.message||'')))throw cause;
+   liveActivityProbeOffUntil=nowMs+15*60000;console.warn(JSON.stringify({event:'live_activity_end_unavailable'}));
+  }
+ }
+ return db.prepare(MINUTE_PROBE_SQL).bind(now,now,now,now).first();
+}
+export async function purgeDueAccounts(env,{liveActivityEnds=runLiveActivityEnds}={}){
  try{
- const now=new Date().toISOString();
+ const nowMs=Date.now(),now=new Date(nowMs).toISOString();
  // Workers Free cron CPU (10 ms): one read decides the minute. Readiness snapshot, the next due owner (one owner per
- // invocation leaves room for complete guarded cleanup on the smallest D1 allowance) and whether interrupted work needs
- // the UNKNOWN sweep. Nothing to do = this single D1 call. Readiness is still checked before any write.
- const probe=await env.DB.prepare(MINUTE_PROBE_SQL).bind(now,now,now,now).first();
+ // invocation leaves room for complete guarded cleanup on the smallest D1 allowance), whether interrupted work needs
+ // the UNKNOWN sweep and whether a Live Activity end is due. Nothing to do = this single D1 call. Readiness is still
+ // checked before any write.
+ const probe=await minuteProbe(env.DB,now,nowMs);
+ // The end push is time-critical and bounded (<= 5 sends); its failure never blocks the purge step.
+ if(Number(probe?.live_activity)){try{await liveActivityEnds(env,{nowMs});}catch(cause){console.warn(JSON.stringify({event:'live_activity_end_failed',code:cause?.code||'DATABASE_UNAVAILABLE'}));}}
  if(!probe?.due_id&&!Number(probe?.stale))return;
  lifecycleReadyCheck(probe);
  if(Number(probe.stale))await env.DB.prepare("UPDATE account_lifecycle_work SET state='UNKNOWN',last_error='WORKER_INTERRUPTED' WHERE state='RUNNING' AND expires_at<=?").bind(now).run();
