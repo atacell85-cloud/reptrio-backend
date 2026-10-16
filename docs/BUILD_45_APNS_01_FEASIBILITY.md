@@ -33,7 +33,7 @@ suspended (iOS gives the app no timed wake-up; `staleDate` only marks it stale).
   `api.sandbox.push.apple.com` (424 ms). APNs does not accept HTTP/1.1, so the HTTP/2 path works from Workers.
 - **Real D1 path (test D1):** report → row `PENDING`, end = activity + 30:00; identical repeat → no write (revision 0);
   invalid token or missing `sentAt` → 400; minute step without a key → nothing claimed, `live_activity_end_unconfigured`
-  logged. Re-verified on the deployed test Worker after the Guardian fixes (smoke: 401 without token, non-ISO time 400, report 200, probe 403 MissingProviderToken on both hosts); version and commit in the Guardian record below.
+  logged. Re-verified on the deployed test Worker after the Guardian fixes (smoke: 401 without token, non-ISO time 400, report 200, probe 403 MissingProviderToken on both hosts); the deployed test Worker version and its commit are listed under "Isolated test Worker".
 
 ### Not yet proven (blocks the permanent architecture)
 1. **ES256 auth with the real APNs key:** `/probe` must return `400 BadDeviceToken` (not 403) for both hosts.
@@ -88,6 +88,9 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
   (`eeff9885-3413-4ae6-a232-3b7d2324a65a`, migrations 0001–0015). No routes, queues, rate limiters, mail or OpenAI keys.
 - Secrets: `APNSTEST_TOKEN` (random, kept only in the operator's local scratch file). `APNS_TEAM_ID` = `C4P47F32C8` (var).
   **Missing (user action): `APNS_KEY_ID`, `APNS_PRIVATE_KEY`.**
+- Deployed code: the test Worker is redeployed from the clean branch head after every code change; the deployment
+  list (`npx wrangler deployments list -c scripts/ops/apnstest/wrangler.apnstest.jsonc`) is the record (e.g. `ce3912fc`
+  = `80f7f47`, Guardian R4 verified).
 - Account (verified 2026-10-16): 4 Workers; crons: `a2-workout-apnstest` 1, `a2-workout` 0, others 0 → 1/5. The
   Build 44 production deploy adds 3 → 4/5 (still within the Free limit).
 

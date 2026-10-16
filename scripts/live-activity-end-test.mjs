@@ -372,6 +372,33 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.equal(u.row().state, 'PENDING', 'run B\'s outcome is kept'); assert.ok(u.row().retry_ms > T0 + 40 * MIN);
 }
 
+// 20. Guardian R4: (a) 'auto' with a production token: exactly one push, env learned as production; (b) claim by
+// revision: a due row whose token rotates while another row is being sent is not pushed with its old token; the next
+// minute sends to the new token.
+{
+  const t = setup(); await t.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  t.setRespond(url => url.includes('sandbox') ? reply(400, 'BadDeviceToken')() : reply(200)());
+  await t.run(T0 + 30 * MIN);
+  assert.equal(t.pushes.length, 1, 'no sandbox push after a production success');
+  assert.equal(t.row().apns_env, 'production'); assert.equal(t.row().state, 'SENT');
+}
+{
+  const t = setup();
+  await t.report(T0, TOKEN_A, T0, 'w1');
+  await t.report(T0 + MIN, TOKEN_B, T0 + MIN, 'w2');
+  const TOKEN_C = 'c'.repeat(64);
+  t.setRespond(async () => {
+    if (t.pushes.length === 1) await t.report(T0 + MIN, TOKEN_C, T0 + 40 * MIN, 'w2'); // w2 rotates, still due
+    return new Response(null, { status: 200 });
+  });
+  await t.run(T0 + 40 * MIN);
+  assert.deepEqual(t.pushes.map(p => p.url.slice(-4)), [TOKEN_A.slice(-4)], 'w2 not pushed with its stale-revision token');
+  const w2 = t.db.rows("SELECT state,push_token FROM live_activity_end WHERE workout_id='w2'")[0];
+  assert.equal(w2.state, 'PENDING'); assert.equal(w2.push_token, TOKEN_C);
+  await t.run(T0 + 41 * MIN);
+  assert.ok(t.pushes.at(-1).url.endsWith(TOKEN_C)); assert.equal(t.pushes.length, 2);
+}
+
 // 15. D1 cost: an idle minute is one batch (sweep + expiry + due read); a send adds claim + final.
 {
   const t = setup(); t.db.resetMetrics();
