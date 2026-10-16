@@ -214,7 +214,7 @@ export async function purgeDueAccounts(env,{liveActivityEnds=runLiveActivityEnds
  // the UNKNOWN sweep and whether a Live Activity end is due. Nothing to do = this single D1 call. Readiness is still
  // checked before any write.
  const probe=await minuteProbe(env.DB,now,nowMs);
- // The end step is bounded (<= 3 sends) and its failure never blocks the purge step. Workers Free cron CPU (10 ms):
+ // The end step is bounded (<= 2 sends) and its failure never blocks the purge step. Workers Free cron CPU (10 ms):
  // measured on Cloudflare (staging, 2026-10-16) idle 1-2 ms, one end push 6-9 ms (12-15 ms on a cold isolate), so an
  // end step and a purge step never share an invocation: when both are due they alternate by minute (each waits at most
  // one minute; a long multi-step purge cannot starve the end push, nor the end push the purge).

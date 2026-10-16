@@ -21,8 +21,9 @@ import { currentUser, error, isJsonPost, json, methodOrTypeError, sameOrigin } f
 export const LIVE_ACTIVITY_DORMANT_MS = 30 * 60 * 1000;
 export const LIVE_ACTIVITY_MAX_AGE_MS = 120 * 60 * 1000;
 const SENDING_LEASE_MS = 2 * 60 * 1000;
-// Workers Free cron CPU: one send measured 6-9 ms on Cloudflare; at most 3 per minute (more wait for the next minute).
-export const LIVE_ACTIVITY_SENDS_PER_RUN = 3;
+// Workers Free cron CPU (staging, Cloudflare): 1 send 6-9 ms (cold 12-15), 3 sends 9-22 ms. At most 2 per minute; more
+// wait for the next minute (a burst of N simultaneous ends finishes within N/2 minutes).
+export const LIVE_ACTIVITY_SENDS_PER_RUN = 2;
 const MAX_ATTEMPTS = 6;
 // The server derives activity time from the request (server now - elapsed), so the same report re-sent differs by its
 // network latency. Changes below this tolerance are the same activity (no write, no re-arm, no second push).

@@ -146,7 +146,7 @@ const rows = (db, userId) => db.rows('SELECT workout_id,push_token,state,end_ms 
   assert.equal(db.rows('SELECT 1 FROM users WHERE id=?', due.user.id).length, 0, 'purge completed despite the failing end step');
 }
 
-// 4b. At most 3 end pushes per minute (Workers Free CPU); the rest go out the next minute.
+// 4b. At most 2 end pushes per minute (Workers Free CPU); the rest go out the next minute.
 {
   const { db, env } = setup();
   const sent = [];
@@ -155,8 +155,9 @@ const rows = (db, userId) => db.rows('SELECT workout_id,push_token,state,end_ms 
     const u = await register(env, 'la-cap-run-' + i);
     await call(env, '/api/live-activity/end', u.sessionToken, report('w1', ('c' + i).repeat(32), Date.now() - 40 * MIN, Date.now()));
   }
-  assert.deepEqual(await runLiveActivityEnds(env, { fetchImpl, log: () => {} }), { sent: 3, rows: 3 });
-  assert.deepEqual(await runLiveActivityEnds(env, { nowMs: Date.now() + MIN, fetchImpl, log: () => {} }), { sent: 1, rows: 1 });
+  assert.deepEqual(await runLiveActivityEnds(env, { fetchImpl, log: () => {} }), { sent: 2, rows: 2 });
+  assert.deepEqual(await runLiveActivityEnds(env, { nowMs: Date.now() + MIN, fetchImpl, log: () => {} }), { sent: 2, rows: 2 });
+  assert.deepEqual(await runLiveActivityEnds(env, { nowMs: Date.now() + 2 * MIN, fetchImpl, log: () => {} }), { sent: 0, rows: 0 });
   assert.equal(sent.length, 4);
 }
 

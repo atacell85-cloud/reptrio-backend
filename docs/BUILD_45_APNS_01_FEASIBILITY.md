@@ -11,7 +11,7 @@ Worker (below). Build 44 branches and artifact are unchanged.
 |---|---|
 | `POST /api/live-activity/end` `{ workoutId, pushToken, environment, activityAt, sentAt }`, `POST /api/live-activity/end/cancel` `{ workoutId }` — session auth (`currentUser`, ACTIVE accounts only), JSON POST, same-origin, ≤ 2 KB body | `worker/live-activity-end.js` `handleLiveActivityRequest`, routed in `worker/index.js` after the ACTIVE-account DB gate |
 | Write only for an ACTIVE account (atomic `INSERT … SELECT … WHERE EXISTS(users ACTIVE)`); at most 3 rows per user (the reported workout always kept) | `SCHEDULE_SQL`, `TRIM_SQL` |
-| Minute step inside the existing `* * * * *` cron: one extra `EXISTS` term in the lifecycle minute probe (idle minute = still one D1 call); bounded (≤ 3 sends), never in the same invocation as a purge step (both due → alternate by minute), its failure never blocks the purge; no additional cron | `worker/account-lifecycle.js` `minuteProbe`, `purgeDueAccounts`; `LIVE_ACTIVITY_PROBE_SQL` |
+| Minute step inside the existing `* * * * *` cron: one extra `EXISTS` term in the lifecycle minute probe (idle minute = still one D1 call); bounded (≤ 2 sends), never in the same invocation as a purge step (both due → alternate by minute), its failure never blocks the purge; no additional cron | `worker/account-lifecycle.js` `minuteProbe`, `purgeDueAccounts`; `LIVE_ACTIVITY_PROBE_SQL` |
 | Before 0015 is applied: the probe falls back to the unchanged lifecycle probe (purge unaffected, retried every 15 min per isolate), routes answer 503 (the app backs off 10 min) | same |
 | `claimed_ms` race closed: `FINAL_SQL` finalizes only its own claim | `FINAL_SQL` |
 | Account deletion: no push for a non-ACTIVE account (`DUE_SQL`), table erased explicitly in the final purge (FK on/off) | `DUE_SQL`, `worker/account-api.js` `purgeAccountData` |
@@ -183,8 +183,11 @@ the staging URL at bundle time; production builds never set it.
   `sandbox`); first invocations after a deploy (cold isolate + ES256 signing) 12 and 15 ms — all `outcome: ok`, but at or
   above the Free 10 ms figure. Report request 7–10 ms (same order as other authenticated routes). Probe (4 APNs requests)
   5 ms warm, 8–11 ms cold.
-- Consequences applied: ≤ 3 sends per minute (was 5); an end step and a purge step never share an invocation (both due →
-  alternate by minute). Residual: a cold-isolate minute can exceed 10 ms; if Cloudflare ever cancels such an invocation
+- Minute with 3 end pushes (`auto`, Sandbox-only key → 2 APNs requests each): 22, 19, 9 ms — `outcome: ok`, but clearly
+  above 10 ms. With a production-capable key, production tokens need 1 request each (no fallback).
+- Consequences applied: ≤ 2 sends per minute (was 5); an end step and a purge step never share an invocation (both due →
+  alternate by minute). **Residual (release risk, user decision if it matters):** even one send can exceed 10 ms on a cold isolate; Cloudflare
+  did not cancel any measured invocation (max 22 ms). Options if it ever does: Workers Paid, or 1 send per minute; if Cloudflare ever cancels such an invocation
   the claim is swept after 2 min and retried (≤ 6 attempts), so the end comes a few minutes late; if the cancelled invocation had already sent, the retry is a second end push to an activity that is already ended (no effect).
 - D1: idle minute 1 read; per end push +3 statements; per changed report 1 batch (trim + upsert) + 1 read.
 
