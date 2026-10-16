@@ -27,8 +27,9 @@ function setup({ configured = true } = {}) {
   const logs = [];
   const run = nowMs => runLiveActivityEnds(env, { nowMs, fetchImpl, log: entry => logs.push(JSON.stringify(entry)) });
   const row = () => db.rows("SELECT * FROM live_activity_end WHERE user_id='u1' AND workout_id='w1'")[0];
-  const report = (activityMs, token = TOKEN_A, nowMs = activityMs, workoutId = 'w1', environment = 'production') =>
-    scheduleLiveActivityEnd(env, 'u1', { workoutId, pushToken: token, environment, activityAt: new Date(activityMs).toISOString() }, nowMs);
+  // phoneOffsetMs: the phone clock's error. Both activityAt and sentAt come from that clock.
+  const report = (activityMs, token = TOKEN_A, nowMs = activityMs, workoutId = 'w1', environment = 'production', phoneOffsetMs = 0) =>
+    scheduleLiveActivityEnd(env, 'u1', { workoutId, pushToken: token, environment, activityAt: new Date(activityMs + phoneOffsetMs).toISOString(), sentAt: new Date(nowMs + phoneOffsetMs).toISOString() }, nowMs);
   return { db, env, pushes, logs, run, row, report, setRespond: fn => { respond = fn; } };
 }
 const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ reason }) : null, { status, headers: { 'apns-id': 'x' } });
@@ -98,10 +99,14 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   await t.report(T0 + 20 * MIN, TOKEN_A, T0 + 51 * MIN);
   assert.equal(t.row().state, 'PENDING', 'new token after SENT: a new activity is armed');
   t.setRespond(reply(410, 'Unregistered')); await t.run(T0 + 52 * MIN);
-  assert.equal(t.row().state, 'FAILED');
+  assert.equal(t.row().state, 'DEAD');
+  await t.report(T0 + 52 * MIN, TOKEN_A, T0 + 52 * MIN);
+  assert.equal(t.row().state, 'DEAD', 'a dead token stays dead even with newer activity');
   t.setRespond(reply(200)); await t.report(T0 + 20 * MIN, TOKEN_B, T0 + 53 * MIN);
   assert.equal(t.row().state, 'PENDING', 'dead token replaced: rearmed'); assert.equal(t.row().last_error, null);
-  await t.run(T0 + 53 * MIN); assert.equal(t.row().state, 'SENT'); assert.ok(t.pushes.at(-1).url.endsWith(TOKEN_B));
+  // The newer activity reported on the dead token (T0+52) still counts: the deadline is T0+82, never moved back.
+  await t.run(T0 + 81 * MIN); assert.equal(t.row().state, 'PENDING');
+  await t.run(T0 + 82 * MIN); assert.equal(t.row().state, 'SENT'); assert.ok(t.pushes.at(-1).url.endsWith(TOKEN_B));
 }
 
 // 5. A report that lands while the end push is in flight: the send is not recorded as the final state; the row is
@@ -157,11 +162,15 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
 
 // 9. APNs outcomes.
 {
-  for (const [status, reason, state] of [[410, 'Unregistered', 'FAILED'], [400, 'BadDeviceToken', 'FAILED'], [400, 'DeviceTokenNotForTopic', 'FAILED'], [403, 'ExpiredProviderToken', 'PENDING'], [429, 'TooManyRequests', 'PENDING'], [503, 'ServiceUnavailable', 'PENDING']]) {
+  for (const [status, reason, state, retryMin] of [[410, 'Unregistered', 'DEAD'], [410, 'ExpiredToken', 'DEAD'], [400, 'BadDeviceToken', 'DEAD'], [400, 'DeviceTokenNotForTopic', 'DEAD'], [400, 'IdleTimeout', 'PENDING', 1], [403, 'ExpiredProviderToken', 'PENDING', 15], [403, 'BadEnvironmentKeyIdInToken', 'PENDING', 15], [429, 'TooManyRequests', 'PENDING', 15], [503, 'ServiceUnavailable', 'PENDING', 15]]) {
     const t = setup(); await t.report(T0); t.setRespond(reply(status, reason));
     await t.run(T0 + 30 * MIN);
     assert.equal(t.row().state, state, `${status} ${reason}`);
-    if (state === 'PENDING') assert.ok(t.row().retry_ms >= T0 + 32 * MIN, 'retried later, not in a hot loop');
+    if (retryMin) {
+      assert.equal(t.row().retry_ms, T0 + (30 + retryMin) * MIN, `${reason}: retry after ${retryMin} min`);
+      await t.run(T0 + (30 + retryMin) * MIN - 1);
+      assert.equal(t.pushes.length, 1, `${reason}: no hot loop before retry_ms`);
+    }
   }
   // Network failure -> retry; the attempt cap ends in FAILED.
   const t = setup(); await t.report(T0); t.setRespond(() => { throw new Error('connection reset'); });
@@ -169,12 +178,22 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   for (let i = 0; i < 8 && t.row().state === 'PENDING'; i++) { await t.run(at); at = t.row().retry_ms ?? at; }
   assert.ok(at - T0 < 150 * MIN, 'backoff finishes before the stale-row expiry');
   assert.equal(t.row().state, 'FAILED'); assert.equal(t.row().attempts, 6);
+  await t.report(T0 + 40 * MIN, TOKEN_A, T0 + 40 * MIN);
+  assert.equal(t.row().state, 'PENDING', 'exhausted retries re-arm on newer activity'); assert.equal(t.row().attempts, 0);
   // 'auto': a development-signed build's sandbox token is BadDeviceToken on production, then sent via sandbox.
   const auto = setup(); await auto.report(T0, TOKEN_A, T0, 'w1', 'auto');
   auto.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(400, 'BadDeviceToken')() : reply(200)());
   await auto.run(T0 + 30 * MIN);
   assert.deepEqual(auto.pushes.map(p => new URL(p.url).host), ['api.push.apple.com', 'api.sandbox.push.apple.com']);
   assert.equal(auto.row().state, 'SENT'); assert.equal(auto.row().apns_env, 'sandbox');
+  // A Sandbox-only key is BadEnvironmentKeyIdInToken on production: 'auto' falls back too; a fixed env does not.
+  const sandboxKey = setup(); await sandboxKey.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  sandboxKey.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(403, 'BadEnvironmentKeyIdInToken')() : reply(200)());
+  await sandboxKey.run(T0 + 30 * MIN);
+  assert.equal(sandboxKey.row().state, 'SENT'); assert.equal(sandboxKey.row().apns_env, 'sandbox');
+  const fixed = setup(); await fixed.report(T0); fixed.setRespond(reply(403, 'BadEnvironmentKeyIdInToken'));
+  await fixed.run(T0 + 30 * MIN);
+  assert.equal(fixed.pushes.length, 1); assert.equal(fixed.row().state, 'PENDING');
   assert.equal(classify({ status: 200 }), 'sent');
 }
 
@@ -195,11 +214,24 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
     const input = { workoutId: 'w1', pushToken: TOKEN_A, environment: 'production', activityAt: new Date(T0).toISOString(), ...bad };
     assert.equal((await scheduleLiveActivityEnd(t.env, 'u1', input, T0)).status, 400, JSON.stringify(bad));
   }
-  assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A.toUpperCase(), environment: 'auto', activityAt: new Date(T0).toISOString() }, T0).pushToken, TOKEN_A, 'hex case-insensitive');
-  await t.report(T0 + 60 * MIN, TOKEN_A, T0);
-  assert.equal(t.row().activity_ms, T0 + 2 * MIN, 'a phone clock ahead is clamped to +2 min');
-  const old = await t.report(T0 - 121 * MIN, TOKEN_A, T0);
-  assert.equal(old.code, 'LIVE_ACTIVITY_EXPIRED'); assert.equal(t.row(), undefined, 'beyond auto-close: removed, never pushed');
+  assert.equal(parseSchedule({ workoutId: 'w1', pushToken: TOKEN_A.toUpperCase(), environment: 'auto', activityAt: new Date(T0).toISOString(), sentAt: new Date(T0).toISOString() }, T0).pushToken, TOKEN_A, 'hex case-insensitive');
+  assert.equal((await scheduleLiveActivityEnd(t.env, 'u1', { workoutId: 'w1', pushToken: TOKEN_A, environment: 'auto', activityAt: new Date(T0).toISOString() }, T0)).status, 400, 'sentAt required');
+  // Phone clock 25 min slow / 25 min fast / 3 h slow: the deadline is the same server-time deadline.
+  for (const offset of [-25 * MIN, 25 * MIN, -180 * MIN]) {
+    const c = setup();
+    await c.report(T0 + 5 * MIN, TOKEN_A, T0 + 6 * MIN, 'w1', 'production', offset);
+    assert.equal(c.row().end_ms, T0 + 35 * MIN, `offset ${offset / MIN} min`);
+    await c.run(T0 + 34 * MIN); assert.equal(c.pushes.length, 0, `offset ${offset / MIN}: not early`);
+  }
+  // Activity reported "after" its own sending time counts as now.
+  const future = setup(); await future.report(T0 + 60 * MIN, TOKEN_A, T0);
+  assert.equal(future.row().activity_ms, T0);
+  // A report whose activity is >= 120 min old is stale: removed only if the stored activity is stale too.
+  await t.report(T0, TOKEN_A, T0);
+  const late = await t.report(T0 - 121 * MIN, TOKEN_A, T0 + 1000);
+  assert.equal(late.code, 'LIVE_ACTIVITY_EXPIRED'); assert.ok(t.row(), 'a late stale report does not delete fresh activity');
+  await t.report(T0 - 121 * MIN, TOKEN_A, T0 + 121 * MIN);
+  assert.equal(t.row(), undefined, 'both stale: removed, never pushed');
 }
 
 // 12. The exact APNs request.
@@ -226,6 +258,13 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   const config = { keyId: 'KEY1234567', teamId: 'C4P47F32C8', privateKey: PEM };
   const a = await providerToken(config, T0), b = await providerToken(config, T0 + 10 * MIN), c = await providerToken(config, T0 + 41 * MIN);
   assert.equal(a, b); assert.notEqual(a, c);
+  const other = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const otherPem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey('pkcs8', other.privateKey)).toString('base64')}\n-----END PRIVATE KEY-----`;
+  const memoed = await providerToken(config, T0); // memo: this key, T0 bucket
+  const rotated = await providerToken({ ...config, privateKey: otherPem }, T0);
+  const [rh, rp, rs] = rotated.split('.');
+  assert.notEqual(rotated, memoed);
+  assert.ok(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, other.publicKey, Buffer.from(rs, 'base64url'), new TextEncoder().encode(`${rh}.${rp}`)), 'a rotated .p8 is never served from the memo');
   const [h, p, s] = a.split('.');
   const json = part => JSON.parse(Buffer.from(part, 'base64url').toString());
   assert.deepEqual(json(h), { alg: 'ES256', kid: 'KEY1234567' });

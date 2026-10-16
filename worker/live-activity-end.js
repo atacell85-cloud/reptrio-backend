@@ -5,14 +5,17 @@
 // - The deadline never moves backwards: activity_ms = MAX(stored, reported) (late Watch events, reordered requests).
 // - A new push token rearms the row (new or re-tokened activity); a send is claimed by revision and finalized only for
 //   that revision, so a report that lands during a send is never marked sent.
-// - Reported activity is clamped to the server clock (+2 min skew) and ignored beyond the 120-minute auto-close.
-// - Dead tokens (410 / BadDeviceToken / wrong topic) stop; auth failures and 429/5xx/network retry with backoff.
-// - The push expires after 5 minutes, so a phone offline at the deadline cannot be closed by it much later.
+// - Phone clocks are never trusted as absolute times: the client sends activityAt AND its own sentAt; the server uses
+//   only the elapsed time between them (0..120 min) against its own clock, so a fast or slow phone clock cannot move
+//   the deadline. A report is stale only if that elapsed time exceeds the 120-minute auto-close.
+// - Dead tokens (410 / BadDeviceToken / wrong topic) stop for that token (DEAD); exhausted retries (FAILED) re-arm on
+//   newer activity; auth failures retry in 15 min, 429/5xx in 15 min (Apple), network/IdleTimeout with short backoff.
+// - The push asks APNs to drop it after 5 minutes (best effort per Apple), lowering the chance that a phone offline at
+//   the deadline is closed by it much later.
 import { APNS_HOSTS, apnsConfig, classify, endPayload, postLiveActivity, providerToken, PUSH_TOKEN_PATTERN } from './apns.js';
 
 export const LIVE_ACTIVITY_DORMANT_MS = 30 * 60 * 1000;
 export const LIVE_ACTIVITY_MAX_AGE_MS = 120 * 60 * 1000;
-const CLOCK_SKEW_MS = 2 * 60 * 1000;
 const SENDING_LEASE_MS = 2 * 60 * 1000;
 export const LIVE_ACTIVITY_SENDS_PER_RUN = 5;
 const MAX_ATTEMPTS = 6;
@@ -22,10 +25,10 @@ export const SCHEDULE_SQL = `INSERT INTO live_activity_end(user_id,workout_id,pu
  VALUES (?1,?2,?3,?4,?5,?5+${LIVE_ACTIVITY_DORMANT_MS},0,'PENDING',0,NULL,NULL,NULL,?6)
  ON CONFLICT(user_id,workout_id) DO UPDATE SET
   state=CASE WHEN excluded.push_token<>push_token THEN 'PENDING'
-             WHEN state='FAILED' THEN 'FAILED'
-             WHEN state='SENT' AND excluded.activity_ms<=activity_ms THEN 'SENT'
+             WHEN state='DEAD' THEN 'DEAD'
+             WHEN state IN ('SENT','FAILED') AND excluded.activity_ms<=activity_ms THEN state
              ELSE 'PENDING' END,
-  attempts=CASE WHEN excluded.push_token<>push_token OR (state='SENT' AND excluded.activity_ms>activity_ms) THEN 0 ELSE attempts END,
+  attempts=CASE WHEN excluded.push_token<>push_token OR (state IN ('SENT','FAILED') AND excluded.activity_ms>activity_ms) THEN 0 ELSE attempts END,
   retry_ms=CASE WHEN excluded.push_token<>push_token THEN NULL ELSE retry_ms END,
   last_error=CASE WHEN excluded.push_token<>push_token THEN NULL ELSE last_error END,
   revision=revision+1,
@@ -48,18 +51,27 @@ export function parseSchedule(input, nowMs) {
   const pushToken = typeof input?.pushToken === 'string' ? input.pushToken.toLowerCase() : '';
   const environment = ['sandbox', 'production', 'auto'].includes(input?.environment) ? input.environment : null;
   const activity = typeof input?.activityAt === 'string' ? Date.parse(input.activityAt) : NaN;
-  if (!WORKOUT_ID.test(workoutId) || !PUSH_TOKEN_PATTERN.test(pushToken) || !environment || !Number.isFinite(activity)) return { error: 'LIVE_ACTIVITY_INVALID' };
-  // A phone clock ahead of the server must not postpone the end by more than the tolerated skew.
-  const activityMs = Math.min(activity, nowMs + CLOCK_SKEW_MS);
-  if (activityMs <= nowMs - LIVE_ACTIVITY_MAX_AGE_MS) return { stale: true, workoutId };
-  return { workoutId, pushToken, environment, activityMs };
+  const sent = typeof input?.sentAt === 'string' ? Date.parse(input.sentAt) : NaN;
+  if (!WORKOUT_ID.test(workoutId) || !PUSH_TOKEN_PATTERN.test(pushToken) || !environment || !Number.isFinite(activity) || !Number.isFinite(sent)) return { error: 'LIVE_ACTIVITY_INVALID' };
+  // Both times come from the same phone clock: their difference is how long ago the activity happened, whatever the
+  // phone's offset. Negative (activity "after" sending) counts as now.
+  const elapsed = Math.max(0, sent - activity);
+  if (elapsed >= LIVE_ACTIVITY_MAX_AGE_MS) return { stale: true, workoutId };
+  return { workoutId, pushToken, environment, activityMs: nowMs - elapsed };
+}
+
+// auth (403) and throttling/server errors (429/5xx): 15 min, as Apple advises; network/IdleTimeout: 1,2,4,8,15 min.
+export function retryDelayMs(outcome, attempts) {
+  if (outcome === 'auth' || outcome === 'throttled') return 15 * 60 * 1000;
+  return Math.min(2 ** (attempts - 1), 15) * 60 * 1000;
 }
 
 export async function scheduleLiveActivityEnd(env, userId, input, nowMs = Date.now()) {
   const parsed = parseSchedule(input, nowMs);
   if (parsed.error) return { status: 400, code: parsed.error };
   if (parsed.stale) {
-    await env.DB.prepare('DELETE FROM live_activity_end WHERE user_id=?1 AND workout_id=?2').bind(userId, parsed.workoutId).run();
+    // A late, stale report must not delete a row that holds newer activity.
+    await env.DB.prepare('DELETE FROM live_activity_end WHERE user_id=?1 AND workout_id=?2 AND activity_ms<=?3').bind(userId, parsed.workoutId, nowMs - LIVE_ACTIVITY_MAX_AGE_MS).run();
     return { status: 200, code: 'LIVE_ACTIVITY_EXPIRED' };
   }
   await env.DB.prepare(SCHEDULE_SQL).bind(userId, parsed.workoutId, parsed.pushToken, parsed.environment, parsed.activityMs, nowMs).run();
@@ -94,14 +106,16 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     for (const name of hosts) {
       used = name;
       result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt, payload, nowMs, fetchImpl });
-      if (!(result.reason === 'BadDeviceToken' && hosts.length > 1)) break;
+      // A sandbox token on production is BadDeviceToken; a Sandbox-only key on production is BadEnvironmentKeyIdInToken.
+      if (!(hosts.length > 1 && (result.reason === 'BadDeviceToken' || result.reason === 'BadEnvironmentKeyIdInToken'))) break;
     }
     const outcome = classify(result);
     const attempts = row.attempts + 1;
     let state = 'PENDING', retry = null;
     if (outcome === 'sent') { state = 'SENT'; sent++; }
-    else if (outcome === 'dead' || attempts >= MAX_ATTEMPTS) state = 'FAILED';
-    else retry = nowMs + (outcome === 'auth' ? 15 * 60 * 1000 : Math.min(2 ** attempts, 30) * 60 * 1000);
+    else if (outcome === 'dead') state = 'DEAD';
+    else if (attempts >= MAX_ATTEMPTS) state = 'FAILED';
+    else retry = nowMs + retryDelayMs(outcome, attempts);
     const finalEnv = row.apns_env === 'auto' && outcome === 'sent' ? used : row.apns_env;
     await env.DB.prepare(FINAL_SQL).bind(state, retry, outcome === 'sent' ? null : `${result.status}:${result.reason || ''}`.slice(0, 80), finalEnv, row.user_id, row.workout_id, row.revision).run();
     // Never log the push token or the provider token.

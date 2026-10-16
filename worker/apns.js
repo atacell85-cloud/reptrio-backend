@@ -20,7 +20,7 @@ export function apnsConfig(env) {
 
 export async function providerToken(config, nowMs) {
   const iat = Math.floor(nowMs / 1000 / TOKEN_BUCKET_SECONDS) * TOKEN_BUCKET_SECONDS;
-  const memoKey = `${config.keyId}:${config.teamId}:${iat}`;
+  const memoKey = `${config.keyId}:${config.teamId}:${iat}:${config.privateKey}`;
   if (memo.key === memoKey) return memo.token;
   const input = `${b64urlJson({ alg: 'ES256', kid: config.keyId })}.${b64urlJson({ iss: config.teamId, iat })}`;
   const key = await crypto.subtle.importKey('pkcs8', pemBytes(config.privateKey), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
@@ -63,12 +63,15 @@ export async function postLiveActivity({ host, token, jwt, payload, nowMs, expir
 }
 
 // APNs outcome -> what the scheduler does with the row.
+// Reasons per Apple's "Handling notification responses from APNs".
 export function classify({ status, reason }) {
   if (status === 200) return 'sent';
-  if (status === 410 || reason === 'Unregistered' || reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic' || reason === 'InvalidTokenFormat') return 'dead';
-  if (status === 403 || reason === 'InvalidProviderToken' || reason === 'ExpiredProviderToken' || reason === 'MissingProviderToken') return 'auth';
-  if (status === 400 || status === 413) return 'dead';
-  return 'retry';
+  if (status === 0 || reason === 'IdleTimeout') return 'retry';
+  if (status === 410 || reason === 'Unregistered' || reason === 'ExpiredToken' || reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic' || reason === 'InvalidTokenFormat') return 'dead';
+  if (status === 403) return 'auth';
+  if (status === 429 || status >= 500) return 'throttled';
+  // Remaining 400/413: the request itself is malformed; retrying the same request cannot succeed.
+  return 'dead';
 }
 
 function pemBytes(pem) {
