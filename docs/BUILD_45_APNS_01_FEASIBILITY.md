@@ -33,7 +33,7 @@ suspended (iOS gives the app no timed wake-up; `staleDate` only marks it stale).
   `api.sandbox.push.apple.com` (424 ms). APNs does not accept HTTP/1.1, so the HTTP/2 path works from Workers.
 - **Real D1 path (test D1):** report → row `PENDING`, end = activity + 30:00; identical repeat → no write (revision 0);
   invalid token or missing `sentAt` → 400; minute step without a key → nothing claimed, `live_activity_end_unconfigured`
-  logged. Re-verified after the Guardian R1 fixes (test Worker version `6f3db2e1`).
+  logged. Re-verified after the Guardian fixes; deployed test Worker version `fbe8a64d` = commit `14f5cf8` (clean tree).
 
 ### Not yet proven (blocks the permanent architecture)
 1. **ES256 auth with the real APNs key:** `/probe` must return `400 BadDeviceToken` (not 403) for both hosts.
