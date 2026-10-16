@@ -399,6 +399,36 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.ok(t.pushes.at(-1).url.endsWith(TOKEN_C)); assert.equal(t.pushes.length, 2);
 }
 
+// 21. Guardian R5: (a) an 'auto' row learns its environment only from a successful send: a failed first attempt
+// (network) keeps 'auto', so the sandbox fallback still happens next time; (b) a run whose send outlived the lease
+// never overwrites the outcome another run recorded for the same revision.
+{
+  const t = setup(); await t.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  t.setRespond(() => { throw new Error('connection reset'); });
+  await t.run(T0 + 30 * MIN);
+  assert.equal(t.row().apns_env, 'auto', 'environment not learned from a failed attempt');
+  t.setRespond(url => url.includes('sandbox') ? reply(200)() : reply(400, 'BadDeviceToken')());
+  await t.run(t.row().retry_ms);
+  assert.equal(t.row().state, 'SENT'); assert.equal(t.row().apns_env, 'sandbox');
+}
+{
+  const t = setup(); await t.report(T0);
+  let release; const held = new Promise(resolve => { release = resolve; });
+  let call = 0;
+  t.setRespond(async () => {
+    call++;
+    if (call === 1) { await held; return new Response(JSON.stringify({ reason: 'ServiceUnavailable' }), { status: 503 }); } // run A, hangs
+    return new Response(null, { status: 200 });                                                                            // run B
+  });
+  const runA = t.run(T0 + 30 * MIN);
+  while (call < 1) await new Promise(resolve => setImmediate(resolve));
+  await t.run(T0 + 33 * MIN); // lease expired: B sweeps, re-claims the same revision and records SENT
+  assert.equal(t.row().state, 'SENT');
+  release(); await runA;       // A's late 503
+  assert.equal(t.row().state, 'SENT', 'late result of an expired send does not overwrite SENT');
+  assert.equal(t.row().retry_ms, null);
+}
+
 // 15. D1 cost: an idle minute is one batch (sweep + expiry + due read); a send adds claim + final.
 {
   const t = setup(); t.db.resetMetrics();
