@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS live_activity_end (
   workout_id TEXT NOT NULL,
   push_token TEXT NOT NULL,
   -- 'auto' tries production first, then sandbox on BadDeviceToken (development-signed builds get sandbox tokens) or
-  -- BadEnvironmentKeyIdInToken (a Sandbox-only key).
+  -- BadEnvironmentKeyInToken (a Sandbox-only key; Apple's live answer, docs also say BadEnvironmentKeyIdInToken).
   apns_env TEXT NOT NULL CHECK(apns_env IN ('sandbox','production','auto')),
   activity_ms INTEGER NOT NULL,
   end_ms INTEGER NOT NULL,

@@ -35,8 +35,18 @@ suspended (iOS gives the app no timed wake-up; `staleDate` only marks it stale).
   invalid token or missing `sentAt` → 400; minute step without a key → nothing claimed, `live_activity_end_unconfigured`
   logged. Re-verified on the deployed test Worker after the Guardian fixes (smoke: 401 without token, non-ISO time 400, report 200, probe 403 MissingProviderToken on both hosts); the deployed test Worker version and its commit are listed under "Isolated test Worker".
 
+- **ES256 auth with the real APNs key (2026-10-16, Sandbox key added by the user): PASS.** `/probe` with the key:
+  sandbox `400 BadDeviceToken` (key id, team, .p8 and topic accepted; only the fake device token rejected); production
+  `403 BadEnvironmentKeyInToken` (expected for a Sandbox-only key). Without a token both hosts: `403 MissingProviderToken`.
+- **Minute step against real APNs:** `auto` row → production 403 `BadEnvironmentKeyInToken` → sandbox fallback →
+  400 `BadDeviceToken` → `DEAD`; `sandbox` row → 400 → `DEAD`; `production` row → 403 → retry in 15 min (then
+  cancelled). Apple's live reason string is `BadEnvironmentKeyInToken`, not the documented `BadEnvironmentKeyIdInToken`;
+  the fallback originally matched only the documented spelling and would never have fallen back — fixed, both accepted.
+
 ### Not yet proven (blocks the permanent architecture)
-1. **ES256 auth with the real APNs key:** `/probe` must return `400 BadDeviceToken` (not 403) for both hosts.
+1. **Production pushes need a production-capable key.** The current key is Sandbox-only: TestFlight / App Store builds
+   get production device tokens, which this key cannot reach. Before production: a "Sandbox & Production" key (or a
+   second production key) and a probe returning `400 BadDeviceToken` on the production host.
 2. **A real device token:** a sandbox `end` push dismisses a running Live Activity on the locked iPhone, incl. token
    rotation. Needs a development build with `enablePushNotifications: true` → it would replace the installed Build 44
    device build, so it waits for the Build 44 physical acceptance (user rule).
@@ -70,10 +80,11 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
 - A report whose activity is ≥ 120 min old (auto-close) is stale: it removes the row only if the stored activity is
   stale too; rows nobody updates expire 150 min after their last report.
 - APNs outcomes (Apple "Handling notification responses"): 410 Unregistered/ExpiredToken, BadDeviceToken,
-  DeviceTokenNotForTopic, 403 Forbidden (Apple: do not retry), any other 400/404 → `DEAD`; 403 (auth, BadEnvironmentKeyIdInToken) → retry in 15 min; 429 / 5xx → retry in
+  DeviceTokenNotForTopic, 403 Forbidden (Apple: do not retry), any other 400/404 → `DEAD`; 403 (auth, BadEnvironmentKeyInToken / BadEnvironmentKeyIdInToken) → retry in 15 min; 429 / 5xx → retry in
   15 min (Apple's guidance); network / 400 IdleTimeout → 1,2,4,8,15 min; max 6 attempts → `FAILED`. `auto` tries
   production, then sandbox on BadDeviceToken (development-signed builds get sandbox tokens) or
-  BadEnvironmentKeyIdInToken (Sandbox-only key). Interrupted sends are swept after 2 min.
+  BadEnvironmentKeyInToken / BadEnvironmentKeyIdInToken (Sandbox-only key; the first is Apple's live answer).
+  Interrupted sends are swept after 2 min.
 - Client wiring requirement (mobile candidate): call the report on every draft/token change **and** on foreground and
   background wakes (Live Activity intent, Watch message); the sent state lives in memory, so a report lost offline is
   otherwise not retried and the server keeps the older deadline.
@@ -86,8 +97,11 @@ canonical activity clock (`draftActivityAt`), `sentAt` the phone clock at sendin
 ## Isolated test Worker (state 2026-10-16)
 - Worker `a2-workout-apnstest` (workers.dev URL only, 1 cron `* * * * *`), D1 `reptrio-apnstest`
   (`eeff9885-3413-4ae6-a232-3b7d2324a65a`, migrations 0001–0015). No routes, queues, rate limiters, mail or OpenAI keys.
-- Secrets: `APNSTEST_TOKEN` (random, kept only in the operator's local scratch file). `APNS_TEAM_ID` = `C4P47F32C8` (var).
-  **Missing (user action): `APNS_KEY_ID`, `APNS_PRIVATE_KEY`.**
+- Secrets: `APNSTEST_TOKEN` (random, kept only in the operator's local scratch file), `APNS_KEY_ID`,
+  `APNS_PRIVATE_KEY` (Sandbox key, added by the user via `wrangler secret put` on 2026-10-16; never seen by the operator).
+  `APNS_TEAM_ID` = `C4P47F32C8` (var).
+- Test D1 rows after the real-APNs run: `cf-auto` and `cf-sandbox` `DEAD` (400 BadDeviceToken, fake tokens);
+  `cf-production` cancelled. They expire on their own after 150 min.
 - Deployed code: the test Worker is redeployed from the clean branch head after every code change; the deployment
   list (`npx wrangler deployments list -c scripts/ops/apnstest/wrangler.apnstest.jsonc`) is the record (e.g. `ce3912fc`
   = `80f7f47`, Guardian R4 verified).
@@ -107,8 +121,8 @@ Never commit, paste into chat or log the .p8. Then the operator runs `POST /prob
 | Key environment | production host | sandbox host |
 |---|---|---|
 | Sandbox & Production | 400 BadDeviceToken | 400 BadDeviceToken |
-| Sandbox only | 403 BadEnvironmentKeyIdInToken | 400 BadDeviceToken |
-| Production only | 400 BadDeviceToken | 403 BadEnvironmentKeyIdInToken |
+| Sandbox only (observed) | 403 BadEnvironmentKeyInToken | 400 BadDeviceToken |
+| Production only | 400 BadDeviceToken | 403 BadEnvironmentKeyInToken (expected) |
 
 `400 BadDeviceToken` = key id, team, .p8 and topic accepted. Any other 403 (InvalidProviderToken, …) = key problem.
 Then check the fake-token `auto` row: the every-minute cron processes it within a minute of the key being added, so
@@ -138,3 +152,5 @@ npx wrangler d1 delete reptrio-apnstest
   bind the claim (`claimed_ms`) in `FINAL_SQL` so a send that outlived its lease cannot overwrite an overlapping claim
   of the same revision (worst case today: one extra end push to an already ended activity, 15 min later); add the table
   to the final account erase explicitly; fold `DUE_SQL` into the production minute probe and measure cron CPU.
+- Real-key run (2026-10-16): Apple's live reason `BadEnvironmentKeyInToken` fixed in the fallback set; independent HIGH
+  Guardian R7 **GEÇTİ** (11 mutants; the one survivor equivalent). Test Worker redeployed from the commit.

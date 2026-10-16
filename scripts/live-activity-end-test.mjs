@@ -165,7 +165,7 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
 
 // 9. APNs outcomes.
 {
-  for (const [status, reason, state, retryMin] of [[410, 'Unregistered', 'DEAD'], [410, 'ExpiredToken', 'DEAD'], [400, 'BadDeviceToken', 'DEAD'], [400, 'DeviceTokenNotForTopic', 'DEAD'], [400, 'IdleTimeout', 'PENDING', 1], [403, 'ExpiredProviderToken', 'PENDING', 15], [403, 'BadEnvironmentKeyIdInToken', 'PENDING', 15], [429, 'TooManyRequests', 'PENDING', 15], [503, 'ServiceUnavailable', 'PENDING', 15]]) {
+  for (const [status, reason, state, retryMin] of [[410, 'Unregistered', 'DEAD'], [410, 'ExpiredToken', 'DEAD'], [400, 'BadDeviceToken', 'DEAD'], [400, 'DeviceTokenNotForTopic', 'DEAD'], [400, 'IdleTimeout', 'PENDING', 1], [403, 'ExpiredProviderToken', 'PENDING', 15], [403, 'BadEnvironmentKeyInToken', 'PENDING', 15], [403, 'BadEnvironmentKeyIdInToken', 'PENDING', 15], [429, 'TooManyRequests', 'PENDING', 15], [503, 'ServiceUnavailable', 'PENDING', 15]]) {
     const t = setup(); await t.report(T0); t.setRespond(reply(status, reason));
     await t.run(T0 + 30 * MIN);
     assert.equal(t.row().state, state, `${status} ${reason}`);
@@ -189,12 +189,15 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   await auto.run(T0 + 30 * MIN);
   assert.deepEqual(auto.pushes.map(p => new URL(p.url).host), ['api.push.apple.com', 'api.sandbox.push.apple.com']);
   assert.equal(auto.row().state, 'SENT'); assert.equal(auto.row().apns_env, 'sandbox');
-  // A Sandbox-only key is BadEnvironmentKeyIdInToken on production: 'auto' falls back too; a fixed env does not.
-  const sandboxKey = setup(); await sandboxKey.report(T0, TOKEN_A, T0, 'w1', 'auto');
-  sandboxKey.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(403, 'BadEnvironmentKeyIdInToken')() : reply(200)());
-  await sandboxKey.run(T0 + 30 * MIN);
-  assert.equal(sandboxKey.row().state, 'SENT'); assert.equal(sandboxKey.row().apns_env, 'sandbox');
-  const fixed = setup(); await fixed.report(T0); fixed.setRespond(reply(403, 'BadEnvironmentKeyIdInToken'));
+  // A Sandbox-only key on production: Apple's live answer is 403 BadEnvironmentKeyInToken (observed 2026-10-16), the
+  // documented spelling BadEnvironmentKeyIdInToken. 'auto' falls back to sandbox for both; a fixed env does not.
+  for (const reason of ['BadEnvironmentKeyInToken', 'BadEnvironmentKeyIdInToken']) {
+    const sandboxKey = setup(); await sandboxKey.report(T0, TOKEN_A, T0, 'w1', 'auto');
+    sandboxKey.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(403, reason)() : reply(200)());
+    await sandboxKey.run(T0 + 30 * MIN);
+    assert.equal(sandboxKey.row().state, 'SENT', reason); assert.equal(sandboxKey.row().apns_env, 'sandbox');
+  }
+  const fixed = setup(); await fixed.report(T0); fixed.setRespond(reply(403, 'BadEnvironmentKeyInToken'));
   await fixed.run(T0 + 30 * MIN);
   assert.equal(fixed.pushes.length, 1); assert.equal(fixed.row().state, 'PENDING');
   assert.equal(classify({ status: 200 }), 'sent');

@@ -23,6 +23,9 @@ const MAX_ATTEMPTS = 6;
 // The server derives activity time from the request (server now - elapsed), so the same report re-sent differs by its
 // network latency. Changes below this tolerance are the same activity (no write, no re-arm, no second push).
 export const SAME_ACTIVITY_TOLERANCE_MS = 5000;
+// 'auto' falls back to sandbox on these production answers. Apple's live answer for a Sandbox-only key is
+// BadEnvironmentKeyInToken (observed from the test Worker, 2026-10-16); the documented spelling is kept as well.
+export const FALLBACK_REASONS = new Set(['BadDeviceToken', 'BadEnvironmentKeyInToken', 'BadEnvironmentKeyIdInToken']);
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const WORKOUT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -113,8 +116,8 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     for (const name of hosts) {
       used = name;
       result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt, payload, nowMs, fetchImpl });
-      // A sandbox token on production is BadDeviceToken; a Sandbox-only key on production is BadEnvironmentKeyIdInToken.
-      if (!(hosts.length > 1 && (result.reason === 'BadDeviceToken' || result.reason === 'BadEnvironmentKeyIdInToken'))) break;
+      // A sandbox token on production is BadDeviceToken; a Sandbox-only key on production is a wrong-environment key.
+      if (!(hosts.length > 1 && FALLBACK_REASONS.has(result.reason))) break;
     }
     const outcome = classify(result);
     const attempts = row.attempts + 1;
