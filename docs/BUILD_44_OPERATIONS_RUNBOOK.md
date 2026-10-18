@@ -1,5 +1,7 @@
 # Build 44 — operations runbook (release safety)
 
+**2026-10-18 Build 46 override:** The user decided to move to Workers Paid when the app launches. The Free 10 ms CPU release gate and the not-started B46-03 isolated CPU test are cancelled; do not start new tests or optimisations for that limit. Paid activation is still pending and separately authorised. Sections below retain historical Build 44 Free-plan evidence. Before the combined Build 44–46 production release, confirm the actual plan, schema/ledger, APNs configuration and deployment prerequisites; no production action is authorised by this note.
+
 Status: **PLAN / NOT EXECUTED.** Nothing in this file has been run against production. Every production step needs the
 user's explicit release instruction. Evidence date: 2026-10-14.
 

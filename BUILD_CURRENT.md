@@ -1,5 +1,9 @@
 # Reptrio — Güncel çalışma kaydı
 
+## 2026-10-18 — Build 46 backend yayın kararı (internal/release, LOW)
+
+Kullanıcı, uygulama yayına çıkarken Workers Paid plana geçileceğine karar verdi; geçiş henüz yapılmadı ve ayrı izin ister. B46-03 için planlanmış gerçek Cloudflare 10 ms CPU ölçümü ve izole staging CPU testi başlamadan iptal edildi; Free CPU sınırı artık Build 46 release blocker değildir. Aşağıdaki 2026-10-17 ölçüm koşulu ve eski Free plan kayıtları tarihsel durumdur, güncel yayın kapısı değildir. Production D1 ledger/şema doğrulaması, 0008–0015 migration sırası, production uyumlu APNs kimliği, Worker deploy'u ve sonrasındaki API/operasyon doğrulaması açık; hiçbiri bu kararla çalıştırılmadı. Kaynak kod ve test davranışı değişmedi. Güncel salt okunur kanıt ve sıra: `docs/BUILD_46_BACKEND_RELEASE_READINESS.md`.
+
 ## Build 46 · B46-03 AI response cleanup after import (Option C) · 2026-10-17
 
 Branch `build46/integration` (from `build45/live-activity-end` `925b0d8`). HIGH (AI provider data, account-deletion ledger, cron maintenance). No migration, no new route, no new cron.

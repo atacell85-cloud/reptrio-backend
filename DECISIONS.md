@@ -1,5 +1,10 @@
 # Reptrio backend karar kaydı
 
+### 2026-10-18 — Build 46 yayınında Workers Paid (sonraki kullanıcı kararı)
+
+- Uygulama yayına çıkarken Workers Paid plana geçilecek. Önceki Workers Free kararı ve 10 ms CPU ölçümünün Build 46 deploy ön koşulu olması bu yayın için geçersizdir. Başlamamış B46-03 izole CPU test görevi iptal edildi; bu sınıra yönelik yeni test veya optimizasyon yapılmayacak. Geçmiş Free ölçümleri tarihsel kanıttır; D1, cron ve genel operasyon izlemesi sürer.
+- Bu karar abonelik/faturalama değişikliğini, staging deploy'u, production D1 migration'ını, APNs secret kurulumunu veya Worker deploy'unu yetkilendirmez. Açık yayın kapıları production şema/ledger uyumu, migration sırası, production uyumlu APNs kimliği, Worker yayını ve API doğrulamasıdır.
+
 ### 2026-10-17 — B46-03 içe aktarma sonrası OpenAI yanıtı silme (Seçenek C; Build 46)
 
 - Kullanıcı kararı (2026-10-14 Seçenek C, 2026-10-17 Build 46 talimatı): başarılı arka plan içe aktarmasının OpenAI'de saklanan yanıtı, önizleme D1'e kalıcı yazıldığı anda silinir. Tetik yalnız `done` yazımının kazanılmasıdır; başarısız/geçersiz işler değişmeden yalnız hesap silmede temizlenir.
