@@ -1,5 +1,13 @@
 # Reptrio — Güncel çalışma kaydı
 
+## 2026-10-18 — Build 46 production backend yayını (internal/release, HIGH operasyon; belge güncellemesi LOW)
+
+- Kullanıcının production D1 ve bütünleşik Worker deploy onayıyla, backend runtime kaynağı `370ac431c212171fdee78a78eb70233d3c017593` üzerinden işlem tamamlandı. Kaynak kod, mobil paket ve test davranışı değişmedi.
+- Migration öncesi D1 Time Travel bookmark: `0000024e-00000000-00005108-8807f26d45381e920c70e1986e0c650e`. 0004–0007 nesneleri tek tek doğrulandı ve yalnız eksik defter satırları eklendi; 0008–0014, ardından 0015 uygulandı. Defterde 16 satır var ve bekleyen migration yok. Otomatik restore yapılmadı.
+- APNs üç secret adı ve diğer gerekli binding'ler yeni, bütünleşik sürümün metadata'sında doğrulandı; gizli değerler okunmadı. `a2-workout` sürüm `72b88bbb-6790-474d-8679-ef4c484315ce`, deployment `8025f925-6b6e-4bc6-bf6f-96f52c7453a8`, trafik %100. Önceki yayınlanmamış secret sürümü `33950a4f` tek başına deploy edilmedi.
+- `/api/health` 200, `/api/auth/providers` Google/Apple true, oturumsuz `/api/sync/capabilities` 401 (eski 404 giderildi); sync, import, hesap güvenliği ve Live Activity rotalarının oturumsuz güvenlik yanıtları beklendiği gibi. Dakikalık cron için iki `ok` çağrısı, sıfır exception gözlendi. Authenticated sözleşmeler, gerçek APNs teslimi ve cihaz kabulü bu işlemde doğrulanmadı.
+- Workers Paid aboneliği başlatılmadı; uygulama yayını öncesindeki karar geçerli. Ayrıntı: `docs/BUILD_46_BACKEND_RELEASE_READINESS.md` operasyon güncellemesi.
+
 ## 2026-10-18 — Build 46 backend yayın kararı (internal/release, LOW)
 
 Kullanıcı, uygulama yayına çıkarken Workers Paid plana geçileceğine karar verdi; geçiş henüz yapılmadı ve ayrı izin ister. B46-03 için planlanmış gerçek Cloudflare 10 ms CPU ölçümü ve izole staging CPU testi başlamadan iptal edildi; Free CPU sınırı artık Build 46 release blocker değildir. Aşağıdaki 2026-10-17 ölçüm koşulu ve eski Free plan kayıtları tarihsel durumdur, güncel yayın kapısı değildir. Production D1 ledger/şema doğrulaması, 0008–0015 migration sırası, production uyumlu APNs kimliği, Worker deploy'u ve sonrasındaki API/operasyon doğrulaması açık; hiçbiri bu kararla çalıştırılmadı. Kaynak kod ve test davranışı değişmedi. Güncel salt okunur kanıt ve sıra: `docs/BUILD_46_BACKEND_RELEASE_READINESS.md`.

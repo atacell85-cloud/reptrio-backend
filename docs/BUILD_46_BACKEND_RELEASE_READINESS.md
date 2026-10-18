@@ -1,5 +1,14 @@
 # Build 46 backend release readiness — 2026-10-18
 
+## Production operation update — 2026-10-18
+
+**Backend deployment GO for physical-device acceptance; public launch remains gated.** User-authorised production operations used unchanged integrated backend runtime `370ac431c212171fdee78a78eb70233d3c017593` (documentation head before operation `aca5fc3e1baa92dac9497f2b03fa9b3eedbf760c`). The plan-only status and preflight findings below are retained as historical evidence.
+
+- Pre-migration Time Travel bookmark: `0000024e-00000000-00005108-8807f26d45381e920c70e1986e0c650e`. Exact 0004–0007 objects, columns and indexes were verified; only the four missing ledger entries were inserted. 0008–0014 were applied in order, then 0015. Post-operation ledger has 16 entries (including both 0004 names), pending list is empty, and required Build 44/45 tables and `live_activity_end` index are present. No automatic restore or user-record deletion occurred.
+- New integrated Worker version `72b88bbb-6790-474d-8679-ef4c484315ce` was uploaded from that source; its metadata independently confirmed `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, existing secrets, D1 binding `0176e2d5-d306-4e4b-beda-4e63f27294fb`, queue, assets, rate limiters and runtime vars. The secret-only unpublished `33950a4f` was never deployed by itself. Deployment `8025f925-6b6e-4bc6-bf6f-96f52c7453a8` serves 100% traffic. Existing custom domains, queue and three cron schedules were deployed.
+- Production checks: health 200; providers Google/Apple true; unauthenticated capabilities, sync records, import, account security and Live Activity routes return expected 401; OAuth exchange GET returns expected 405. Two observed minute-cron executions returned `ok` with zero exceptions. Read-only D1 inspection found no pending migration.
+- Remaining acceptance: authenticated sync/OAuth/import/account and actual APNs delivery on physical devices, longer operational monitoring, Workers Paid activation before public app launch. APNs secret metadata proves presence, not key validity or delivery. No mobile build, TestFlight or subscription operation occurred.
+
 Status: **NO-GO for production API compatibility; plan only.** No plan change, staging/production deploy, D1 write, secret update or user-data write was made by this review. Authoritative source: backend `build46/integration` `370ac431c212171fdee78a78eb70233d3c017593`; mobile RC `302f27f` contains the identical backend tree before this documentation update.
 
 ## Read-only production evidence
