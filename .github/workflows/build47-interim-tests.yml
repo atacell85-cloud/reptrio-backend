@@ -1,0 +1,28 @@
+name: Build 47 Backend Interim Tests
+
+on:
+  push:
+    branches:
+      - build47/gyms-google-places
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker-tests:
+    name: Full backend regression and Cloudflare build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Backend full unit/integration suite, including Places
+        run: npm test
+      - name: Verify Cloudflare asset compilation (no deployment)
+        run: npm run cf:build
