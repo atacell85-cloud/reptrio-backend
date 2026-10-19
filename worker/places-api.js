@@ -15,12 +15,14 @@ export function parsePlaceRequest(body,mode) {
   return typeof body.placeId==='string'&&PID.test(body.placeId)?{placeId:body.placeId,sessionToken:body.sessionToken}:null;
 }
 export async function googlePlacesRequest(mode,payload,key,provider=fetch){
-  const url=mode==='autocomplete'?'https://places.googleapis.com/v1/places:autocomplete':BASE+encodeURIComponent(payload.placeId)+'?fields=id';
+  // Same per-search token terminates Autocomplete at Place Details (New). IDs Only is billed per autocomplete request.
+  const url=mode==='autocomplete'?'https://places.googleapis.com/v1/places:autocomplete':BASE+encodeURIComponent(payload.placeId)+'?sessionToken='+encodeURIComponent(payload.sessionToken);
   const abort=new AbortController(),timeout=setTimeout(()=>abort.abort(),5000);
   try{
     const response=await provider(url,{
       method:mode==='autocomplete'?'POST':'GET',
       headers:{'X-Goog-Api-Key':key,'Accept':'application/json',
+        ...(mode==='verify'?{'X-Goog-FieldMask':'id'}:{}),
         ...(mode==='autocomplete'?{'Content-Type':'application/json'}:{})},
       ...(mode==='autocomplete'?{body:JSON.stringify({input:payload.input,sessionToken:payload.sessionToken,languageCode:'tr',regionCode:'tr'})}:{}),
       signal:abort.signal,

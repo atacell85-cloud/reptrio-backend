@@ -1,3 +1,8 @@
+## Build 47 — Places follow-up: session correctness (2026-10-19)
+- Place Details (New) verification now receives the exact Autocomplete sessionToken in its URL and an explicit `X-Goog-FieldMask: id`; the Worker still returns only the verified ID and never exposes the API key.
+- Pricing clarification: Place Details (New) IDs Only does NOT qualify for Autocomplete session discounts; autocomplete requests remain per-request billable. Keep debounce, authenticated limiter and Google billing alerts. No assumption of discounted sessions.
+- `test:places-api` included in full `npm test`; targeted regression tests updated but not executed in a checked-out runtime. No API key, Worker deploy, migrations or production changes.
+
 ## Build 47 — Google Places proxy (2026-10-19)
 - Isolated branch `build47/gyms-google-places` from Build46 integration. Server-only `GOOGLE_MAPS_PLACES_API_KEY`; `POST /api/places/autocomplete` and `/api/places/verify` authenticated, capped input, 12/min/user Cloudflare limiter, 5s upstream timeout, IDs-only verification. No DB/backup schema change or Google data cache; autocomplete names are ephemeral, Google Place IDs persist only in user's personal gym data.
 - No Google Cloud key or billing was provisioned, worker **NOT DEPLOYED**. New tests authored, NOT RUN. Independent Guardian, Google Maps attribution and pricing/terms checks required before production.
