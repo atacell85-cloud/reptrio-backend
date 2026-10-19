@@ -15,7 +15,7 @@ export function parsePlaceRequest(body,mode) {
   return typeof body.placeId==='string'&&PID.test(body.placeId)?{placeId:body.placeId,sessionToken:body.sessionToken}:null;
 }
 export async function googlePlacesRequest(mode,payload,key,provider=fetch){
-  const url=mode==='autocomplete'?BASE+':autocomplete':BASE+encodeURIComponent(payload.placeId)+'?fields=id';
+  const url=mode==='autocomplete'?'https://places.googleapis.com/v1/places:autocomplete':BASE+encodeURIComponent(payload.placeId)+'?fields=id';
   const abort=new AbortController(),timeout=setTimeout(()=>abort.abort(),5000);
   try{
     const response=await provider(url,{
