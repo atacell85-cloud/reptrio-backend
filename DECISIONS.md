@@ -1,3 +1,7 @@
+## 2026-10-19 — Build 47 Google Places gym lookup
+- User wants in-workout gym addition, user-profile removal without loss of historical attribution, and future matching via verified Google Place ID. No advertising or location tracking now.
+- Security: backend key only (never iPhone), auth and per-user rate limiter, no persistent Google name/address/coordinates data; place verification `fields=id`. Missing config fails 503. Enable after Cloud billing/quota/brand review only. No deploy.
+  
 # Reptrio backend karar kaydı
 
 ### 2026-10-17 — B46-03 içe aktarma sonrası OpenAI yanıtı silme (Seçenek C; Build 46)

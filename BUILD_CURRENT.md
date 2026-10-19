@@ -1,3 +1,7 @@
+## Build 47 — Google Places proxy (2026-10-19)
+- Isolated branch `build47/gyms-google-places` from Build46 integration. Server-only `GOOGLE_MAPS_PLACES_API_KEY`; `POST /api/places/autocomplete` and `/api/places/verify` authenticated, capped input, 12/min/user Cloudflare limiter, 5s upstream timeout, IDs-only verification. No DB/backup schema change or Google data cache; autocomplete names are ephemeral, Google Place IDs persist only in user's personal gym data.
+- No Google Cloud key or billing was provisioned, worker **NOT DEPLOYED**. New tests authored, NOT RUN. Independent Guardian, Google Maps attribution and pricing/terms checks required before production.
+
 # Reptrio — Güncel çalışma kaydı
 
 ## Build 46 · B46-03 AI response cleanup after import (Option C) · 2026-10-17

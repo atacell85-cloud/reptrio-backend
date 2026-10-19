@@ -28,7 +28,8 @@
     "test:free-plan": "node scripts/free-plan-capacity-test.mjs",
     "test:live-activity-end": "node scripts/live-activity-end-test.mjs",
     "test:live-activity-integration": "node scripts/live-activity-integration-test.mjs",
-    "test:import-response-cleanup": "node scripts/import-response-cleanup-test.mjs"
+    "test:import-response-cleanup": "node scripts/import-response-cleanup-test.mjs",
+    "test:places-api": "node scripts/places-api-test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.36.0"

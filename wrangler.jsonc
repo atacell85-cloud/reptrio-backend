@@ -58,6 +58,7 @@
   },
   "ratelimits": [
     { "name": "ACCOUNT_LIFECYCLE_LIMITER", "namespace_id": "1003", "simple": { "limit": 6, "period": 60 } },
+    { "name": "PLACES_LIMITER", "namespace_id": "1004", "simple": { "limit": 12, "period": 60 } },
     {
       "name": "AI_IMPORT_LIMITER",
       "namespace_id": "1001",

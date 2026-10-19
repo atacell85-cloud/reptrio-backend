@@ -8,6 +8,7 @@ import { currentUser, handleAccountRequest } from './account-api.js';
 import { handleAiConsentRequest, hasAiImportConsent, assertAiImportConsent } from './ai-import-consent.js';
 import { handlePasswordResetRequest } from './password-reset.js';
 import { handleLiveActivityRequest } from './live-activity-end.js';
+import { handlePlacesRequest } from './places-api.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
@@ -32,6 +33,8 @@ export default {
     if (accountResponse) return accountResponse;
     const aiConsentResponse = await handleAiConsentRequest(request, env, url.pathname);
     if (aiConsentResponse) return aiConsentResponse;
+    const placesResponse = await handlePlacesRequest(request, env, url.pathname);
+    if (placesResponse) return placesResponse;
     env={...env,DB:await activeAccountDB(env.DB)};
     const liveActivityResponse = await handleLiveActivityRequest(request, env, url.pathname);
     if (liveActivityResponse) return liveActivityResponse;
