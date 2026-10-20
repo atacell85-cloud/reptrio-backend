@@ -70,7 +70,7 @@ function extractMeasurement(v){
  }
  if(own(v,'derived')){
   const d=v.derived;exact(d,metrics);
-  if(d.version!==1||metrics.some(k=>k!=='version'&&k!=='bodyFatBasis'&&!numberOrNull(d[k]))||![null,'measured','estimated'].includes(d.bodyFatBasis))fail('TYPE_MISMATCH');
+  if(![1,2].includes(d.version)||metrics.some(k=>k!=='version'&&k!=='bodyFatBasis'&&!numberOrNull(d[k]))||![null,'measured','estimated'].includes(d.bodyFatBasis))fail('TYPE_MISMATCH');
   ext.derived=d;
  }
  return ext;

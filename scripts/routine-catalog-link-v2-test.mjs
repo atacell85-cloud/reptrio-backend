@@ -55,6 +55,6 @@ for(const ok of [r=>{r.neckCm=1;},r=>{r.neckCm=350;},r=>{r.neckCm=null;},r=>{r.e
  r=>{r.profileAtRecord={heightCm:null,gender:'undisclosed',birthYear:null};},r=>{r.profileAtRecord={heightCm:90,gender:'female',birthYear:1900};},r=>{r.derived.bodyFatBasis='estimated';}])bodyCase(ok,null);
 for(const bad of [r=>{r.neckCm=0.99;},r=>{r.neckCm=350.01;},r=>{r.hipCm=-1;},r=>{r.extraCm=Array.from({length:17},(_,i)=>({id:'e'+i,label:'L'+i,cm:10}));},
  r=>{r.extraCm[0].label='';},r=>{r.extraCm[0].label=' Wrist';},r=>{r.extraCm[0].label='x'.repeat(41);},r=>{r.extraCm[0].cm=351;},r=>{r.extraCm[0].cm=null;},r=>{r.extraCm[0].id='';},
- r=>{r.profileAtRecord.gender='other';},r=>{r.profileAtRecord.heightCm=89;},r=>{r.profileAtRecord.birthYear=1985.5;},r=>{r.derived.version=2;},r=>{r.derived.bodyFatBasis='guess';},r=>{r.derived.bmi='25';}])bodyCase(bad);
+ r=>{r.profileAtRecord.gender='other';},r=>{r.profileAtRecord.heightCm=89;},r=>{r.profileAtRecord.birthYear=1985.5;},r=>{r.derived.version=3;},r=>{r.derived.bodyFatBasis='guess';},r=>{r.derived.bmi='25';}])bodyCase(bad);
 bodyCase(r=>{r.extraCm=[{id:'a',label:'Bilek',cm:17},{id:'b',label:'BİLEK',cm:18}];},'RESTORE_DUPLICATE_ID');
 console.log('PASS: V2-only catalog reclassification journals, validation, legacy V1 frozen and undo provenance preserved; Build 47 measurement bounds aligned with mobile.');
