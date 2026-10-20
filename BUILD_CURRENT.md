@@ -1,3 +1,11 @@
+## 2026-10-21 — Build 47 eski istemci veri koruması (HIGH: sync/restore yazım yolları, migration 0016)
+
+- Hesap bazlı, sunucuda türetilen, monoton veri seviyesi: `worker/data-feature-guard.js`, migration `0016_sync_data_features.sql` (ek, yeniden çalıştırılabilir). Legacy push, root-delta mutation ve restore/staged-sync start/commit/undo, `X-Reptrio-Data-Level` bildirmeyen istemciyi Build 47 verisi olan hesaplarda sıfır yazımla `SYNC_CLIENT_UPGRADE_REQUIRED` ile reddeder. 0016 yoksa yazıcılar `SYNC_STORAGE_MIGRATION_REQUIRED`.
+- H2: seviye-1 bilinen şekiller Build 47'nin ölçüm silme, salon yeniden etkinleştirme, katalog Undo ve bağlantılı program silme yazımlarını kabul eder.
+- V2 ölçüm sınırları mobil ile eşit; `derived.version` 1|2; kullanılmayan `V2_MEASUREMENT_FIELDS` kaldırıldı; Places rota sırası testi.
+- Tests: `npm test` 21 grup + `cf:build` PASS (Node 22.23.2); yeni `test:data-feature-guard`. Node 26: yalnız `test:record-transport` (SQLite 3.54 `nested too deep`, Build 46 üretim kodunda da, kullanılmayan uç nokta).
+- Rollout: `docs/build47/PRODUCTION_ROLLOUT.md`. Production migration/deploy **YAPILMADI** (ayrı onay).
+
 ## Build 47 — Places follow-up: session correctness (2026-10-19)
 - Place Details (New) verification now receives the exact Autocomplete sessionToken in its URL and an explicit `X-Goog-FieldMask: id`; the Worker still returns only the verified ID and never exposes the API key.
 - Pricing clarification: Place Details (New) IDs Only does NOT qualify for Autocomplete session discounts; autocomplete requests remain per-request billable. Keep debounce, authenticated limiter and Google billing alerts. No assumption of discounted sessions.

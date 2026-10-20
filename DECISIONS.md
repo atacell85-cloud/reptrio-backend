@@ -183,3 +183,8 @@ Syntax/diff PASS. Complete npm local run blocked at headless smoke Chrome CDP st
   metin bunu açıkça söyler ("çok büyük hesaplarda ekibimizin işlemiyle birkaç gün"). Bugün etkilenen hesap yok
   (production en büyük hesap 225 set).
 - Cron CPU (10 ms) yalnız gerçek Cloudflare ortamında doğrulanabilir; doğrulanmadan PASS sayılmaz.
+
+
+## 2026-10-21 — Build 47 data-feature guard (HIGH)
+
+Eski istemci koruması hesap bazlı ve monotondur; seviye istemci beyanından değil sunucudaki Build 47 alanlarından türetilir ve CAS batch'inde yükselir. Başlık yalnız yetenek beyanıdır; kayıp kontrolü (`noFieldLoss`) her durumda sürer. Yeni Worker migration 0016 olmadan yazmaz (önce migration, sonra deploy). Build 47 mobil uygulaması bu backend'i gerektirir. Prosedür: `docs/build47/PRODUCTION_ROLLOUT.md`.
