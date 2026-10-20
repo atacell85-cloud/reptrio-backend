@@ -5,7 +5,9 @@ import { readFileSync } from 'node:fs';
 import worker from '../worker/index.js';
 import { tokenDigest } from '../worker/account-api.js';
 import { executePurge } from '../worker/account-lifecycle.js';
-import { payloadDataLevel, dataLevelPredicate, clientDataLevel } from '../worker/data-feature-guard.js';
+import { payloadDataLevel, dataLevelPredicate, clientDataLevel, DATA_LEVEL_WRITE_GATE_SQL } from '../worker/data-feature-guard.js';
+import { RECORD_WRITE_GATE_SQL } from '../worker/record-sync-storage.js';
+assert.equal(DATA_LEVEL_WRITE_GATE_SQL, RECORD_WRITE_GATE_SQL, 'level raise uses the exact record write gate');
 import { createD1 } from './lib/d1-sqlite.mjs';
 
 const ORIGIN = 'https://fixtures.example';
@@ -156,7 +158,12 @@ const build47 = () => {
 {
   const link = { originalExerciseId: 'custom:name:row', originalDisplayName: 'Row', originalCustomExerciseName: 'Row', catalogId: 'ex_000101', catalogName: 'Barbell Row', changes: [{ sessionId: 's1', groupKey: 'i', storageKey: '1', hadCanonicalExerciseId: true, beforeCanonicalExerciseId: 'custom:name:row', hadExerciseName: false, beforeExerciseName: null }] };
   const program = { id: 'p', schemaVersion: '1.1', name: 'Rutin', description: null, sourceType: 'manual', createdAt: '2026-10-01', updatedAt: '2026-10-20', days: [{ id: 'd', programId: 'p', name: 'Gün 1', order: 1, notes: null, sections: [{ id: 'sec', workoutDayId: 'd', title: 'Ana', sectionType: 'strength', order: 1, notes: null, items: [{ id: 'i', itemType: 'exercise', sectionId: 'sec', exerciseId: 'ex_000101', customExerciseName: null, displayName: 'Barbell Row', order: 1, individualSets: [], catalogLink: link }] }] }] };
-  const seed = () => { const d = build47(); d.programs = [clone(program)]; d.programBuilderDraft = clone(program); return d; };
+  const linkedSet = { exerciseId: 'i', setNumber: 1, weight: '50', reps: '10', completed: true, canonicalExerciseId: 'ex_000101', exerciseName: 'Barbell Row' };
+  const draftWithLink = { id: 'draft-1', programId: 'p', dayId: 'd', dayName: 'Gün 1', startedAt: '2026-10-21T08:00:00.000Z', lastEditedAt: '2026-10-21T08:10:00.000Z', lastActivityAt: '2026-10-21T08:10:00.000Z', watchStateRevision: 0, gymId: null, excludedFromStats: false, freeWorkout: false,
+    exercises: [clone(program.days[0].sections[0].items[0]), { id: 'other', itemType: 'exercise', exerciseId: 'ex_000002', customExerciseName: null, displayName: 'Squat', order: 2, individualSets: [] }],
+    sets: { i: { 1: { ...linkedSet, completed: false } } } };
+  const seed = () => { const d = build47(); d.programs = [clone(program)]; d.programBuilderDraft = clone(program); d.draft = clone(draftWithLink);
+    d.sessions = [{ id: 's1', programId: 'p', dayId: 'd', title: 'Gün 1', startedAt: '2026-10-20T08:00:00.000Z', completedAt: '2026-10-20T09:00:00.000Z', sets: { i: { 1: clone(linkedSet) } } }]; return d; };
   const flows = {
     'delete extended measurement': d => { d.measurements = d.measurements.filter(m => m.id !== 'm-new'); },
     'reactivate archived gym': d => { delete d.settings.gyms[1].archivedAt; },
@@ -164,6 +171,13 @@ const build47 = () => {
     'delete linked routine item': d => { d.programs[0].days[0].sections[0].items = []; },
     'delete linked program': d => { d.programs = []; },
     'clear builder draft holding a link': d => { d.programBuilderDraft = null; },
+    // F1: an active workout started before the mobile fix may still hold the journal in draft.exercises.
+    'finish workout from a linked day': d => { d.draft = null; d.sessions.push({ id: 's2', programId: 'p', dayId: 'd', title: 'Gün 1', startedAt: '2026-10-21T08:00:00.000Z', completedAt: '2026-10-21T09:00:00.000Z', sets: { i: { 1: clone(linkedSet) } } }); },
+    // (Deleting draft set rows is refused for schema 8 at every level since Build 44; no app flow does it.)
+    'remove linked exercise from the active draft': d => { d.draft.exercises = d.draft.exercises.filter(e => e.id !== 'i'); },
+    // F3: catalog Undo restores rows that originally had NO exerciseName (and a custom canonical id).
+    'undo restores a set row without exerciseName': d => { const row = d.sessions[0].sets.i[1]; delete row.exerciseName; row.canonicalExerciseId = 'custom:name:row';
+      const item = d.programs[0].days[0].sections[0].items[0]; delete item.catalogLink; item.exerciseId = 'custom:name:row'; item.customExerciseName = 'Row'; item.displayName = 'Row'; },
   };
   for (const [name, change] of Object.entries(flows)) {
     const f = await fixture(); assert.equal((await f.push(seed(), 0, 1)).status, 200, name);
@@ -176,6 +190,7 @@ const build47 = () => {
     'drop derived snapshot': d => { delete d.measurements[1].derived; },
     'drop profile snapshot field': d => { delete d.measurements[1].profileAtRecord.birthYear; },
     'drop journal change field': d => { delete d.programs[0].days[0].sections[0].items[0].catalogLink.changes[0].hadExerciseName; },
+    'drop another set field': d => { delete d.sessions[0].sets.i[1].weight; },
   };
   for (const [name, change] of Object.entries(losses)) {
     const f = await fixture(); assert.equal((await f.push(seed(), 0, 1)).status, 200, name);

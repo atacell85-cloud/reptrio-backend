@@ -4,7 +4,9 @@
 // every write from a client that does not declare the Build 47 data level. The level is derived on the SERVER from the
 // stored records (never from the client's claim) and only rises, in the same atomic batch as the revision CAS. A client
 // that claims the level but still drops fields remains blocked by the content-based noFieldLoss rules.
-import { RECORD_WRITE_GATE_SQL } from './record-sync-storage.js';
+// Same text as record-sync-storage.js RECORD_WRITE_GATE_SQL (asserted by data-feature-guard-test); a local
+// copy keeps this module free of an import cycle.
+export const DATA_LEVEL_WRITE_GATE_SQL = `EXISTS (SELECT 1 FROM sync_account_state s JOIN users u ON u.id = s.user_id WHERE s.user_id = ? AND s.revision = ? AND s.write_token = ? AND s.storage_schema_version = 1 AND s.write_status = 'ACTIVE' AND u.deleted_at IS NULL)`;
 
 export const DATA_FEATURE_LEVEL = 1;
 export const DATA_FEATURE_TABLE = 'sync_account_data_features';
@@ -69,6 +71,6 @@ export function assertClientMayWrite(clientLevel, accountLevel, submittedLevel =
 // (version, writeToken). `force` records an already observed level; otherwise the rows just written are inspected.
 export function raiseDataLevelStatement(db, userId, version, writeToken, stamp, force = false) {
   const observed = force ? '' : ` AND EXISTS(SELECT 1 FROM sync_records r WHERE r.user_id=? AND r.modified_revision=? AND r.tombstone=0 AND ${dataLevelPredicate('r')})`;
-  return db.prepare(`INSERT INTO ${DATA_FEATURE_TABLE}(user_id,level,raised_revision,raised_at) SELECT ?,${DATA_FEATURE_LEVEL},?,? WHERE ${RECORD_WRITE_GATE_SQL}${observed} ON CONFLICT(user_id) DO NOTHING`)
+  return db.prepare(`INSERT INTO ${DATA_FEATURE_TABLE}(user_id,level,raised_revision,raised_at) SELECT ?,${DATA_FEATURE_LEVEL},?,? WHERE ${DATA_LEVEL_WRITE_GATE_SQL}${observed} ON CONFLICT(user_id) DO NOTHING`)
     .bind(userId, version, stamp, userId, version, writeToken, ...(force ? [] : [userId, version]));
 }

@@ -269,7 +269,11 @@ const measurementShape47 = { ...measurementShape, ...scalarFields('shoulderCm ch
   derived: scalarFields('version bmi waistToHeight waistToHip navyBodyFatPercent bodyFatBasis fatMassKg leanMassKg ffmi estimatedRestingKcal') };
 // Reactivating an archived gym removes archivedAt; nothing else of a gym may disappear.
 const gymShape47 = { ...scalarFields('id name note googlePlaceId'), archivedAt: Object.assign(Object.create(null), { [OMITTABLE]: true }) };
-const shapes = level => level >= 1 ? { program: programShape47, measurement: measurementShape47, gym: gymShape47 } : { program: programShape, measurement: measurementShape, gym: scalarFields('id name note') };
+const mobileDraftShape47 = { ...mobileDraftShape, exercises: [exerciseShape47] };
+// Undo of a catalog link restores set rows exactly, which can remove these two identity labels again.
+const omittableScalar = () => Object.assign(Object.create(null), { [OMITTABLE]: true });
+const setShape47 = { ...setShape, exerciseName: omittableScalar(), canonicalExerciseId: omittableScalar() };
+const shapes = level => level >= 1 ? { program: programShape47, measurement: measurementShape47, gym: gymShape47, mobileDraft: mobileDraftShape47, set: setShape47 } : { program: programShape, measurement: measurementShape, gym: scalarFields('id name note'), mobileDraft: mobileDraftShape, set: null };
 // Actual preview producers: Worker responseSchema, local parser/PWA resolution, mobile ImportPreview and
 // document-extractor. All nested branches are closed coverage; unknown/any payloads cannot authorize discard.
 const sourceReferenceShape = scalarFields('page sheet cellRange text');
@@ -316,7 +320,7 @@ function knownShape(value, shape) {
 // Unknown nested fields cannot disappear from a surviving object. Known schema 8 permits collection deletion,
 // but does not prove future opaque extensions are disposable. Conservative loss rejection keeps those values safe.
 function noFieldLoss(previous, next, clearCoverage = null, context = null) {
-  const knownNullable = [mobileDraftShape,pwaDraftShape,programShape,programShape47,timerShape].includes(clearCoverage);
+  const knownNullable = [mobileDraftShape,mobileDraftShape47,pwaDraftShape,programShape,programShape47,timerShape].includes(clearCoverage);
   if (next === null && previous !== null && knownNullable && knownShape(previous,clearCoverage)) return;
   if (object(previous)) {
     if (!object(next)) fail('SYNC_SCHEMA_LOSS_RISK');
@@ -382,7 +386,7 @@ export function compatible(previous, submitted, dataLevel = 0) {
         } else if (object(item.sets) && object(successor.sets)) {
           for (const [group, entries] of Object.entries(item.sets)) for (const [key,value] of Object.entries(entries)) {
             const successorGroup = own(successor.sets,group) ? successor.sets[group] : null;
-            if (successorGroup && own(successorGroup,key)) noFieldLoss(value,successorGroup[key]);
+            if (successorGroup && own(successorGroup,key)) noFieldLoss(value,successorGroup[key],shape.set);
             else if (!knownShape(value,setShape)) fail('SYNC_SCHEMA_LOSS_RISK');
           }
         }
@@ -390,7 +394,7 @@ export function compatible(previous, submitted, dataLevel = 0) {
     }
   }
   for (const field of Object.keys(next)) if (!collections[field] && own(previous,field)) {
-    const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? mobileDraftShape : pwaDraftShape) : field === 'programBuilderDraft' ? shape.program : field === 'settings' ? { gyms: [shape.gym] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
+    const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? shape.mobileDraft : pwaDraftShape) : field === 'programBuilderDraft' ? shape.program : field === 'settings' ? { gyms: [shape.gym] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
     noFieldLoss(previous[field],next[field],clearCoverage,{schemaVersion,path:[field]});
   }
   return next;
@@ -499,25 +503,25 @@ function compatibleRawV1Row(before,after){
  }
  rawV1Loss(previous,next,coverage);return next;
 }
-export function compatibleStorageRow(before,after,clientSchemaVersion) {
+export function compatibleStorageRow(before,after,clientSchemaVersion,dataLevel=0) {
   if(clientSchemaVersion===9)return compatibleRawV1Row(before,after);
   if(![5,8].includes(clientSchemaVersion))fail('SYNC_CLIENT_UPGRADE_REQUIRED');
   const previous=JSON.parse(before.payload_json),next=after?JSON.parse(after.payload_json):undefined;
   if(before.kind==='set'){
-    if(after){noFieldLoss(previous,next);return next;}
+    if(after){noFieldLoss(previous,next,shapes(dataLevel).set);return next;}
     if(!knownShape(previous,clientSchemaVersion===5?pwaSetShape:setShape))fail('SYNC_SCHEMA_LOSS_RISK');return undefined;
   }
   if(before.kind==='metadata'){
     if(!after)return previous;const field=JSON.parse(before.address_json).field;
-    return compatible({schemaVersion:clientSchemaVersion,[field]:previous},{schemaVersion:clientSchemaVersion,[field]:next})[field];
+    return compatible({schemaVersion:clientSchemaVersion,[field]:previous},{schemaVersion:clientSchemaVersion,[field]:next},dataLevel)[field];
   }
   const field={session:'sessions',program:'programs',measurement:'measurements'}[before.kind];if(!field)fail('SYNC_SCHEMA_LOSS_RISK');
   if(before.kind==='session'){
     const oldDescriptor=JSON.parse(before.address_json),newDescriptor=after?JSON.parse(after.address_json):null;
     if(after&&(oldDescriptor.sets!==newDescriptor.sets||oldDescriptor.container!==newDescriptor.container))fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     const sets=oldDescriptor.container==='array'?[]:{};
-    const result=compatible({schemaVersion:clientSchemaVersion,[field]:[{...previous,...(oldDescriptor.sets==='present'?{sets}:{})}]},{schemaVersion:clientSchemaVersion,[field]:after?[{...next,...(newDescriptor.sets==='present'?{sets}:{})}]:[]})[field][0];
+    const result=compatible({schemaVersion:clientSchemaVersion,[field]:[{...previous,...(oldDescriptor.sets==='present'?{sets}:{})}]},{schemaVersion:clientSchemaVersion,[field]:after?[{...next,...(newDescriptor.sets==='present'?{sets}:{})}]:[]},dataLevel)[field][0];
     if(!after)return undefined;const value={...result};delete value.sets;return value;
   }
-  const result=compatible({schemaVersion:clientSchemaVersion,[field]:[previous]},{schemaVersion:clientSchemaVersion,[field]:after?[next]:[]})[field];return result[0];
+  const result=compatible({schemaVersion:clientSchemaVersion,[field]:[previous]},{schemaVersion:clientSchemaVersion,[field]:after?[next]:[]},dataLevel)[field];return result[0];
 }

@@ -50,8 +50,23 @@ ayrı, açık onayı olmadan yapılmaz. Google Places anahtarı/billing ayrı bi
 
 ## Geri dönüş
 
-- Worker: `npx wrangler rollback 72b88bbb-6790-474d-8679-ef4c484315ce` (Build 46). Eski Worker yeni tabloyu yok sayar; veri kaybı yok.
-  **Uyarı:** Build 46 Worker'ında H1 koruması ve H2 düzeltmesi yoktur; geri dönüldüyse Build 47 uygulaması dağıtılmamalı.
+- Worker: `npx wrangler rollback 72b88bbb-6790-474d-8679-ef4c484315ce` (Build 46). Eski Worker yeni tabloyu yok sayar; rollback'in
+  kendisi kayıt silmez. **Uyarı (Guardian tur 2 F5):** Build 46 Worker'ında H1 koruması yoktur. Rollback sırasında Build 47 verisi
+  olan hesaplarda Build 46 istemcileri yeniden yazabilir: anahtar düşüren yazımlar eski `noFieldLoss` ile reddedilir, ama değer
+  düzeyindeki bozulma (Build 46'nın ölçümlerde `null`→`0` normalizasyonu) kabul edilir. Ayrıca Build 46 Worker'ı Build 47'nin
+  silme/Undo/yeniden etkinleştirme/bağlantılı antrenman bitirme yazımlarını reddeder. Geri dönüldüyse Build 47 uygulaması
+  dağıtılmamalı ve dağıtılmışsa kullanıcılar etkilenir — rollback yalnız acil durumda.
 - Migration geri alınmaz (ek tablo zararsız). Gerekirse yalnız marker tablosu: `DROP TRIGGER sync_account_data_features_monotonic;
   DROP TABLE sync_account_data_features;` — kullanıcı verisi içermez; tekrar 0016 ile yeniden oluşturulabilir.
 - Beklenmeyen veri durumu: Time Travel yer imine restore yalnız ayrı onayla (sonraki tüm yazımları geri alır).
+
+## Bilinen istemci geçiş durumları
+
+- Build 46 cihazı, hesap Build 47 verisi kazandıktan sonra yazamaz (`SYNC_CLIENT_UPGRADE_REQUIRED`); değişiklikleri cihazda bekler.
+  Cihaz Build 47'ye güncellenince ilk push `SYNC_SCHEMA_LOSS_RISK` alır; Build 47 bu durumda bir kez sunucudan çeker, yalnız
+  eşleşen kayıtların eksik anahtarlarını sunucudan geri koyar (silinenleri diriltmez, Undo'yu geri almaz), birleştirir ve
+  tekrar dener (mobil `restoreFieldsDroppedByOlderClient`, Guardian tur 2 F2; uçtan uca testte doğrulandı).
+- Staged-sync (SYNC) yolu artık istemci seviyesini `finalize`'a iletir (F4). Mobil bu yolu kullanmıyor.
+- Önceden var olan, Build 47 dışı: schema 8 taslağından set satırı silme her seviyede reddedilir (uygulamada böyle bir akış yok);
+  8 komutlu kayıt sıralama mutation'ı workerd/Node 26 SQLite'ında `nested too deep` (hiçbir istemci kullanmıyor);
+  `worker/record-sync-storage.js` doğrudan (worker girişi olmadan) içe aktarılırsa transport döngüsü yüzünden TDZ verir (F7).

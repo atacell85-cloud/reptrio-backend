@@ -37,7 +37,7 @@ export async function personalRestoreRequest(request,env,userId,purpose,id,actio
   if(op.state==='UNDONE'&&action==='undo'){binding(op,p);exactFields(p,['localBinding','confirm','undoDigest','baseRevision']);if(p.undoDigest!==op.confirm_hash||p.confirm!==true||p.baseRevision!==JSON.parse(op.outcome_json).undoRevision-1)fail('CONFIRMATION_INVALID');return json(JSON.parse(op.outcome_json));}
   if(!['COMMITTED','UNDO_PREVIEWING','UNDO_READY','UNDONE'].includes(op.state))live(op);binding(op,p);
   if(action==='chunks')return json(await chunk(db,userId,op,p));
-  if(action==='finalize')return json(await finalize(db,userId,op,state,p));
+  if(action==='finalize')return json(await finalize(db,userId,op,state,p,clientDataLevel(request)));
   if(action==='preview'&&purpose==='RESTORE')return json(await preview(db,userId,op,state,p));
   if(action==='commit')return json(await commit(db,userId,op,state,p));
   if(action==='undo-preview'&&purpose==='RESTORE')return json(await undoPreview(db,userId,op,state,p));
@@ -121,9 +121,9 @@ async function rootPage(db,userId,op,progress){
  const rows=(await db.prepare(sql).bind(userId,op.operation_id,progress.last,userId,op.pinned_revision,op.pinned_token||'',userId,op.operation_id,op.generation_version,op.state,now()).all()).results;
  if(rows.some(r=>r.oversized))fail('PAGE_LIMIT',413);return rows;
 }
-async function finalize(db,userId,op,state,p){
+async function finalize(db,userId,op,state,p,dataLevel=0){
  exactFields(p,['localBinding','generationId']);
- if(op.purpose==='SYNC'&&['FROZEN','SYNC_CHECKING','SYNC_READY'].includes(op.state))return finalizeSync(db,userId,op,state,p);
+ if(op.purpose==='SYNC'&&['FROZEN','SYNC_CHECKING','SYNC_READY'].includes(op.state))return finalizeSync(db,userId,op,state,p,dataLevel);
  if(['FROZEN','PREVIEWING','READY'].includes(op.state))return {operationId:op.operation_id,status:'READY',semanticDigest:op.semantic_hash};
  if(!['UPLOADING','FINALIZING'].includes(op.state))fail('STATE_INVALID');
  if(op.state==='UPLOADING'){
@@ -140,7 +140,7 @@ async function finalize(db,userId,op,state,p){
  const actual=await db.prepare(`SELECT (SELECT COUNT(*) FROM personal_restore_roots WHERE user_id=? AND operation_id=? AND root_id>=0) AS roots,(SELECT COUNT(*) FROM personal_restore_records WHERE user_id=? AND operation_id=? AND root_id>=0) AS records,SUM(roots) AS chunk_roots,SUM(records) AS chunk_records FROM personal_restore_chunks WHERE user_id=? AND operation_id=?`).bind(userId,op.operation_id,userId,op.operation_id,userId,op.operation_id).first();
  if(actual.roots!==progress.processed||actual.roots!==actual.chunk_roots||actual.records!==actual.chunk_records||canonicalPortable(progress.counts)!==canonicalPortable(JSON.parse(op.expected_counts_json)))fail('COUNT_MISMATCH');
  const semantic=await portableHash(['reptrio-personal-finish-v1','finalize',progress.chain,progress.counts,actual.records]);
- op=await saveProgress(db,userId,op,progress,{state:'FROZEN',semantic_hash:semantic});if(op.purpose==='SYNC')return finalizeSync(db,userId,op,state,p);return {...progressReply(op,progress,'READY'),semanticDigest:semantic,counts:progress.counts};
+ op=await saveProgress(db,userId,op,progress,{state:'FROZEN',semantic_hash:semantic});if(op.purpose==='SYNC')return finalizeSync(db,userId,op,state,p,dataLevel);return {...progressReply(op,progress,'READY'),semanticDigest:semantic,counts:progress.counts};
 }
 async function cancel(db,userId,op){
  if(op.state==='CANCELLED')return {operationId:op.operation_id,status:'CANCELLED'};
@@ -562,7 +562,7 @@ async function matchingStage(db,userId,op,rows){
  const output=(await db.prepare(`WITH candidates AS(SELECT ${fields.map(f=>`r.${f}`).join(',')} FROM json_each(?)v CROSS JOIN personal_restore_records r INDEXED BY personal_restore_record_target WHERE r.publish_kind=json_extract(v.value,'$.kind') AND r.record_key=json_extract(v.value,'$.key') AND user_id=? AND operation_id=? AND root_id>=0 AND publish_kind IS NOT NULL),bounds AS(SELECT SUM(length(CAST(json_object(${fields.map(f=>`'${f}',${f}`).join(',')})AS BLOB))+1)+2 AS bytes FROM candidates) SELECT ${fields.join(',')} FROM candidates WHERE COALESCE((SELECT bytes FROM bounds),2)<=1799998 AND ${pinnedGate} UNION ALL SELECT ${fields.map(()=> 'NULL').join(',')} WHERE(SELECT bytes FROM bounds)>1799998`).bind(keys,userId,op.operation_id,userId,op.pinned_revision,op.pinned_token||'').all()).results;
  if(output.some(r=>r.kind===null))fail('PROOF_LIMIT',413);return output;
 }
-async function finalizeSync(db,userId,op,state,p){
+async function finalizeSync(db,userId,op,state,p,dataLevel=0){
  if(!pinMatches(op,state)||op.base_revision!==state.sync_version)fail('REVISION_CHANGED');
  if(op.state==='SYNC_READY')return {operationId:op.operation_id,status:'READY',semanticDigest:op.semantic_hash,confirmationDigest:op.preview_hash,baseRevision:op.pinned_revision};
  if(op.state==='FROZEN'){
@@ -580,7 +580,7 @@ async function finalizeSync(db,userId,op,state,p){
   for(const row of rows){
    const after=next.find(r=>r.kind===row.kind&&r.record_key===row.record_key);let touches=Boolean(after)||present.includes(row.kind)||row.kind==='set'&&present.includes('session');
    if(row.kind==='metadata'&&!after)touches=false;
-   if(touches){const value=compatibleStorageRow(row,after,op.data_schema_version);if(after){const payload=storageJSON(value);updates.push({root:after.root_id,item:after.item_ordinal,payload,classification:payload===row.payload_json&&after.address_json===row.address_json?'SAME':'NEW'});}
+   if(touches){const value=compatibleStorageRow(row,after,op.data_schema_version,dataLevel);if(after){const payload=storageJSON(value);updates.push({root:after.root_id,item:after.item_ordinal,payload,classification:payload===row.payload_json&&after.address_json===row.address_json?'SAME':'NEW'});}
     progress.chain=await portableHash(['reptrio-normal-stage-compatibility-v1',progress.chain,row.kind,row.record_key,await portableHash(JSON.parse(row.payload_json)),after?await portableHash(value):null]);
    }
    progress.proof.lastKind=row.kind;progress.proof.lastKey=row.record_key;progress.processed++;
