@@ -17,11 +17,49 @@ export function validateProfileExtensions(profile){
  }
  return out;
 }
+// V2-only optional per-routine-item reclassification journal. Immutable V1
+// rules/hash are never widened. The authenticated restore still validates every
+// ordinary program field through the original portable contract.
+function validateCatalogLink(v) {
+ exact(v,['originalExerciseId','originalDisplayName','originalCustomExerciseName','catalogId','catalogName','changes']);
+ for(const k of ['originalExerciseId','originalDisplayName','originalCustomExerciseName'])
+  if(v[k]!==null&&typeof v[k]!=='string')fail('TYPE_MISMATCH');
+ if(typeof v.catalogId!=='string'||!/^ex_[0-9]{6}$/.test(v.catalogId)||
+    typeof v.catalogName!=='string'||!v.catalogName.trim()||
+    !Array.isArray(v.changes)||v.changes.length>10000)fail('TYPE_MISMATCH');
+ const seen=new Set();
+ for(const c of v.changes){
+  exact(c,['sessionId','groupKey','storageKey','hadCanonicalExerciseId','beforeCanonicalExerciseId','hadExerciseName','beforeExerciseName']);
+  if(['sessionId','groupKey','storageKey'].some(k=>typeof c[k]!=='string'||!c[k])||
+     typeof c.hadCanonicalExerciseId!=='boolean'||typeof c.hadExerciseName!=='boolean'||
+     c.beforeCanonicalExerciseId!==null&&typeof c.beforeCanonicalExerciseId!=='string'||
+     c.beforeExerciseName!==null&&typeof c.beforeExerciseName!=='string')fail('TYPE_MISMATCH');
+  const key=JSON.stringify([c.sessionId,c.groupKey,c.storageKey]);
+  if(seen.has(key))fail('DUPLICATE_ID');seen.add(key);
+ }
+}
 /** V1 validates all remaining domains and unknown fields without widening its frozen dictionary. */
 export function validatePortableRootV2(root){
  // Direct codec consumers receive the same non-executing object boundary as routed JSON callers.
  let nodes=0;const seen=new Set();const inspect=(value,depth=0)=>{if(++nodes>200000||depth>32)fail('STRUCTURE_LIMIT',413);if(value===null||typeof value!=='object')return;if(seen.has(value)||!Array.isArray(value)&&![Object.prototype,null].includes(Object.getPrototypeOf(value)))fail('TYPE_MISMATCH');seen.add(value);for(const key of Reflect.ownKeys(value)){if(typeof key!=='string')fail('TYPE_MISMATCH');const d=Object.getOwnPropertyDescriptor(value,key);if(!d||!('value' in d))fail('TYPE_MISMATCH');inspect(d.value,depth+1);}seen.delete(value);};inspect(root);
 
+ if(root?.kind==='program' && Array.isArray(root.record?.days)) {
+  const journals=[];
+  const stripped={...root,record:{...root.record,days:root.record.days.map((day,di)=>({
+   ...day,sections:Array.isArray(day?.sections)?day.sections.map((section,si)=>({
+    ...section,items:Array.isArray(section?.items)?section.items.map((item,ei)=>{
+     if(!object(item)||!own(item,'catalogLink'))return item;
+     validateCatalogLink(item.catalogLink);
+     journals.push({di,si,ei,link:item.catalogLink});
+     const {catalogLink: _excluded,...ordinary}=item;
+     return ordinary;
+    }):section.items,
+   })):day?.sections,
+  }))}};
+  const validated=validatePortableRoot(stripped);
+  for(const {di,si,ei,link} of journals) validated.record.days[di].sections[si].items[ei].catalogLink=link;
+  return validated;
+ }
  if(root?.kind!=='settings'||!object(root.record?.profile))return validatePortableRoot(root);
  const extension=validateProfileExtensions(root.record.profile),profile={...root.record.profile};for(const k of extensions)delete profile[k];
  const validated=validatePortableRoot({...root,record:{...root.record,profile}});
