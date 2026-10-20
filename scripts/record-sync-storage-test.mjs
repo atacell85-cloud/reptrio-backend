@@ -271,7 +271,7 @@ let killed=0;
   const m=await mutant('JSON.stringify([id, groupKey, storageKey])','JSON.stringify([id, entries[storageKey]?.exerciseId, entries[storageKey]?.setNumber])');const records=m.splitData({sessions:[{id:'s',sets:{group:{stored:{exerciseId:'payload',setNumber:99}}}}]});assert.notEqual(records.find(r=>r.kind==='set').record_key,JSON.stringify(['s','group','stored']));killed++;
 }
 {
-  const m=await mutant("if (!own(next,key)) { if (allowedOmission(previous,next,key,clearCoverage,context)) continue; fail('SYNC_SCHEMA_LOSS_RISK'); }",'if (!own(next,key)) continue;');const f=await fixture();const d=data();await f.push(d);delete d.sessions[0].sets['a:b'].k2.unknown;assert.equal((await direct(m,f,d,1)).status,200,'mutated field-loss guard accepts opaque deletion');killed++;
+  const m=await mutant("if (!own(next,key)) {\n        if (allowedOmission(previous,next,key,clearCoverage,context)) continue;",'if (!own(next,key)) { continue;\n        if (allowedOmission(previous,next,key,clearCoverage,context)) continue;');const f=await fixture();const d=data();await f.push(d);delete d.sessions[0].sets['a:b'].k2.unknown;assert.equal((await direct(m,f,d,1)).status,200,'mutated field-loss guard accepts opaque deletion');killed++;
 }
 {
   const m=await mutant('if (before?.tombstone)', 'if (false)');const f=await fixture();const d=data();delete d.sessions[0].sets['a:b'].k2.unknown;await f.push(d);const deleted=clone(d);deleted.sessions=[];await f.push(deleted,1);assert.equal((await direct(m,f,d,2)).status,200,'mutated tombstone guard falsely accepts current-revision resurrection');killed++;

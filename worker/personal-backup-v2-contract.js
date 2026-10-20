@@ -46,26 +46,31 @@ const metrics=['version','bmi','waistToHeight','waistToHip','navyBodyFatPercent'
 'fatMassKg','leanMassKg','ffmi','estimatedRestingKcal'];
 const numberOrNull=v=>v===null||typeof v==='number'&&Number.isFinite(v);
 const stringOrNull=v=>v===null||typeof v==='string';
+// Same bounds as the mobile measurement editor and src/data-export/backup-profile-v2.ts (Build 47 L2): out-of-range or
+// unknown values are refused explicitly, never silently dropped.
+const cmOrNull=v=>v===null||typeof v==='number'&&Number.isFinite(v)&&v>=1&&v<=350;
 function extractMeasurement(v){
  const ext={};
  for(const k of optionalBodyFields)if(own(v,k)){
-  if(!numberOrNull(v[k]))fail('TYPE_MISMATCH');
+  if(!cmOrNull(v[k]))fail('TYPE_MISMATCH');
   ext[k]=v[k];
  }
  if(own(v,'extraCm')){
-  if(!Array.isArray(v.extraCm))fail('TYPE_MISMATCH');
+  if(!Array.isArray(v.extraCm)||v.extraCm.length>16)fail('TYPE_MISMATCH');
+  const labels=new Set();
   for(const e of v.extraCm){exact(e,['id','label','cm']);
-   if(typeof e.id!=='string'||typeof e.label!=='string'||typeof e.cm!=='number'||!Number.isFinite(e.cm))fail('TYPE_MISMATCH');
+   if(typeof e.id!=='string'||!e.id||e.id.length>128||typeof e.label!=='string'||!e.label.trim()||e.label!==e.label.trim()||e.label.length>40||!cmOrNull(e.cm)||e.cm===null)fail('TYPE_MISMATCH');
+   const label=e.label.toLocaleLowerCase('tr-TR');if(labels.has(label))fail('DUPLICATE_ID');labels.add(label);
   }ext.extraCm=v.extraCm;
  }
  if(own(v,'profileAtRecord')){
   const p=v.profileAtRecord;exact(p,['heightCm','gender','birthYear']);
-  if(!numberOrNull(p.heightCm)||!stringOrNull(p.gender)||!numberOrNull(p.birthYear))fail('TYPE_MISMATCH');
+  if(!(p.heightCm===null||numberOrNull(p.heightCm)&&p.heightCm>=90&&p.heightCm<=250)||![null,'male','female','undisclosed'].includes(p.gender)||!(p.birthYear===null||Number.isInteger(p.birthYear)&&p.birthYear>=1900&&p.birthYear<=2100))fail('TYPE_MISMATCH');
   ext.profileAtRecord=p;
  }
  if(own(v,'derived')){
   const d=v.derived;exact(d,metrics);
-  if(metrics.some(k=>!(k==='bodyFatBasis'?stringOrNull(d[k]):numberOrNull(d[k]))))fail('TYPE_MISMATCH');
+  if(d.version!==1||metrics.some(k=>k!=='version'&&k!=='bodyFatBasis'&&!numberOrNull(d[k]))||![null,'measured','estimated'].includes(d.bodyFatBasis))fail('TYPE_MISMATCH');
   ext.derived=d;
  }
  return ext;
@@ -130,10 +135,5 @@ export function validatePortableRootV2(root){
  for(const {index,extra} of gymParts.extras)Object.assign(result.record.gyms[index],extra);
  return result;
 }
-export const V2_MEASUREMENT_FIELDS = {...WIRE_RULES.fields.measurement,...Object.fromEntries(optionalBodyFields.map(k=>[k,'number?~'])),
- extraCm:{array:{id:'string',label:'string',cm:'number'}},
- profileAtRecord:{fields:{heightCm:'number~',gender:'string~',birthYear:'number~'}},
- derived:{fields:Object.fromEntries(metrics.map(k=>[k,k==='bodyFatBasis'?'string~':'number~']))},
-};
 export const V2_SETTINGS_FIELDS = {...WIRE_RULES.fields.settings,
  gyms:{array:{...WIRE_RULES.fields.gym,googlePlaceId:'string?~',archivedAt:'date?~'}},profile:{fields:{...WIRE_RULES.fields.settings.profile.fields,goal:'string?~',experience:'string?~',weeklyDays:'number?~',gender:'string?~',heightCm:'number?~',birthYear:'number?~',onboarding:{fields:{version:'number',step:'number',startedAt:'date',completedAt:'date~',initialWeight:{fields:{id:'string',recordedAt:'date',weightKg:'number'}}}}}}};

@@ -241,7 +241,7 @@ for(const foreignKeys of [true,false]){
  assert.equal(f.db.rows('SELECT COUNT(*)AS n FROM sync_mutation_receipts')[0].n,0);
 }
 // Five critical semantic mutants fail observable invariants using the same SQLite rather than source assertions.
-let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replaceAll("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href)).replaceAll("'./account-lifecycle.js'",JSON.stringify(new URL('../worker/account-lifecycle.js',import.meta.url).href));
+let killed=0;const source=readFileSync(new URL('../worker/record-sync-transport.js',import.meta.url),'utf8').replaceAll("'./record-sync-storage.js'",JSON.stringify(new URL('../worker/record-sync-storage.js',import.meta.url).href)).replaceAll("'./account-lifecycle.js'",JSON.stringify(new URL('../worker/account-lifecycle.js',import.meta.url).href)).replaceAll("'./data-feature-guard.js'",JSON.stringify(new URL('../worker/data-feature-guard.js',import.meta.url).href));
 async function mutant(from,to){assert.ok(source.includes(from));return import(`data:text/javascript;base64,${Buffer.from(source.replace(from,to)).toString('base64')}`);}
 const direct=(m,f,change={},rev=1)=>m.recordMutation(new Request(`${ORIGIN}/api/sync/records/mutations`,{method:'POST',body:JSON.stringify({mutationId:'mutant',baseRevision:rev,clientSchemaVersion:8,...change})}),f.env,f.id);
 {

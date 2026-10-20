@@ -1,6 +1,7 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import { storageJSON } from './record-sync-storage.js';
 import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
+import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement, dataLevelPredicate } from './data-feature-guard.js';
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -20,6 +21,7 @@ async function ready(env) {
   const storage = recordSchemaStatus(tables), receipts = receiptSchemaStatus(tables);
   if (storage !== 'ready') fail(storage === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
   if (receipts !== 'ready') fail(receipts === 'missing' ? 'SYNC_TRANSPORT_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
+  return tables;
 }
 const authority = state => { if (!state.write_token) fail('SYNC_RECORD_AUTHORITY_REQUIRED'); };
 const b64 = array => btoa(String.fromCharCode(...array)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
@@ -200,7 +202,7 @@ export async function recordMutation(request,env,userId) {
   env={...env,DB:await activeAccountDB(env.DB,userId)};
   try {
     const p=await boundedBody(request); inspect(p); if(bytes(JSON.stringify(p))>LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413); const {touched,order}=validateEnvelope(p); const requestHash=await digest(p);
-    await ready(env); const db=mutationDB(env.DB);
+    requireDataFeatureSchema(await ready(env)); const db=mutationDB(env.DB);
     const state=await readRecordState(db,userId,p.mutationId); authority(state);
     const receipt=state.request_hash ? state : null;
     if (receipt && receipt.expires_at > new Date().toISOString()) { if (receipt.request_hash !== requestHash) fail('SYNC_MUTATION_ID_CONFLICT'); if(receipt.base_revision!==p.baseRevision || receipt.committed_revision!==p.baseRevision+1) fail('SYNC_STORAGE_UNAVAILABLE',503); return json(JSON.parse(receipt.outcome_json)); }
@@ -210,11 +212,17 @@ export async function recordMutation(request,env,userId) {
     const previous=assembleRecordData(oldRows);
     if(previous.schemaVersion===9)fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     // Schema 5 cannot edit an account containing any mobile-only root, even if that root is untouched.
-    const maxima=(await db.prepare(`SELECT kind,MAX(ordinal) AS maximum,COUNT(*) AS count,MAX(CASE WHEN tombstone=0 AND ((kind='session' AND COALESCE(json_extract(address_json,'$.container'),'absent')<>'array') OR (kind='program' AND COALESCE(json_extract(payload_json,'$.schemaVersion'),'absent')<>'1.0')) THEN 1 ELSE 0 END) AS pwa_incompatible FROM sync_records WHERE user_id=? GROUP BY kind`).bind(userId).all()).results;
+    const maxima=(await db.prepare(`SELECT kind,MAX(ordinal) AS maximum,COUNT(*) AS count,MAX(CASE WHEN tombstone=0 AND ((kind='session' AND COALESCE(json_extract(address_json,'$.container'),'absent')<>'array') OR (kind='program' AND COALESCE(json_extract(payload_json,'$.schemaVersion'),'absent')<>'1.0')) THEN 1 ELSE 0 END) AS pwa_incompatible,MAX(CASE WHEN tombstone=0 AND ${dataLevelPredicate()} THEN 1 ELSE 0 END) AS data_level FROM sync_records WHERE user_id=? GROUP BY kind`).bind(userId).all()).results;
+    // H1: an old client may not edit any root of an account holding Build 47 data, even an untouched one.
+    const clientLevel=clientDataLevel(request),storedLevel=await storedDataLevel(db,userId);
+    const accountLevel=Math.max(storedLevel,rowsDataLevel(oldRows),...maxima.map(row=>Number(row.data_level)||0));
+    assertClientMayWrite(clientLevel,accountLevel);
     if (p.clientSchemaVersion===5 && (previous.schemaVersion!==5 || maxima.some(row=>row.pwa_incompatible) || touched.some(item=>item.kind==='measurement'))) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     const submitted={schemaVersion:p.clientSchemaVersion,...p.metadata};
     for (const field of new Set(touched.map(item=>item.field))) submitted[field]=p.upserts?.[field] || [];
-    const nextData=compatible(previous,submitted); const nextRecords=splitData(nextData);
+    const nextData=compatible(previous,submitted,clientLevel); const nextRecords=splitData(nextData);
+    const submittedLevel=rowsDataLevel(nextRecords); assertClientMayWrite(clientLevel,accountLevel,submittedLevel);
+    const raiseLevel=storedLevel<Math.max(accountLevel,submittedLevel);
     const old=new Map(oldRows.map(item=>[identity(item),item]));
     const max=new Map(maxima.map(item=>[item.kind,item.maximum]));
     const version=p.baseRevision+1,token=crypto.randomUUID(),now=new Date().toISOString(),expires=new Date(Date.now()+TRANSPORT_LIMITS.receiptTTL).toISOString();
@@ -242,8 +250,9 @@ export async function recordMutation(request,env,userId) {
       if(bytes(JSON.stringify(persisted))+256>LIMITS.rowBytes)fail('SYNC_RECORD_TOO_LARGE',413);
     }
     const chunks=recordChunks(changes);
-    // F<=10: auth/schema/receipt/state/bounds/touched/maxima/optional anchors/outcome. CAS+receipt add 2.
-    const fixed=order.length ? 8 : 6;
+    // F<=11: auth/schema/receipt/state/bounds/touched/maxima/data level/optional anchors/outcome. CAS+receipt add 2,
+    // an optional data-level raise one more.
+    const fixed=(order.length ? 9 : 7)+(raiseLevel ? 1 : 0);
     if (fixed+2+chunks.length+order.length > TRANSPORT_LIMITS.mutationQueries) fail(order.length ? 'SYNC_ORDER_LIMIT' : 'SYNC_QUERY_LIMIT',413);
     const planHash=await digest({changes,order});
     const touchedRoots=JSON.stringify([...touched.map(item=>({kind:item.kind,key:item.key})),...order.map(c=>({kind:c.kind,key:idKey(c.key)}))]);
@@ -258,7 +267,7 @@ export async function recordMutation(request,env,userId) {
       SELECT ?,?,?,?,?,?,?,?,? WHERE ${RECORD_WRITE_GATE_SQL}
       ON CONFLICT(user_id,mutation_id) DO UPDATE SET request_hash=excluded.request_hash,plan_hash=excluded.plan_hash,base_revision=excluded.base_revision,committed_revision=excluded.committed_revision,outcome_json=excluded.outcome_json,created_at=excluded.created_at,expires_at=excluded.expires_at WHERE sync_mutation_receipts.expires_at<=excluded.created_at`)
       .bind(userId,p.mutationId,requestHash,planHash,p.baseRevision,version,outcomeJSON,now,expires,userId,version,token);
-    const result=await db.batch([cas,...chunks.map(chunk=>db.prepare(chunkSQL).bind(userId,chunk,userId,version,token)),...order.map(c=>orderStatement(db,userId,version,token,c)),receiptInsert]);
+    const result=await db.batch([cas,...chunks.map(chunk=>db.prepare(chunkSQL).bind(userId,chunk,userId,version,token)),...order.map(c=>orderStatement(db,userId,version,token,c)),receiptInsert,...(raiseLevel?[raiseDataLevelStatement(db,userId,version,token,now,true)]:[])]);
     const outcome=await db.prepare(`SELECT m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision FROM sync_mutation_receipts m JOIN users u ON u.id=m.user_id JOIN sync_account_state s ON s.user_id=m.user_id WHERE m.user_id=? AND m.mutation_id=? AND u.deleted_at IS NULL AND s.write_status='ACTIVE' AND s.storage_schema_version=1`).bind(userId,p.mutationId).first();
     if(result[0]?.meta?.changes!==1) {
       if(outcome && outcome.expires_at>new Date().toISOString()) { if(outcome.request_hash!==requestHash) fail('SYNC_MUTATION_ID_CONFLICT'); if(outcome.base_revision!==p.baseRevision || outcome.committed_revision!==version) fail('SYNC_STORAGE_UNAVAILABLE',503); return json(JSON.parse(outcome.outcome_json)); }

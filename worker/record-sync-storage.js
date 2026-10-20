@@ -1,5 +1,6 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import {WIRE_RULES} from './personal-backup-contract.js';
+import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement } from './data-feature-guard.js';
 // The wire AppData remains raw JSON. This adapter owns storage, not client normalization/export projection.
 // Preserve validated raw scalar signs without changing A's canonical request/receipt hashes.
 export function storageJSON(value) {
@@ -20,7 +21,7 @@ const rejection = cause => response({ code: cause.code || 'SYNC_STORAGE_UNAVAILA
 const identity = (kind, key) => JSON.stringify([kind, key]);
 
 export const STORAGE_STATE_SQL='SELECT storage_schema_version FROM sync_account_state WHERE user_id = ?';
-export const STORAGE_TABLE_NAMES="'personal_restore_record_target','personal_restore_journal_target','sync_account_state','sync_records','sync_mutation_receipts','personal_restore_operations','personal_restore_roots','personal_restore_records','personal_restore_chunks','personal_restore_identity_journal'";
+export const STORAGE_TABLE_NAMES="'personal_restore_record_target','personal_restore_journal_target','sync_account_state','sync_records','sync_mutation_receipts','personal_restore_operations','personal_restore_roots','personal_restore_records','personal_restore_chunks','personal_restore_identity_journal','sync_account_data_features'";
 export async function storageTables(db) {
   const tables=(await db.prepare(`SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') AND name IN (${STORAGE_TABLE_NAMES})`).all()).results || [];
   if(personalRestoreSchemaStatus(tables)==='unsupported')fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);return tables;
@@ -257,6 +258,18 @@ const mobileSessionShape = { ...scalarFields('id programId dayId workoutDayId ti
 const pwaSetShape = scalarFields('id sessionId exerciseId exerciseName setNumber setType weight reps rir completedAt updatedAt');
 const pwaSessionShape = { ...scalarFields('id programId workoutDayId startedAt completedAt status'), completedActivities: [true], summary: scalarFields('totalSets completedSets'), sets: [pwaSetShape] };
 const measurementShape = scalarFields('id recordedAt weightKg waistCm bodyFatPercent');
+// Build 47 (data level 1) shapes: only a client that declares level 1 may delete/clear these known fields. Old clients
+// keep the frozen shapes above and are refused earlier by the account data-feature guard anyway.
+const OMITTABLE = Symbol('omittable');
+const catalogLinkShape = { ...scalarFields('originalExerciseId originalDisplayName originalCustomExerciseName catalogId catalogName'), changes: [scalarFields('sessionId groupKey storageKey hadCanonicalExerciseId beforeCanonicalExerciseId hadExerciseName beforeExerciseName')], [OMITTABLE]: true };
+const exerciseShape47 = { ...exerciseShape, catalogLink: catalogLinkShape };
+const programShape47 = { ...programShape, days: [{ ...programShape.days[0], sections: [{ ...programShape.days[0].sections[0], items: [exerciseShape47] }] }] };
+const measurementShape47 = { ...measurementShape, ...scalarFields('shoulderCm chestCm neckCm hipCm basenCm bicepsLeftCm bicepsRightCm forearmLeftCm forearmRightCm thighLeftCm thighRightCm calfLeftCm calfRightCm'),
+  extraCm: [scalarFields('id label cm')], profileAtRecord: scalarFields('heightCm gender birthYear'),
+  derived: scalarFields('version bmi waistToHeight waistToHip navyBodyFatPercent bodyFatBasis fatMassKg leanMassKg ffmi estimatedRestingKcal') };
+// Reactivating an archived gym removes archivedAt; nothing else of a gym may disappear.
+const gymShape47 = { ...scalarFields('id name note googlePlaceId'), archivedAt: Object.assign(Object.create(null), { [OMITTABLE]: true }) };
+const shapes = level => level >= 1 ? { program: programShape47, measurement: measurementShape47, gym: gymShape47 } : { program: programShape, measurement: measurementShape, gym: scalarFields('id name note') };
 // Actual preview producers: Worker responseSchema, local parser/PWA resolution, mobile ImportPreview and
 // document-extractor. All nested branches are closed coverage; unknown/any payloads cannot authorize discard.
 const sourceReferenceShape = scalarFields('page sheet cellRange text');
@@ -295,7 +308,7 @@ function allowedOmission(previous,next,key,coverage,context) {
 }
 function knownShape(value, shape) {
   if (value === null) return true;
-  if (shape === true) return typeof value !== 'object';
+  if (shape === true || (shape && shape[OMITTABLE] && Object.keys(shape).length === 0)) return typeof value !== 'object';
   if (Array.isArray(shape)) return Array.isArray(value) && value.every(item => knownShape(item,shape[0]));
   if (!object(value) || !shape) return false;
   return Object.entries(value).every(([key,item]) => own(shape,key) ? knownShape(item,shape[key]) : own(shape,'*') && knownShape(item,shape['*']));
@@ -303,12 +316,17 @@ function knownShape(value, shape) {
 // Unknown nested fields cannot disappear from a surviving object. Known schema 8 permits collection deletion,
 // but does not prove future opaque extensions are disposable. Conservative loss rejection keeps those values safe.
 function noFieldLoss(previous, next, clearCoverage = null, context = null) {
-  const knownNullable = [mobileDraftShape,pwaDraftShape,programShape,timerShape].includes(clearCoverage);
+  const knownNullable = [mobileDraftShape,pwaDraftShape,programShape,programShape47,timerShape].includes(clearCoverage);
   if (next === null && previous !== null && knownNullable && knownShape(previous,clearCoverage)) return;
   if (object(previous)) {
     if (!object(next)) fail('SYNC_SCHEMA_LOSS_RISK');
     for (const [key,value] of Object.entries(previous)) {
-      if (!own(next,key)) { if (allowedOmission(previous,next,key,clearCoverage,context)) continue; fail('SYNC_SCHEMA_LOSS_RISK'); }
+      if (!own(next,key)) {
+        if (allowedOmission(previous,next,key,clearCoverage,context)) continue;
+        const coverage = clearCoverage && !Array.isArray(clearCoverage) && typeof clearCoverage === 'object' ? clearCoverage[key] : null;
+        if (coverage && coverage[OMITTABLE] && knownShape(value,coverage)) continue;
+        fail('SYNC_SCHEMA_LOSS_RISK');
+      }
       noFieldLoss(value,next[key],clearCoverage && (clearCoverage[key] || clearCoverage['*']),context && { ...context,path:[...context.path,key] });
     }
   } else if (Array.isArray(previous) && Array.isArray(next)) {
@@ -327,8 +345,9 @@ function noFieldLoss(previous, next, clearCoverage = null, context = null) {
     }
   } else if (previous && typeof previous === 'object' && previous !== next) fail('SYNC_SCHEMA_LOSS_RISK');
 }
-export function compatible(previous, submitted) {
+export function compatible(previous, submitted, dataLevel = 0) {
   if (!previous) return submitted;
+  const shape = shapes(dataLevel);
   // Preserve omitted top-level fields, including measurements absent from PWA. Explicit null is still presence.
   const next = Object.keys(previous).every(key => own(submitted,key)) ? Object.fromEntries(Object.entries(submitted)) : Object.fromEntries(Object.keys(previous).map(key => [key, own(submitted,key) ? submitted[key] : previous[key]]));
   for (const [key,value] of Object.entries(submitted)) if (!own(next,key)) Object.defineProperty(next,key,{value,enumerable:true,writable:true,configurable:true});
@@ -346,7 +365,7 @@ export function compatible(previous, submitted) {
     const map = new Map(after.map(item => [item?.id,item]));
     for (const item of before) {
       if (!map.has(item.id)) {
-        const coverage = field === 'programs' ? programShape : field === 'measurements' ? measurementShape : schemaVersion === 8 ? mobileSessionShape : pwaSessionShape;
+        const coverage = field === 'programs' ? shape.program : field === 'measurements' ? shape.measurement : schemaVersion === 8 ? mobileSessionShape : pwaSessionShape;
         if (!knownShape(item,coverage)) fail(schemaVersion === 5 ? 'SYNC_CLIENT_UPGRADE_REQUIRED' : 'SYNC_SCHEMA_LOSS_RISK');
         continue;
       }
@@ -367,11 +386,11 @@ export function compatible(previous, submitted) {
             else if (!knownShape(value,setShape)) fail('SYNC_SCHEMA_LOSS_RISK');
           }
         }
-      } else noFieldLoss(item,successor,field === 'programs' ? programShape : null);
+      } else noFieldLoss(item,successor,field === 'programs' ? shape.program : field === 'measurements' && dataLevel >= 1 ? shape.measurement : null);
     }
   }
   for (const field of Object.keys(next)) if (!collections[field] && own(previous,field)) {
-    const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? mobileDraftShape : pwaDraftShape) : field === 'programBuilderDraft' ? programShape : field === 'settings' ? { gyms: [scalarFields('id name note')] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
+    const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? mobileDraftShape : pwaDraftShape) : field === 'programBuilderDraft' ? shape.program : field === 'settings' ? { gyms: [shape.gym] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
     noFieldLoss(previous[field],next[field],clearCoverage,{schemaVersion,path:[field]});
   }
   return next;
@@ -397,14 +416,22 @@ export async function recordPush(request, env, userId) {
     if (!Number.isSafeInteger(payload.syncVersion) || payload.syncVersion < 0 || payload.syncVersion === Number.MAX_SAFE_INTEGER) fail('SYNC_VERSION_INVALID',400);
     inspect(payload.data);
     if (size(JSON.stringify(payload.data)) > LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413);
-    const readiness = await storageSchema(env.DB);
+    const tables = await storageTables(env.DB); const readiness = recordSchemaStatus(tables);
     if (readiness !== 'ready') fail(readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
+    requireDataFeatureSchema(tables);
     const previous = await readRecordSnapshot(env.DB,userId,readiness);
     if (previous.syncVersion !== payload.syncVersion) fail('SYNC_CONFLICT');
-    const data = compatible(previous.data,payload.data);
+    const oldRows = previous.state ? previous.rows : (previous.data ? splitData(previous.data).map(item => ({ ...item, created_revision: payload.syncVersion, modified_revision: payload.syncVersion, tombstone: 0, deleted_revision: null })) : []);
+    // H1: the account level is the stored marker or Build 47 data already present; checked before field-loss rules
+    // so an old client gets the explicit upgrade code. The raise below shares the CAS batch (race-free, monotonic).
+    const clientLevel = clientDataLevel(request), storedLevel = await storedDataLevel(env.DB,userId);
+    const accountLevel = Math.max(storedLevel, rowsDataLevel(oldRows));
+    assertClientMayWrite(clientLevel, accountLevel);
+    const data = compatible(previous.data,payload.data,clientLevel);
     if (size(JSON.stringify(data)) > LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413);
     const records = splitData(data);
-    const oldRows = previous.state ? previous.rows : (previous.data ? splitData(previous.data).map(item => ({ ...item, created_revision: payload.syncVersion, modified_revision: payload.syncVersion, tombstone: 0, deleted_revision: null })) : []);
+    const submittedLevel = rowsDataLevel(records);
+    assertClientMayWrite(clientLevel, accountLevel, submittedLevel);
     const old = new Map(oldRows.map(row => [identity(row.kind,row.record_key),row]));
     const next = new Map(records.map(row => [identity(row.kind,row.record_key),row]));
     const version = payload.syncVersion + 1; const token = crypto.randomUUID(); const now = new Date().toISOString();
@@ -417,8 +444,10 @@ export async function recordPush(request, env, userId) {
     }
     for (const before of oldRows) if (!before.tombstone && !next.has(identity(before.kind,before.record_key))) changes.push({ ...before, modified_revision: version, tombstone: 1, deleted_revision: version });
     const encodedChunks = recordChunks(changes);
-    // Invocation budget: auth (1), schema (1), consistent pre-read (1), CAS (1), changes N, outcome read (1).
-    if (encodedChunks.length + 5 > LIMITS.queries) fail('SYNC_QUERY_LIMIT',413);
+    // Invocation budget: auth (1), schema (1), consistent pre-read (1), data level read (1), CAS (1), changes N,
+    // optional level raise (1), outcome read (1).
+    const raiseLevel = storedLevel < Math.max(accountLevel, submittedLevel);
+    if (encodedChunks.length + 6 + (raiseLevel ? 1 : 0) > LIMITS.queries) fail('SYNC_QUERY_LIMIT',413);
     const db = env.DB;
     const cas = previous.state
       ? db.prepare(`UPDATE sync_account_state SET revision = ?, write_token = ?, updated_at = ? WHERE user_id = ? AND revision = ? AND storage_schema_version = 1 AND write_status = 'ACTIVE' AND EXISTS (SELECT 1 FROM users WHERE id = sync_account_state.user_id AND deleted_at IS NULL)`).bind(version,token,now,userId,payload.syncVersion)
@@ -434,7 +463,8 @@ export async function recordPush(request, env, userId) {
         FROM json_each(?) WHERE ${RECORD_WRITE_GATE_SQL}
         ON CONFLICT(user_id,kind,record_key) DO UPDATE SET parent_key = excluded.parent_key, ordinal = excluded.ordinal, address_json = excluded.address_json,
           payload_json = excluded.payload_json, modified_revision = excluded.modified_revision, tombstone = excluded.tombstone, deleted_revision = excluded.deleted_revision
-        WHERE sync_records.tombstone = 0`).bind(userId,chunk,userId,version,token))];
+        WHERE sync_records.tombstone = 0`).bind(userId,chunk,userId,version,token)),
+      ...(raiseLevel ? [raiseDataLevelStatement(db,userId,version,token,now,true)] : [])];
     const results = await db.batch(statements);
     if (results[0]?.meta?.changes !== 1) {
       const latest = await db.prepare(`SELECT s.revision, s.write_status, u.deleted_at FROM users u LEFT JOIN sync_account_state s ON s.user_id = u.id WHERE u.id = ?`).bind(userId).first();

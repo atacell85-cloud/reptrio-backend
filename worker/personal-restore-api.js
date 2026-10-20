@@ -1,5 +1,6 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import { validatePortableRootV2, V2_SETTINGS_FIELDS } from './personal-backup-v2-contract.js';
+import { clientDataLevel, requireDataFeatureSchema, accountDataLevel, assertClientMayWrite, raiseDataLevelStatement } from './data-feature-guard.js';
 import {storageTables,recordSchemaStatus,personalRestoreSchemaStatus,readRecordState,splitData,storageJSON,assembleRecordData,compatible,compatibleStorageRow,recordChunks,inspect,RECORD_WRITE_GATE_SQL} from './record-sync-storage.js';
 import {portableBody,portableHash,byteHash,WIRE_RULES,canonicalPortable,portableBytes,portableFail as fail,object,own,exactFields,validatePortableRoot,parsePortable} from './personal-backup-contract.js';
 export const RESTORE_LIMITS=Object.freeze({ttl:3_600_000,pageRows:256,pageBytes:1_800_000,pages:8,queries:50,roots:128,chunks:10000});
@@ -13,7 +14,7 @@ const countKeys=Object.keys(zero());
 const now=()=>new Date().toISOString();
 const statementGate=`EXISTS(SELECT 1 FROM personal_restore_operations o JOIN users u ON u.id=o.user_id LEFT JOIN sync_account_state active ON active.user_id=u.id WHERE o.user_id=? AND o.operation_id=? AND o.generation_version=? AND o.state=? AND o.expires_at>? AND u.deleted_at IS NULL AND(active.write_status IS NULL OR active.write_status='ACTIVE'))`;
 function boundedDB(db){let queries=1;const check=(sql,values)=>{if(++queries>50||portableBytes(sql)>100000||values.length>100||values.some(v=>typeof v==='string'&&portableBytes(v)>1800000))fail('LIMIT',413);};return {accountLifecycleGuarded:db.accountLifecycleGuarded,accountLifecycleUserId:db.accountLifecycleUserId,prepare(sql){return {bind(...values){check(sql,values);return db.prepare(sql).bind(...values);},first(){check(sql,[]);return db.prepare(sql).first();},all(){check(sql,[]);return db.prepare(sql).all();}};},batch:values=>db.batch(values)};}
-async function ready(env,db){if(env.PERSONAL_RESTORE_ENABLED==='false')fail('DISABLED',503);const tables=await storageTables(db);if(recordSchemaStatus(tables)!=='ready'||personalRestoreSchemaStatus(tables)!=='ready')fail('MIGRATION_REQUIRED',503);}
+async function ready(env,db){if(env.PERSONAL_RESTORE_ENABLED==='false')fail('DISABLED',503);const tables=await storageTables(db);if(recordSchemaStatus(tables)!=='ready'||personalRestoreSchemaStatus(tables)!=='ready')fail('MIGRATION_REQUIRED',503);requireDataFeatureSchema(tables);}
 async function operation(db,userId,id,purpose){const row=await db.prepare('SELECT * FROM personal_restore_operations WHERE user_id=? AND operation_id=? AND purpose=?').bind(userId,id,purpose).first();if(!row)fail('OPERATION_NOT_FOUND',404);return row;}
 function live(op){if(op.expires_at<=now())fail('EXPIRED');}
 function binding(op,p){if(p.localBinding!==op.local_binding)fail('LOCAL_BINDING_CHANGED');}
@@ -24,6 +25,10 @@ export async function personalRestoreRequest(request,env,userId,purpose,id,actio
  try{
   const db=boundedDB(env.DB);await ready(env,db);const state=await readRecordState(db,userId);
   if(action==='receipt'){const op=await operation(db,userId,id,purpose);if(!op.outcome_json)fail('RECEIPT_NOT_READY');return json(JSON.parse(op.outcome_json));}
+  // H1: an old client cannot start, publish or undo into an account that holds Build 47 data (chunks/finalize/preview
+  // only touch its own staging rows and stay within their query budget). Every publishing batch below raises the level
+  // in the same CAS, so a raise between this check and an old client's commit invalidates that client's pin.
+  if(['start','commit','undo'].includes(action)&&clientDataLevel(request)<1)assertClientMayWrite(0,await accountDataLevel(db,userId));
   const p=await portableBody(request);
   if(action==='start')return json(await start(db,userId,purpose,state,p));
   const op=await operation(db,userId,id,purpose);
@@ -427,6 +432,7 @@ async function commit(db,userId,op,state,p){
  const journal=db.prepare(`INSERT INTO personal_restore_identity_journal(user_id,source_namespace,kind,source_tuple,target_kind,target_key,target_path,operation_id,import_hash,address_hash,container_json,target_ordinal,added_revision,disposition,state) SELECT r.user_id,?,CASE WHEN r.root_id=-4 THEN 'metadataMarker' ELSE r.kind END,r.source_tuple,COALESCE(r.publish_kind,CASE WHEN r.kind='metadataPath' THEN 'metadata' ELSE 'program' END),r.record_key,CASE WHEN r.kind='metadataPath' OR r.publish_kind IS NULL THEN r.address_json ELSE '[]' END,?,r.portable_hash,r.address_hash,r.container_json,COALESCE(s.ordinal,r.target_ordinal,0),?,CASE WHEN r.classification='NEW' THEN 'ADDED' ELSE 'SAME_EXISTING' END,'LIVE' FROM personal_restore_records r LEFT JOIN sync_records s ON s.user_id=r.user_id AND s.kind=COALESCE(r.publish_kind,CASE WHEN r.kind='metadataPath' THEN 'metadata' ELSE 'program' END) AND s.record_key=r.record_key WHERE r.user_id=? AND r.operation_id=? AND(r.root_id>=0 OR r.root_id=-4) AND r.selected=1 AND r.classification IN('NEW','SAME') AND ${publicationGate} ON CONFLICT(user_id,source_namespace,kind,source_tuple)DO NOTHING`).bind(op.source_namespace,op.operation_id,version,userId,op.operation_id,...guard);
  const receipt=db.prepare(`UPDATE personal_restore_operations SET outcome_json=?,progress_json=NULL WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(encoded,userId,op.operation_id,...guard);
  const statements=[cas,ownOperation,publish,journal,receipt];for(const table of ['personal_restore_records','personal_restore_roots','personal_restore_chunks'])statements.push(db.prepare(`DELETE FROM ${table} WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(userId,op.operation_id,...guard));
+ statements.push(raiseDataLevelStatement(db,userId,version,token,stamp));
  const result=await db.batch(statements);
  const stored=await operation(db,userId,op.operation_id,op.purpose);
  if(result[0].meta.changes!==1||result[1].meta.changes!==1){if(stored.state==='COMMITTED'&&stored.preview_hash===p.previewDigest&&stored.outcome_json)return JSON.parse(stored.outcome_json);fail('REVISION_CHANGED');}
@@ -545,6 +551,7 @@ async function undo(db,userId,op,state,p){
  const ledger=db.prepare(`UPDATE personal_restore_identity_journal SET state='UNDONE' WHERE user_id=? AND operation_id=? AND disposition='ADDED' AND state='LIVE' AND ${publicationGate}`).bind(userId,op.operation_id,...guard);
  const receipt=db.prepare(`UPDATE personal_restore_operations SET outcome_json=?,progress_json=NULL WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(encoded,userId,op.operation_id,...guard);
  const statements=[cas,owner,reverse,metadata,ledger,receipt];for(const table of ['personal_restore_records','personal_restore_roots','personal_restore_chunks'])statements.push(db.prepare(`DELETE FROM ${table} WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(userId,op.operation_id,...guard));
+ statements.push(raiseDataLevelStatement(db,userId,version,token,stamp));
  const result=await db.batch(statements),stored=await operation(db,userId,op.operation_id,op.purpose);
  if(result[0].meta.changes!==1||result[1].meta.changes!==1){if(stored.state==='UNDONE'&&stored.confirm_hash===p.undoDigest&&stored.outcome_json)return JSON.parse(stored.outcome_json);fail('REVISION_CHANGED');}
  if(!stored.outcome_json)fail('RECEIPT_NOT_READY',503);return JSON.parse(stored.outcome_json);
@@ -604,6 +611,7 @@ async function commitSync(db,userId,op,state,p){
  const absent=db.prepare(`UPDATE sync_records AS s SET tombstone=1,deleted_revision=?,modified_revision=? WHERE s.user_id=? AND s.tombstone=0 AND s.kind IN('session','program','measurement','set') AND EXISTS(SELECT 1 FROM personal_restore_records r WHERE r.user_id=s.user_id AND r.operation_id=? AND r.root_id>=0 AND(r.publish_kind=CASE WHEN s.kind='set'THEN 'session' ELSE s.kind END OR(r.publish_kind='metadata' AND json_extract(r.address_json,'$.collection')=1 AND json_extract(r.address_json,'$.field')=CASE s.kind WHEN 'session'THEN 'sessions' WHEN 'set'THEN 'sessions' WHEN 'program'THEN 'programs' WHEN 'measurement'THEN 'measurements' END))) AND NOT EXISTS(SELECT 1 FROM personal_restore_records n INDEXED BY personal_restore_record_target WHERE n.user_id=s.user_id AND n.operation_id=? AND n.root_id>=0 AND n.publish_kind=s.kind AND n.record_key=s.record_key) AND ${publicationGate}`).bind(version,version,userId,op.operation_id,op.operation_id,...guard);
  const receipt=db.prepare(`UPDATE personal_restore_operations SET outcome_json=?,progress_json=NULL WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(encoded,userId,op.operation_id,...guard);
  const statements=[cas,owner,publish,absent,receipt];for(const table of ['personal_restore_records','personal_restore_roots','personal_restore_chunks'])statements.push(db.prepare(`DELETE FROM ${table} WHERE user_id=? AND operation_id=? AND ${publicationGate}`).bind(userId,op.operation_id,...guard));
+ statements.push(raiseDataLevelStatement(db,userId,version,token,stamp));
  const results=await db.batch(statements),stored=await operation(db,userId,op.operation_id,'SYNC');if(results[0].meta.changes!==1||results[1].meta.changes!==1){if(stored.state==='COMMITTED'&&stored.preview_hash===p.confirmationDigest&&stored.outcome_json)return JSON.parse(stored.outcome_json);fail('REVISION_CHANGED');}if(!stored.outcome_json)fail('RECEIPT_NOT_READY',503);return JSON.parse(stored.outcome_json);
 }
 async function clearSynthetic(db,userId,op){
