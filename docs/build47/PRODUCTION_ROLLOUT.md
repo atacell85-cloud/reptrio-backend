@@ -63,9 +63,12 @@ ayrı, açık onayı olmadan yapılmaz. Google Places anahtarı/billing ayrı bi
 ## Bilinen istemci geçiş durumları
 
 - Build 46 cihazı, hesap Build 47 verisi kazandıktan sonra yazamaz (`SYNC_CLIENT_UPGRADE_REQUIRED`); değişiklikleri cihazda bekler.
-  Cihaz Build 47'ye güncellenince ilk push `SYNC_SCHEMA_LOSS_RISK` alır; Build 47 bu durumda bir kez sunucudan çeker, yalnız
-  eşleşen kayıtların eksik anahtarlarını sunucudan geri koyar (silinenleri diriltmez, Undo'yu geri almaz), birleştirir ve
-  tekrar dener (mobil `restoreFieldsDroppedByOlderClient`, Guardian tur 2 F2; uçtan uca testte doğrulandı).
+  Cihaz Build 47'ye güncellenince ilk push `SYNC_SCHEMA_LOSS_RISK` alır; Build 47 bu durumda bir kez sunucudan çeker ve yalnız
+  Build 46'nın düşürdüğü anahtarları (salon `googlePlaceId`/`archivedAt`, tarihli ölçüm alanları; journal Build 46'da korunur)
+  hâlâ yerelde bulunan kayıtlara geri koyar — birleştirme (union) yapmaz, bu yüzden yerelde silinenler silinmiş kalır; Undo
+  geri alınmaz; geri yüklenen anahtarlar `syncMetadata.lastLossRecovery`'de kaydedilir; tek deneme (mobil
+  `restoreFieldsDroppedByOlderClient`, Guardian tur 2 F2 / tur 3 R3-1..3; uçtan uca testte doğrulandı). Sunucu bu arada
+  ilerlediyse yeniden deneme `SYNC_CONFLICT` alır ve mevcut çakışma yolu işler.
 - Staged-sync (SYNC) yolu artık istemci seviyesini `finalize`'a iletir (F4). Mobil bu yolu kullanmıyor.
 - Önceden var olan, Build 47 dışı: schema 8 taslağından set satırı silme her seviyede reddedilir (uygulamada böyle bir akış yok);
   8 komutlu kayıt sıralama mutation'ı workerd/Node 26 SQLite'ında `nested too deep` (hiçbir istemci kullanmıyor);
