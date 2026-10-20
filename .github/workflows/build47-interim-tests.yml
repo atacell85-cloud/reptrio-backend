@@ -1,9 +1,6 @@
 name: Build 47 Backend Interim Tests
 
 on:
-  push:
-    branches:
-      - build47/gyms-google-places
   workflow_dispatch:
 
 permissions:
