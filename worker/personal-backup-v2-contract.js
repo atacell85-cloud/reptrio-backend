@@ -38,6 +38,56 @@ function validateCatalogLink(v) {
   if(seen.has(key))fail('DUPLICATE_ID');seen.add(key);
  }
 }
+// V2-only extensions. Validate each modern field before temporarily removing it
+// for the frozen V1 validator; never modify the V1 machine rules.
+const optionalBodyFields=['shoulderCm','chestCm','neckCm','hipCm','basenCm','bicepsLeftCm','bicepsRightCm',
+'forearmLeftCm','forearmRightCm','thighLeftCm','thighRightCm','calfLeftCm','calfRightCm'];
+const metrics=['version','bmi','waistToHeight','waistToHip','navyBodyFatPercent','bodyFatBasis',
+'fatMassKg','leanMassKg','ffmi','estimatedRestingKcal'];
+const numberOrNull=v=>v===null||typeof v==='number'&&Number.isFinite(v);
+const stringOrNull=v=>v===null||typeof v==='string';
+function extractMeasurement(v){
+ const ext={};
+ for(const k of optionalBodyFields)if(own(v,k)){
+  if(!numberOrNull(v[k]))fail('TYPE_MISMATCH');
+  ext[k]=v[k];
+ }
+ if(own(v,'extraCm')){
+  if(!Array.isArray(v.extraCm))fail('TYPE_MISMATCH');
+  for(const e of v.extraCm){exact(e,['id','label','cm']);
+   if(typeof e.id!=='string'||typeof e.label!=='string'||typeof e.cm!=='number'||!Number.isFinite(e.cm))fail('TYPE_MISMATCH');
+  }ext.extraCm=v.extraCm;
+ }
+ if(own(v,'profileAtRecord')){
+  const p=v.profileAtRecord;exact(p,['heightCm','gender','birthYear']);
+  if(!numberOrNull(p.heightCm)||!stringOrNull(p.gender)||!numberOrNull(p.birthYear))fail('TYPE_MISMATCH');
+  ext.profileAtRecord=p;
+ }
+ if(own(v,'derived')){
+  const d=v.derived;exact(d,metrics);
+  if(metrics.some(k=>!(k==='bodyFatBasis'?stringOrNull(d[k]):numberOrNull(d[k]))))fail('TYPE_MISMATCH');
+  ext.derived=d;
+ }
+ return ext;
+}
+function extractGyms(gyms){
+ if(gyms===undefined)return {stripped:undefined,extras:[]};
+ if(!Array.isArray(gyms))fail('TYPE_MISMATCH');
+ const extras=[];
+ const stripped=gyms.map((g,i)=>{
+  if(!object(g))fail('TYPE_MISMATCH');
+  const {googlePlaceId,archivedAt,...legacy}=g,extra={};
+  if(own(g,'googlePlaceId')){
+   if(!stringOrNull(googlePlaceId))fail('TYPE_MISMATCH');extra.googlePlaceId=googlePlaceId;
+  }
+  if(own(g,'archivedAt')){
+   if(archivedAt!==null&&(typeof archivedAt!=='string'||!Number.isFinite(Date.parse(archivedAt))))fail('INVALID_TIME');
+   extra.archivedAt=archivedAt;
+  }
+  extras.push({index:i,extra});return legacy;
+ });
+ return {stripped,extras};
+}
 /** V1 validates all remaining domains and unknown fields without widening its frozen dictionary. */
 export function validatePortableRootV2(root){
  // Direct codec consumers receive the same non-executing object boundary as routed JSON callers.
@@ -60,9 +110,30 @@ export function validatePortableRootV2(root){
   for(const {di,si,ei,link} of journals) validated.record.days[di].sections[si].items[ei].catalogLink=link;
   return validated;
  }
- if(root?.kind!=='settings'||!object(root.record?.profile))return validatePortableRoot(root);
- const extension=validateProfileExtensions(root.record.profile),profile={...root.record.profile};for(const k of extensions)delete profile[k];
- const validated=validatePortableRoot({...root,record:{...root.record,profile}});
- Object.assign(validated.record.profile,extension);return validated;
+ if(root?.kind==='measurement'&&object(root.record)){
+  const extra=extractMeasurement(root.record),ordinary={...root.record};
+  for(const k of Object.keys(extra))delete ordinary[k];
+  const result=validatePortableRoot({...root,record:ordinary});
+  Object.assign(result.record,extra);return result;
+ }
+ if(root?.kind!=='settings'||!object(root.record))return validatePortableRoot(root);
+ const ordinary={...root.record},profile=ordinary.profile;
+ const extraProfile=object(profile)?validateProfileExtensions(profile):{};
+ if(object(profile)){
+  ordinary.profile={...profile};
+  for(const k of extensions)delete ordinary.profile[k];
+ }
+ const gymParts=extractGyms(ordinary.gyms);
+ if(ordinary.gyms!==undefined)ordinary.gyms=gymParts.stripped;
+ const result=validatePortableRoot({...root,record:ordinary});
+ if(object(result.record.profile))Object.assign(result.record.profile,extraProfile);
+ for(const {index,extra} of gymParts.extras)Object.assign(result.record.gyms[index],extra);
+ return result;
 }
-export const V2_SETTINGS_FIELDS = {...WIRE_RULES.fields.settings,profile:{fields:{...WIRE_RULES.fields.settings.profile.fields,goal:'string?~',experience:'string?~',weeklyDays:'number?~',gender:'string?~',heightCm:'number?~',birthYear:'number?~',onboarding:{fields:{version:'number',step:'number',startedAt:'date',completedAt:'date~',initialWeight:{fields:{id:'string',recordedAt:'date',weightKg:'number'}}}}}}};
+export const V2_MEASUREMENT_FIELDS = {...WIRE_RULES.fields.measurement,...Object.fromEntries(optionalBodyFields.map(k=>[k,'number?~'])),
+ extraCm:{array:{id:'string',label:'string',cm:'number'}},
+ profileAtRecord:{fields:{heightCm:'number~',gender:'string~',birthYear:'number~'}},
+ derived:{fields:Object.fromEntries(metrics.map(k=>[k,k==='bodyFatBasis'?'string~':'number~']))},
+};
+export const V2_SETTINGS_FIELDS = {...WIRE_RULES.fields.settings,
+ gyms:{array:{...WIRE_RULES.fields.gym,googlePlaceId:'string?~',archivedAt:'date?~'}},profile:{fields:{...WIRE_RULES.fields.settings.profile.fields,goal:'string?~',experience:'string?~',weeklyDays:'number?~',gender:'string?~',heightCm:'number?~',birthYear:'number?~',onboarding:{fields:{version:'number',step:'number',startedAt:'date',completedAt:'date~',initialWeight:{fields:{id:'string',recordedAt:'date',weightKg:'number'}}}}}}};
