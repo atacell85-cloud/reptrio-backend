@@ -1,11 +1,30 @@
-# Build 47 backend — production rollout prosedürü (HAZIR, UYGULANMADI)
+# Build 47 backend — production rollout
 
-**Durum:** `PRODUCTION_APPROVAL_REQUIRED`. Bu belge yalnız prosedürdür. Production D1 migration ve Worker deploy kullanıcının
-ayrı, açık onayı olmadan yapılmaz. Google Places anahtarı/billing ayrı bir harici adımdır ve bu rollout'a dahil değildir.
+**Durum:** `PRODUCTION_DEPLOYED` (kullanıcı onayı: "BUILD 47 — GOOGLE PLACES + PRODUCTION BACKEND + FINAL RELEASE", madde 2).
+Google Places anahtarı/kotası ayrı adım: bkz. "Google Places yapılandırması" (aşağıda).
+
+## Uygulama kaydı (2026-10-21)
+
+| Adım | Sonuç |
+| --- | --- |
+| Hesap | `wrangler whoami` → Atacell85@gmail.com's Account (`d92ece05…8f98`), d1/workers write kapsamı |
+| Önceki aktif sürüm | `72b88bbb-6790-474d-8679-ef4c484315ce` (Build 46, 2026-10-18) — beklenen |
+| Bekleyen migration | yalnız `0016_sync_data_features.sql` |
+| Secret adları | 12 ad, Build 46 ile aynı (değerler okunmadı) |
+| Kaynak | `b6b379b809e096e06b50df783c5cd8af15adb7bd` temiz; Node 22.23.2 `npm test` (21 grup) PASS, `cf:build` PASS (`logs/prod-gate-*.log`). Kod `3ed251d` ile aynı (yalnız bu belge farklı) |
+| Ön sayımlar | users 86, sync_records 326, sync_account_state 1, d1_migrations 16; beklenen backfill 0 hesap; queue `a2-import-jobs` 1 producer / 1 consumer; D1 24 sa write 0 |
+| Time Travel yer imi | `00000261-00000000-0000510b-cb1a6ebe6d6c40f005f46f2be297c10f` (07:30Z öncesi) |
+| Migration | 2026-10-21T07:30:02Z `migrations apply DB --remote` → 0016 ✅ (4 komut). Tablo + `sync_account_data_features_monotonic` trigger var; satır 0; defter 0016 son; users 86 / sync_records 326 değişmedi; tekrar `migrations list` → uygulanacak yok |
+| Deploy | 2026-10-21T07:31:15Z, sürüm **`69cb03a3-85d3-438b-9ef5-f5b1e7f50e39`** (%100), mesaj "Build 47 backend b6b379b…". Routes app/api.reptrio.com, 3 cron, queue producer/consumer, D1, 4 rate limiter (`PLACES_LIMITER` 12/60 s dahil) korunmuş |
+| Salt okunur smoke | `/api/health` 200; `/api/auth/providers` 200; oturumsuz `/api/places/autocomplete` ve `/verify` 401 `AUTH_REQUIRED`; oturumsuz `/api/sync/pull` ve `/push` 401; secret sayısı 12 |
+| Canary | `logs/prod-canary.mjs` (hesap sahibi çalıştırır; izole sentetik hesap, normal silme sözleşmesiyle temizlik). Sonuç: bekliyor |
+
+Geri dönüş notu: Build 46 Worker'ına (`72b88bbb…`) rollback H1 korumasını kaldırır (aşağıda); otomatik yapılmaz.
+Time Travel restore yalnız ayrı kullanıcı onayıyla.
 
 ## Kaynak ve hedef
 
-- Hedef kaynak: `build47/gyms-google-places` dondurulmuş SHA (ikinci Guardian PASS sonrası kaydedilecek; şu an `a239754`).
+- Hedef kaynak: `build47/gyms-google-places` `b6b379b` (Guardian tur 5 PASS).
 - Production şu an: kaynak `370ac431c212171fdee78a78eb70233d3c017593`, Worker `a2-workout` sürüm `72b88bbb-6790-474d-8679-ef4c484315ce`,
   D1 `a2-workout-pilot`, migration defteri 0001–0015 (16 satır), 2026-10-18.
 - Tek Wrangler ortamı (production). Ayrı bir staging Worker/D1 tanımlı değil; açılması Cloudflare'da yeni kaynak oluşturmak demek
