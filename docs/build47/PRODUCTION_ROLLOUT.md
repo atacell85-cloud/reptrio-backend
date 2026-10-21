@@ -67,8 +67,9 @@ ayrı, açık onayı olmadan yapılmaz. Google Places anahtarı/billing ayrı bi
   Build 46'nın düşürdüğü anahtarları (salon `googlePlaceId`/`archivedAt`, tarihli ölçüm alanları; journal Build 46'da korunur)
   hâlâ yerelde bulunan kayıtlara geri koyar — birleştirme (union) yapmaz, bu yüzden yerelde silinenler silinmiş kalır; Undo
   geri alınmaz; geri yüklenen anahtarlar `syncMetadata.lastLossRecovery`'de kaydedilir; tek deneme (mobil
-  `restoreFieldsDroppedByOlderClient`, Guardian tur 2 F2 / tur 3 R3-1..3; uçtan uca testte doğrulandı). Sunucu bu arada
-  ilerlediyse yeniden deneme `SYNC_CONFLICT` alır ve mevcut çakışma yolu işler.
+  `restoreFieldsDroppedByOlderClient`, Guardian tur 2 F2 / tur 3 R3-1..3; uçtan uca testte doğrulandı). Kurtarma yalnız
+  çekilen sürüm reddedilen tabanla aynıysa çalışır (R4-1); sunucu bu arada ilerlediyse hiçbir şey benimsenmez/yazılmaz,
+  eski tabanlı yeniden deneme `SYNC_CONFLICT` alır ve mevcut çakışma birleştirmesi diğer cihazın kayıtlarını korur.
 - Staged-sync (SYNC) yolu artık istemci seviyesini `finalize`'a iletir (F4). Mobil bu yolu kullanmıyor.
 - Önceden var olan, Build 47 dışı: schema 8 taslağından set satırı silme her seviyede reddedilir (uygulamada böyle bir akış yok);
   8 komutlu kayıt sıralama mutation'ı workerd/Node 26 SQLite'ında `nested too deep` (hiçbir istemci kullanmıyor);
