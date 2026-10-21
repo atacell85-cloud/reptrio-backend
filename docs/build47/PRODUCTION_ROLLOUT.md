@@ -1,7 +1,7 @@
 # Build 47 backend — production rollout
 
 **Durum:** `PRODUCTION_DEPLOYED` (kullanıcı onayı: "BUILD 47 — GOOGLE PLACES + PRODUCTION BACKEND + FINAL RELEASE", madde 2).
-Google Places anahtarı/kotası ayrı adım: bkz. "Google Places yapılandırması" (aşağıda).
+Google Places: yapılandırıldı, gerçek autocomplete + verify canary PASS (bkz. "Google Places yapılandırması"). Açık: kalıntı sentetik hesap `16525506…` (ayrı onaylı operatör kapatması).
 
 ## Uygulama kaydı (2026-10-21)
 
@@ -17,7 +17,45 @@ Google Places anahtarı/kotası ayrı adım: bkz. "Google Places yapılandırmas
 | Migration | 2026-10-21T07:30:02Z `migrations apply DB --remote` → 0016 ✅ (4 komut). Tablo + `sync_account_data_features_monotonic` trigger var; satır 0; defter 0016 son; users 86 / sync_records 326 değişmedi; tekrar `migrations list` → uygulanacak yok |
 | Deploy | 2026-10-21T07:31:15Z, sürüm **`69cb03a3-85d3-438b-9ef5-f5b1e7f50e39`** (%100), mesaj "Build 47 backend b6b379b…". Routes app/api.reptrio.com, 3 cron, queue producer/consumer, D1, 4 rate limiter (`PLACES_LIMITER` 12/60 s dahil) korunmuş |
 | Salt okunur smoke | `/api/health` 200; `/api/auth/providers` 200; oturumsuz `/api/places/autocomplete` ve `/verify` 401 `AUTH_REQUIRED`; oturumsuz `/api/sync/pull` ve `/push` 401; secret sayısı 12 |
-| Canary | `logs/prod-canary.mjs` (hesap sahibi çalıştırır; izole sentetik hesap, normal silme sözleşmesiyle temizlik). Sonuç: bekliyor |
+| Places secret | 2026-10-21T19:44:47Z hesap sahibi `wrangler secret put GOOGLE_MAPS_PLACES_API_KEY` (değer sohbete/loglara/Git'e girmedi) → "Secret Change" sürümü **`8db02608-bb72-4920-bd23-9f5294db227c`** (%100, kod `69cb03a3` ile aynı). Secret adları 13 (önceki 12 değişmedi + yeni 1) |
+| Canary | **PASS** — `logs/prod-canary.mjs`, 2026-10-21T19:52:45Z–19:53:49Z, sentetik hesap `81496fae-1d33-4a3e-83e8-74513d5e2fdf` (hesap sahibi çalıştırdı). 15/15 kontrol: register 201; Build 47 push 200; Build 46 biçimli/başlıksız push 409 `SYNC_CLIENT_UPGRADE_REQUIRED` (iki varyant); pull kayıpsız (Place ID + `archivedAt` korunmuş, sürüm değişmedi); Build 47 takip yazımı 200; Places autocomplete "Kadıköy spor salonu" 200 / 3 sonuç / `attribution:'Google Maps'`; aynı session token ile verify 200 `verified:true`; sonuçsuz arama 200 / 0; geçersiz ID 502 `PLACES_UPSTREAM_ERROR` (503 değil); 2 karakter 400 `PLACES_BAD_REQUEST`; silme bağlantısı 202 → doğrulama 200 → `DELETE_NOW` 202 → oturum 401. D1 (salt okunur, 20:0xZ): `users` satırı yok, `sync_records`/`sync_account_state`/`sync_account_data_features`/`auth_sessions` için bu kimlikte 0 satır — cron purge tamamlandı |
+| Kalıntı sentetik hesap | **AÇIK** — ilk (yarıda kalan) canary denemesi `16525506-efe5-4ab5-a214-c88bbbacdb38`, 2026-10-21T19:47:47Z, e-posta `@ornek.com` örnek alan adı (sahibi biz değiliz, doğrulanmamış). `ACTIVE`, 7 sentetik kayıt (5 metadata + `canary-s1/s2`), seviye 1 satırı, 1 oturum; OAuth/import/AI işi yok. Silme bağlantısı o adrese gitti ve 19:57:49Z'de kullanılmadan süresi doldu. Normal yaşam döngüsü (silme bağlantısı / parola sıfırlama) gelen kutusu gerektirir → yapılamaz; üçüncü taraf alan adına tekrar posta gönderilmedi. Belgelenmiş bir operatör kapatma prosedürü yok. Kullanıcı verisi değil; ayrı onaylı operatör kapatması bekliyor (aşağıda) |
+
+### Kalıntı sentetik hesap — önerilen operatör kapatması (UYGULANMADI, ayrı onay gerekir)
+
+`DELETE_NOW` ile aynı durum geçişi; e-posta kanıtı yerine operatör kanıtı. Koşullar yalnız bu sentetik hesabı eşler, gerçek
+hesaba eşleşemez. Sonra normal minute-cron purge (`purgeAccountData`: lease, ledger, bütçe kapıları) satırları siler.
+
+```sql
+UPDATE users SET account_status='PURGING', deletion_requested_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+  purge_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), purge_lease=lower(hex(randomblob(16))), purge_lease_until=NULL,
+  purge_retry_at=NULL, purge_error=NULL
+WHERE id='16525506-efe5-4ab5-a214-c88bbbacdb38' AND account_status='ACTIVE' AND deleted_at IS NULL
+  AND credential_origin='PASSWORD' AND email_verified_at IS NULL AND email LIKE '%@ornek.com'
+  AND created_at='2026-10-21T19:47:47.282Z'
+  AND NOT EXISTS(SELECT 1 FROM oauth_accounts WHERE user_id=users.id)
+  AND NOT EXISTS(SELECT 1 FROM import_jobs WHERE user_id=users.id)
+  AND NOT EXISTS(SELECT 1 FROM account_lifecycle_work WHERE user_id=users.id);
+DELETE FROM auth_sessions WHERE user_id='16525506-efe5-4ab5-a214-c88bbbacdb38'
+  AND EXISTS(SELECT 1 FROM users WHERE id='16525506-efe5-4ab5-a214-c88bbbacdb38' AND account_status='PURGING');
+```
+
+Beklenen: `changes: 1` ve `changes: 1`; 1–2 dakika sonra `SELECT COUNT(*) FROM users WHERE id='16525506-…'` → 0 ve
+`sync_records`/`sync_account_data_features` → 0. `changes: 0` ise dur.
+
+## Google Places yapılandırması (2026-10-21)
+
+| Öğe | Değer |
+| --- | --- |
+| Google Cloud projesi | `reptrio-production` (yeni; mevcut projelerin hiçbiri REPTRIO değildi) |
+| Billing | Mevcut tek aktif hesap `011B80-D8CCB9-A30BC7`; yeni ödeme bilgisi yok |
+| Etkin Maps API | Yalnız Places API (New) |
+| API anahtarı | `reptrio-worker-places-new` (key id `d36659aa-f802-4cb6-a99e-1946f6db1814`); API kısıtlaması yalnız Places API (New); uygulama kısıtlaması yok (Workers çıkış IP'si sabit değil, Website/Android/iOS kısıtlaması sunucu çağrısına uymaz) — telafi: Worker oturum zorunluluğu, `PLACES_LIMITER` 12/60 s/kullanıcı, kotalar. Değer yalnız Cloudflare secret'ı; mobil pakette/Git'te/loglarda yok |
+| Kota (günlük) | Autocomplete 100; GetPlace 30; SearchText, SearchNearby, GetPhotoMedia, LookupMedia, SearchMedia, LookupReviewPosts, SearchReviewPosts, LookupUserContentSummary 0. Dakikalık kotalar varsayılan |
+| Bütçe | `reptrio-places-monthly` aylık ₺500 (≈10 USD), yalnız bu proje, %50/90/100 gerçek harcama e-postası. Uyarıdır, harcamayı durdurmaz; tavanı kotalar koyar |
+| Faturalama modeli | IDs-only Place Details ile oturum kapanır: autocomplete istekleri "Autocomplete Requests" (aylık 10.000 ücretsiz), Place Details Essentials (IDs Only) ücretsiz. 100/gün ≈ 3.100/ay → beklenen 0 |
+| Worker sürümü | `8db02608-bb72-4920-bd23-9f5294db227c` |
+| Gerçek arama kanıtı | Canary PASS (yukarıda) |
 
 Geri dönüş notu: Build 46 Worker'ına (`72b88bbb…`) rollback H1 korumasını kaldırır (aşağıda); otomatik yapılmaz.
 Time Travel restore yalnız ayrı kullanıcı onayıyla.
