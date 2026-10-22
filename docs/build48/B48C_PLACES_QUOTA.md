@@ -65,7 +65,7 @@ Chosen: **B**. Enabling (each step separately approved): apply 0017 → a review
 - Rollout order (each step separately approved): apply 0017 → commit the `wrangler.jsonc` var → deploy. After deploy,
   verify with a synthetic test account that the 101st Autocomplete within 24 h returns `429 PLACES_DAILY_LIMIT` (and
   that `/api/places/verify` still works); Google Cloud usage should not grow beyond 100 for that account.
-  Rolling back = unset env var (no D1 access). Build 47 clients keep working; they show the generic search error text
+  Rolling back = remove the `wrangler.jsonc` var and redeploy (no D1 access). Build 47 clients keep working; they show the generic search error text
   on `PLACES_DAILY_LIMIT` and can still save manually.
 
 ## 6. Tests
