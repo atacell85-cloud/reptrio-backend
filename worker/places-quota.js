@@ -8,22 +8,23 @@
 // 429/5xx, client abort): the request may have been billed, and errors cannot be provoked to buy extra searches.
 // Place ID verification never touches this.
 //
-// RELEASE GATE: the reset boundary (calendar day in which time zone, or a rolling window) is an open product decision.
-// Candidate policies are implemented and tested, but none is approved: APPROVED_PLACES_QUOTA_POLICIES is empty. With
-// PLACES_DAILY_QUOTA_POLICY unset the Worker behaves exactly like Build 47 (no D1 access); set to anything that is not
-// approved, Autocomplete fails closed (503 PLACES_NOT_CONFIGURED; manual gym entry still works).
+// RESET POLICY (user decision 2026-10-22): `first-use-24h`, a 24-hour window starting at the first counted request.
+// It is the only approved policy. Enabling still needs migration 0017 and PLACES_DAILY_QUOTA_POLICY='first-use-24h' on
+// the Worker (separately approved production steps). With the variable unset the Worker behaves exactly like Build 47
+// (no D1 access); set to any other value (e.g. the rejected `utc-day`), Autocomplete fails closed (503
+// PLACES_NOT_CONFIGURED; Place ID verification and manual gym entry still work).
 export const PLACES_DAILY_AUTOCOMPLETE_LIMIT=100;
 const DAY_MS=86_400_000;
 export const PLACES_QUOTA_POLICIES=Object.freeze({
-  // Candidate A: UTC calendar day. Same reset instant for everyone; local reset hour varies by place (e.g. 03:00 in
+  // Not approved (kept for comparison tests only): UTC calendar day. Same reset instant for everyone; local reset hour varies by place (e.g. 03:00 in
   // Istanbul, 19:00/20:00 in New York); travel never changes the boundary.
   'utc-day':nowMs=>{const start=Math.floor(nowMs/DAY_MS)*DAY_MS;return{start,end:start+DAY_MS};},
-  // Candidate B: 24 hours from the first counted request of a window. No time zone at all; a fresh window only opens
+  // APPROVED: 24 hours from the first counted request of a window. No time zone at all; a fresh window only opens
   // once the previous one expired (the stored window is kept until then).
   'first-use-24h':nowMs=>({start:nowMs,end:nowMs+DAY_MS}),
 });
-// Empty until the user approves a reset policy (docs/build48/DECISIONS.md #2, AGENT_HANDOFF B48-C.3).
-export const APPROVED_PLACES_QUOTA_POLICIES=Object.freeze([]);
+// User decision 2026-10-22 (docs/build48/DECISIONS.md, B48-C): "ilk aramadan sonra 24 saat".
+export const APPROVED_PLACES_QUOTA_POLICIES=Object.freeze(['first-use-24h']);
 
 export function placesQuotaPolicy(env,approved=APPROVED_PLACES_QUOTA_POLICIES){
   const name=env?.PLACES_DAILY_QUOTA_POLICY;

@@ -16,7 +16,7 @@ let activeProvider = async () => { throw new Error('no provider'); };
 globalThis.fetch = (url, init) => activeProvider(String(url), init);
 const DAY = 86_400_000, T0 = Date.UTC(2026, 9, 22, 12, 0, 0);
 assert.equal(PLACES_DAILY_AUTOCOMPLETE_LIMIT, 100, 'approved allowance is 100, not 10');
-assert.deepEqual([...APPROVED_PLACES_QUOTA_POLICIES], [], 'no reset policy is approved in shipped code');
+assert.deepEqual([...APPROVED_PLACES_QUOTA_POLICIES], ['first-use-24h'], 'only the user-approved reset policy (2026-10-22)');
 assert.ok(Object.isFrozen(APPROVED_PLACES_QUOTA_POLICIES) && Object.isFrozen(PLACES_QUOTA_POLICIES));
 
 async function fixture({ migrationsUpTo, foreignKeys } = {}) {
@@ -48,13 +48,13 @@ async function fixture({ migrationsUpTo, foreignKeys } = {}) {
 }
 const code = async response => (await response.json()).code;
 
-// 1. Release gate. Unset policy = Build 47 behaviour with no D1 access (works even without migration 0017). The real
-//    Worker route has no approved policy, so ANY configured policy fails closed before the burst limiter or Google.
+// 1. Release gate. Unset policy = Build 47 behaviour with no D1 access (works even without migration 0017). On the real
+//    Worker route only `first-use-24h` is approved; any other configured value fails closed before the limiter/Google.
 {
   const f = await fixture({ migrationsUpTo: '0016_sync_data_features.sql' });
   for (let i = 0; i < 3; i++) assert.equal((await f.call('qa:phone', { policy: null, viaWorker: true })).status, 200);
   assert.equal(f.counters.autocomplete, 3, 'quota off: unchanged Build 47 behaviour');
-  for (const policy of ['utc-day', 'first-use-24h', 'Europe/Istanbul', 'constructor', '__proto__']) {
+  for (const policy of ['utc-day', 'Europe/Istanbul', 'First-Use-24h', 'constructor', '__proto__']) {
     const r = await f.call('qa:phone', { policy, viaWorker: true });
     assert.equal(r.status, 503, policy); assert.equal(await code(r), 'PLACES_NOT_CONFIGURED');
   }
@@ -64,8 +64,22 @@ const code = async response => (await response.json()).code;
   assert.equal(f.counters.verify, 2, 'verification reached Google once per call');
   assert.deepEqual(placesQuotaPolicy({}), { enabled: false });
   assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'utc-day' }).misconfigured, true);
+  assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'first-use-24h' }).enabled, true);
   assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'utc-day' }, ['utc-day']).enabled, true);
   assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'hasOwnProperty' }, ['hasOwnProperty']).enabled, false);
+}
+
+// 1b. Production route (no test options): the approved policy enforces 100 per account; without 0017 it fails closed.
+{
+  const f = await fixture();
+  for (let i = 0; i < 100; i++) assert.equal((await f.call('qa:phone', { policy: 'first-use-24h', viaWorker: true })).status, 200);
+  const r = await f.call('qa:ipad', { policy: 'first-use-24h', viaWorker: true });
+  assert.equal(r.status, 429); assert.equal(await code(r), 'PLACES_DAILY_LIMIT'); assert.equal(f.counters.autocomplete, 100);
+  const row = f.usage('qa'); assert.equal(row.dispatched, 100); assert.equal(row.window_end_ms - row.window_start_ms, DAY, '24 h from first use');
+  assert.equal((await f.call('qa:phone', { mode: 'verify', policy: 'first-use-24h', viaWorker: true })).status, 200);
+  const g = await fixture({ migrationsUpTo: '0016_sync_data_features.sql' });
+  const missing = await g.call('qa:phone', { policy: 'first-use-24h', viaWorker: true });
+  assert.equal(missing.status, 503); assert.equal(await code(missing), 'PLACES_UNAVAILABLE'); assert.equal(g.counters.upstream, 0);
 }
 
 // 2. Exactly 100 dispatched per account, shared across devices; the 101st is refused before Google; verification is
@@ -112,7 +126,7 @@ const code = async response => (await response.json()).code;
   assert.equal((await g.call('qa:phone', { mode: 'verify' })).status, 200, 'verification independent of the quota table');
 }
 
-// 5. Candidate reset policies (NOT approved; tested so either can be enabled once decided).
+// 5. Reset boundaries: approved first-use-24h, and the rejected utc-day kept as a comparison.
 {
   // utc-day: one boundary for everybody at 00:00 UTC.
   const f = await fixture();
@@ -166,4 +180,4 @@ const code = async response => (await response.json()).code;
   assert.deepEqual(cols, ['user_id', 'window_start_ms', 'window_end_ms', 'dispatched', 'updated_ms'], 'no search text, Google content, device or location');
 }
 
-console.log('PASS: Places daily allowance — release-gated (no approved reset policy; unset = Build 47, unapproved = fail closed), exactly 100 dispatched per account across devices and under concurrency, 101st refused before Google, verification never counted, refused/bad/burst-limited requests free, no refund after dispatch, fail-closed accounting, candidate utc-day / first-use-24h boundaries incl. clock skew, restart persistence, account erasure (FK on/off), additive re-runnable migration with no content columns.');
+console.log('PASS: Places daily allowance — approved first-use-24h reset (unset = Build 47, other values = fail closed, production route enforced), exactly 100 dispatched per account across devices and under concurrency, 101st refused before Google, verification never counted, refused/bad/burst-limited requests free, no refund after dispatch, fail-closed accounting, first-use-24h (and rejected utc-day) boundaries incl. clock skew, restart persistence, account erasure (FK on/off), additive re-runnable migration with no content columns.');

@@ -1,13 +1,13 @@
 # B48-C — Per-account Places Autocomplete allowance (100 / day)
 
-Status: IMPLEMENTED BEHIND RELEASE GATE (2026-10-22). **Not enabled anywhere.** Migration 0017 NOT applied to any
-remote D1; no deploy. One product decision is open: the reset boundary (§3).
+Status: IMPLEMENTED; reset policy **APPROVED 2026-10-22: `first-use-24h`**. **Not enabled anywhere:** migration 0017 NOT
+applied to any remote D1, no deploy, `PLACES_DAILY_QUOTA_POLICY` not set (each needs separate approval).
 
 ## 1. What is implemented (branch `build48/integration`)
 - `migrations/0017_places_autocomplete_quota.sql` — additive table `places_autocomplete_usage`, one row per account:
   `window_start_ms`, `window_end_ms`, `dispatched`, `updated_ms`. No search text, Google content, device or location.
-- `worker/places-quota.js` — `PLACES_DAILY_AUTOCOMPLETE_LIMIT = 100`; candidate policies `utc-day`, `first-use-24h`;
-  `APPROVED_PLACES_QUOTA_POLICIES = []` (empty); one atomic conditional upsert `RETURNING dispatched`.
+- `worker/places-quota.js` — `PLACES_DAILY_AUTOCOMPLETE_LIMIT = 100`; approved policy `first-use-24h` (`utc-day` kept only as a
+  rejected comparison); `APPROVED_PLACES_QUOTA_POLICIES = ['first-use-24h']`; one atomic conditional upsert `RETURNING dispatched`.
 - `worker/places-api.js` — order: auth/lifecycle → config (+ gate) → body → burst limiter (`PLACES_LIMITER`, unchanged)
   → **daily reservation (Autocomplete only)** → Google. Refusal: `429 {code:'PLACES_DAILY_LIMIT'}` (no count disclosed).
 - `worker/account-api.js` — account erasure deletes the row explicitly (also with FKs off); FK cascades as well.
@@ -18,7 +18,7 @@ remote D1; no deploy. One product decision is open: the reset boundary (§3).
 | Situation | Outcome |
 |---|---|
 | Quota policy env unset | Exactly Build 47: no D1 access; works with or without 0017. |
-| Policy env set but not approved in code | Autocomplete `503 PLACES_NOT_CONFIGURED` before limiter/Google (fail closed). Place ID verification unaffected (tested). |
+| Policy env set to anything but `first-use-24h` | Autocomplete `503 PLACES_NOT_CONFIGURED` before limiter/Google (fail closed). Place ID verification unaffected (tested). |
 | Bad body / unauthenticated / deleting account / burst-limited | Refused before reservation; no unit taken. |
 | Admitted (dispatched ≤ 100 in window) | One unit taken **before** dispatch. |
 | Google timeout, abort, 5xx, upstream 429 | Unit kept (request may be billed; errors cannot be provoked to refill). |
@@ -30,8 +30,8 @@ remote D1; no deploy. One product decision is open: the reset boundary (§3).
 | Worker restart / other isolate | State only in D1; persists. |
 | Account erasure | Row deleted with the account. |
 
-## 3. OPEN DECISION — reset boundary (needs explicit user approval)
-The superseded rule was Istanbul midnight. Neither Istanbul nor UTC has been chosen. Viable global options:
+## 3. DECIDED — reset boundary: B (`first-use-24h`), user approval 2026-10-22
+The superseded rule was Istanbul midnight. Options that were evaluated (B chosen):
 
 | Option | Behaviour | Pros | Cons / edge cases |
 |---|---|---|---|
@@ -40,9 +40,8 @@ The superseded rule was Istanbul midnight. Neither Istanbul nor UTC has been cho
 | C. Account-local calendar day | Midnight in a stored account time zone | Matches users' notion of "today" | Needs a validated stored time zone (new data, consent/UX); travel and time-zone changes can refill early or block; client-supplied zone can be gamed |
 | D. True rolling 24 h | Count of requests in the last 24 h | Smoothest; strict | Needs per-request rows or buckets (more D1 writes/reads); not implemented |
 
-Recommendation for the decision maker: **B** (no time-zone assumption, no boundary burst) or **A** if a single global
-reset instant is preferred. Either is enabled by adding the name to `APPROVED_PLACES_QUOTA_POLICIES` (reviewed code
-change + tests) and setting `PLACES_DAILY_QUOTA_POLICY` on the Worker — only after 0017 is applied.
+Chosen: **B**. Enabling = apply 0017 (explicit permission) → deploy the Worker → set
+`PLACES_DAILY_QUOTA_POLICY=first-use-24h`. Rollback = unset the variable (no D1 access).
 
 ## 4. Cost and provider protection (validated 2026-10-22 against official docs)
 - Google Maps Platform pricing page: **Autocomplete Requests** (Essentials) 10,000 free billable events/month, then
@@ -61,7 +60,7 @@ change + tests) and setting `PLACES_DAILY_QUOTA_POLICY` on the Worker — only a
   (100,000 rows written/day across the database) heavy use competes with sync/purge budgets; monitor before enabling.
 - **Worker before mobile:** the Build 48 Worker (B48-B optional locale keys) must be live before any Build 48 mobile
   client ships; the Build 47 Worker answers 400 to the new keys.
-- Rollout order when approved: apply 0017 (explicit permission) → deploy Worker with approved policy → set env var.
+- Rollout order (each step separately approved): apply 0017 → deploy Worker → set `PLACES_DAILY_QUOTA_POLICY=first-use-24h`.
   Rolling back = unset env var (no D1 access). Build 47 clients keep working; they show the generic search error text
   on `PLACES_DAILY_LIMIT` and can still save manually.
 
