@@ -30,7 +30,8 @@
     "OPENAI_IMPORT_RETRY_BASE_MS": "750",
     "OPENAI_IMPORT_MAX_INPUT_BYTES": "180000",
     "OPENAI_IMPORT_MAX_FILE_BYTES": "6000000",
-    "OPS_ALERT_EMAIL": "support@reptrio.com"
+    "OPS_ALERT_EMAIL": "support@reptrio.com",
+    "PLACES_DAILY_QUOTA_POLICY": "first-use-24h"
   },
   "d1_databases": [
     {
