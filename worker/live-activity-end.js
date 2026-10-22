@@ -140,6 +140,15 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
   if (!rows.length) return { sent: 0, rows: 0 };
   const config = apnsConfig(env);
   if (!config.ready) { log({ event: 'live_activity_end_unconfigured', due: rows.length }); return { sent: 0, rows: rows.length, unconfigured: true }; }
+  // B48-D: sign BEFORE any row is claimed (as Build 47 did). A key that cannot sign (e.g. a truncated .p8 paste) counts
+  // as a missing credential for its host: no throw after a claim, no SENDING/sweep loop, the normal 15-min retry/FAILED.
+  const jwts = {};
+  for (const name of ['production', 'sandbox']) {
+    if (!config[name]) continue;
+    try { jwts[name] = await providerToken(config[name], nowMs); }
+    catch { log({ event: 'live_activity_end_credential_invalid', env: name }); }
+  }
+  if (!jwts.production && !jwts.sandbox) { log({ event: 'live_activity_end_unconfigured', due: rows.length }); return { sent: 0, rows: rows.length, unconfigured: true }; }
   let sent = 0;
   for (const row of rows) {
     const claim = await env.DB.prepare(CLAIM_SQL).bind(nowMs, row.user_id, row.workout_id, row.revision).run();
@@ -150,10 +159,10 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     let result = null, used = null, missing = null;
     const legs = [];
     for (const name of hosts) {
-      const credential = config[name];
-      if (!credential) { missing ??= name; continue; }
+      const jwt = jwts[name];
+      if (!jwt) { missing ??= name; continue; }
       used = name;
-      result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt: await providerToken(credential, nowMs), payload, nowMs, fetchImpl });
+      result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt, payload, nowMs, fetchImpl });
       legs.push({ env: name, status: result.status, reason: result.reason });
       // A sandbox token on production is BadDeviceToken; a key of the other environment is a wrong-environment key.
       if (!(hosts.length > 1 && FALLBACK_REASONS.has(result.reason))) break;
@@ -163,6 +172,10 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     if (missing && (!result || (result.status !== 200 && FALLBACK_REASONS.has(result.reason)))) {
       result = { status: 0, reason: CREDENTIAL_MISSING[missing], apnsId: null };
     }
+    // A wrong-environment KEY on any leg means that host was never really asked about this token: a later BadDeviceToken
+    // from the other host is not proof of a dead token. Record the key problem (auth: 15-min retry), never DEAD.
+    const wrongKey = legs.find(leg => leg.reason === 'BadEnvironmentKeyInToken' || leg.reason === 'BadEnvironmentKeyIdInToken');
+    if (wrongKey && result.status !== 200 && classify(result) === 'dead') result = { status: wrongKey.status, reason: wrongKey.reason, apnsId: null };
     const outcome = classify(result);
     const attempts = row.attempts + 1;
     let state = 'PENDING', retry = null;

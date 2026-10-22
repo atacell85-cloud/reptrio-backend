@@ -552,4 +552,36 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.equal(keyProbeVerdict({ status: 200, reason: null }), 'UNEXPECTED', 'an unregistered token can never be delivered');
 }
 
+// 21. Guardian B48-D round 1. M1: a malformed (non-empty) private key never throws after a claim: it counts as missing for
+// its host (15-min retry, FAILED after 6 attempts), other rows in the run are processed, production unaffected.
+{
+  const t = setup({ sandbox: true }); t.env.APNS_SANDBOX_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIVATE KEY-----';
+  await t.report(T0, TOKEN_A, T0, 'w1', 'auto'); await t.report(T0, TOKEN_B, T0, 'w2', 'production');
+  t.setRespond(url => url.startsWith('https://api.push.apple.com') && !url.endsWith(TOKEN_B) ? reply(400, 'BadDeviceToken')() : reply(200)());
+  await t.run(T0 + 30 * MIN);
+  assert.equal(t.row().state, 'PENDING'); assert.equal(t.row().last_error, '0:SandboxCredentialMissing'); assert.equal(t.row().retry_ms, T0 + 45 * MIN);
+  assert.equal(t.db.rows("SELECT state FROM live_activity_end WHERE workout_id='w2'")[0].state, 'SENT', 'second row in the same run still sent');
+  assert.ok(t.logs.some(l => JSON.parse(l).event === 'live_activity_end_credential_invalid' && JSON.parse(l).env === 'sandbox'));
+  let at = t.row().retry_ms;
+  for (let i = 0; i < 10 && t.row().state === 'PENDING'; i++) { await t.run(at); at = t.row().retry_ms ?? at; }
+  assert.equal(t.row().state, 'FAILED'); assert.equal(t.row().attempts, 6, 'attempt cap applies (no sweep loop)');
+  assert.ok(at - T0 < 150 * MIN);
+  assert.equal(t.pushes.filter(p => p.url.endsWith(TOKEN_A)).length, 6, 'one production attempt per retry, never every 2 minutes');
+  for (const line of t.logs) assert.ok(!/PRIVATE KEY|MIGH/.test(line));
+  // Both keys unusable: nothing is claimed (same as unconfigured).
+  const both = setup({ sandbox: true }); both.env.APNS_PRIVATE_KEY = 'garbage'; both.env.APNS_SANDBOX_PRIVATE_KEY = 'garbage';
+  await both.report(T0); const r = await both.run(T0 + 30 * MIN);
+  assert.equal(r.unconfigured, true); assert.equal(both.row().attempts, 0); assert.equal(both.pushes.length, 0);
+}
+// L1: production KEY is the wrong environment and sandbox says BadDeviceToken (a production token): retry, never DEAD.
+{
+  const t = setup({ sandbox: true }); await t.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  t.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(403, 'BadEnvironmentKeyInToken')() : reply(400, 'BadDeviceToken')());
+  await t.run(T0 + 30 * MIN);
+  assert.equal(t.row().state, 'PENDING'); assert.equal(t.row().last_error, '403:BadEnvironmentKeyInToken'); assert.equal(t.row().retry_ms, T0 + 45 * MIN);
+  const sbxWrong = setup({ sandbox: true }); await sbxWrong.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  sbxWrong.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(400, 'BadDeviceToken')() : reply(403, 'BadEnvironmentKeyIdInToken')());
+  await sbxWrong.run(T0 + 30 * MIN); assert.equal(sbxWrong.row().state, 'PENDING');
+}
+
 console.log('Live Activity end (Build 45): 30:00 deadline, late Watch events, continuation, token rotation, send race, delayed/undelivered end push, new workout, offline expiry, APNs outcomes + sandbox fallback, lease sweep, validation/skew/120-min, exact request + decodable content-state, ES256 token, log hygiene, FK cascade and D1 cost passed; B48-D per-host credentials (no production key on sandbox, missing key = retry not DEAD, per-credential token cache, leg logs).');

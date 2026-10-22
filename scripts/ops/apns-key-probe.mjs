@@ -38,6 +38,7 @@ function post(host, jwt, nowMs) {
     request.on('data', chunk => { body += chunk; });
     request.on('end', () => { session.close(); let reason = null; try { reason = JSON.parse(body).reason ?? null; } catch {} resolve({ status, reason }); });
     request.on('error', () => { session.close(); resolve({ status: 0, reason: 'NetworkError' }); });
+    request.setTimeout(10000, () => { request.close(); session.destroy(); resolve({ status: 0, reason: 'NetworkError' }); });
     request.end(JSON.stringify(endPayload(nowMs)));
   });
 }

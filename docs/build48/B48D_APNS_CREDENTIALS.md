@@ -23,10 +23,13 @@ Every production step below needs separate explicit approval.
 - `runLiveActivityEnds`: each host signed with its own credential; host without credential is not contacted.
   `auto` keeps the production → sandbox fallback on `BadDeviceToken` / `BadEnvironmentKeyInToken` /
   `BadEnvironmentKeyIdInToken`.
-- Missing credential → `0:SandboxCredentialMissing` / `0:ProductionCredentialMissing`, classified like an auth error:
+- A credential is signed once per run BEFORE any row is claimed; a key that cannot sign (e.g. truncated .p8) is logged
+  `live_activity_end_credential_invalid` and treated as missing. Missing credential → `0:SandboxCredentialMissing` /
+  `0:ProductionCredentialMissing`, classified like an auth error:
   retry every 15 min, `FAILED` after 6 attempts (< 150-min row expiry), newer activity re-arms. A `BadDeviceToken`
   from the only host that could be tried is **not** treated as a dead token while the other host is untried.
-  Both hosts tried and refused → `DEAD` (unchanged). Neither credential → unchanged "unconfigured" (row not claimed).
+  Any leg answering `BadEnvironmentKey(Id)InToken` (wrong-environment key) → retry, never `DEAD`. Both hosts tried
+  with valid keys and refused the token → `DEAD` (unchanged). Neither credential → unchanged "unconfigured" (row not claimed).
 - Cron schedule, 30-minute rule, revision/claim race guards, payload, Build 47 client request shapes: unchanged.
 - Staging Worker probe (`scripts/ops/apnstest/entry.mjs`) signs each host with its own credential.
 
@@ -42,7 +45,8 @@ Every production step below needs separate explicit approval.
    Note: `wrangler secret put` creates a new Worker version from the currently deployed code.
 3. **Deploy** the Build 48 backend (B48-D) — separate approval. Order 2 → 3 or 3 → 2 are both safe: before step 2 the
    sandbox host is simply not contacted (rows retry, `0:SandboxCredentialMissing`).
-4. **Verify the installed production key without reading it:** the next `auto` row from the development-signed phone
+4. **Verify the installed production key without reading it.** A Worker secret (incl. its Key ID) cannot be read back;
+   compare with your own records / the Apple Developer key list, or re-put a known value (approval). Behavioural check: the next `auto` row from the development-signed phone
    logs `legs`. Production leg `400 BadDeviceToken` = installed `APNS_KEY_ID` is accepted on production (expected);
    `403 BadEnvironmentKeyInToken` = it is not a production key → replace only with approval.
 5. **Physical acceptance:** start a workout on the locked development iPhone, leave it idle 30 min; expect the Live
@@ -51,8 +55,8 @@ Every production step below needs separate explicit approval.
    row `SENT` with `apns_env='production'`.
 6. **Staging Worker** (`a2-workout-apnstest`): its `APNS_KEY_ID` is the Sandbox key; before deploying B48-D there, also
    store it as `APNS_SANDBOX_KEY_ID` / `APNS_SANDBOX_PRIVATE_KEY`.
-- Rollback: redeploy the previous Worker version; the sandbox secrets are inert for Build 47 code. Kill switch
-  unchanged (`wrangler secret delete APNS_PRIVATE_KEY` / `APNS_SANDBOX_PRIVATE_KEY`, approval required).
+- Rollback: redeploy the previous Worker version; the sandbox secrets are inert for Build 47 code. Kill switch (approval
+  required): delete **both** `APNS_PRIVATE_KEY` and `APNS_SANDBOX_PRIVATE_KEY`; deleting one stops only that host.
 
 ## 4. Logs
 `live_activity_end` log line: `outcome`, `status`, `reason`, `env`, `legs:[{env,status,reason}]`. Never the push token,
