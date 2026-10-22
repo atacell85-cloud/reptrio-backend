@@ -136,6 +136,28 @@ const code = async response => (await response.json()).code;
   assert.equal((await g.call('qa:phone', { mode: 'verify' })).status, 200, 'verification independent of the quota table');
 }
 
+// 4b. Production canary 2026-10-22 (admitted 96, 4 x PLACES_RATE_LIMITED, then PLACES_DAILY_LIMIT): the same 429 code
+//     comes from two places with different accounting. Cloudflare burst limiter: refused before reservation (free).
+//     Google upstream 429: dispatched, unit kept. A client therefore sees PLACES_DAILY_LIMIT after `admitted` 200s with
+//     admitted <= 100 <= admitted + rateLimited429s; only the server row is exact.
+{
+  const run = async cause => {
+    const f = await fixture(); let attempt = 0, admitted = 0, rateLimited = 0;
+    const early = new Set([10, 11, 12, 13]);
+    if (cause === 'google') f.setUpstream(async url => early.has(attempt) ? { ok: false, status: 429 } : { ok: true, text: async () => JSON.stringify({ suggestions: [] }) });
+    for (; attempt < 140; attempt++) {
+      if (cause === 'burst') f.setLimiter(!early.has(attempt));
+      const r = await f.call('qa:phone', { policy: 'first-use-24h' }); const c = await code(r);
+      if (r.status === 200) admitted++;
+      else if (r.status === 429 && c === 'PLACES_RATE_LIMITED') rateLimited++;
+      else { assert.equal(c, 'PLACES_DAILY_LIMIT'); break; }
+    }
+    return { admitted, rateLimited, server: f.usage('qa').dispatched };
+  };
+  assert.deepEqual(await run('burst'), { admitted: 100, rateLimited: 4, server: 100 }, 'burst-limited requests are free');
+  assert.deepEqual(await run('google'), { admitted: 96, rateLimited: 4, server: 100 }, 'Google 429s keep their unit (observed in production)');
+}
+
 // 5. Reset boundaries: approved first-use-24h, and the rejected utc-day kept as a comparison.
 {
   // utc-day: one boundary for everybody at 00:00 UTC.
