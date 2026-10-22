@@ -18,7 +18,7 @@ remote D1; no deploy. One product decision is open: the reset boundary (§3).
 | Situation | Outcome |
 |---|---|
 | Quota policy env unset | Exactly Build 47: no D1 access; works with or without 0017. |
-| Policy env set but not approved in code | Autocomplete `503 PLACES_NOT_CONFIGURED` before limiter/Google (fail closed). Verify unaffected. |
+| Policy env set but not approved in code | Autocomplete `503 PLACES_NOT_CONFIGURED` before limiter/Google (fail closed). Place ID verification unaffected (tested). |
 | Bad body / unauthenticated / deleting account / burst-limited | Refused before reservation; no unit taken. |
 | Admitted (dispatched ≤ 100 in window) | One unit taken **before** dispatch. |
 | Google timeout, abort, 5xx, upstream 429 | Unit kept (request may be billed; errors cannot be provoked to refill). |
@@ -59,6 +59,8 @@ change + tests) and setting `PLACES_DAILY_QUOTA_POLICY` on the Worker — only a
 ## 5. Operational notes / risks
 - **D1 writes:** one row write per dispatched Autocomplete while enabled (refusals write nothing). On Workers Free
   (100,000 rows written/day across the database) heavy use competes with sync/purge budgets; monitor before enabling.
+- **Worker before mobile:** the Build 48 Worker (B48-B optional locale keys) must be live before any Build 48 mobile
+  client ships; the Build 47 Worker answers 400 to the new keys.
 - Rollout order when approved: apply 0017 (explicit permission) → deploy Worker with approved policy → set env var.
   Rolling back = unset env var (no D1 access). Build 47 clients keep working; they show the generic search error text
   on `PLACES_DAILY_LIMIT` and can still save manually.

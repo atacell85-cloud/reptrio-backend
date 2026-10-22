@@ -13,13 +13,15 @@ const answer=(body,status=200)=>new Response(JSON.stringify(body),{status,header
 const GOOGLE_LANGUAGES=new Set('af sq am ar hy az eu be bn bs bg my ca zh hr cs da nl en et fa fi fil fr gl ka de el gu iw hi hu is id it ja kn kk km ko ky lo lv lt mk ms ml mr mn ne no pl pt pa ro ru sr si sk sl es sw sv ta te th tr uk ur uz vi zu'.split(' '));
 const LANGUAGE_ALIASES={he:'iw',nb:'no',nn:'no',tl:'fil',in:'id'};
 const LANGUAGE_TAG=/^[A-Za-z]{2,3}(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|\d{3}))?$/;
-let regionNames;
+// The 249 assigned ISO 3166-1 alpha-2 codes (ISO 3166 Maintenance Agency). Exceptionally/transitionally reserved
+// (AC, DG, EA, IC, TA, UK, EU, ...), deprecated (AN, CS, YU, SU, ...) and user-assigned (XK, QO, ZZ, ...) codes are dropped.
+const ISO_REGIONS=new Set('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split(' '));
 export function googleLanguageCode(tag){
   if(typeof tag!=='string'||tag.length>16||!LANGUAGE_TAG.test(tag))return null;
   const [first,...rest]=tag.split('-'),script=rest.find(p=>p.length===4)?.toLowerCase(),region=rest.find(p=>p.length!==4)?.toUpperCase();
   const primary=LANGUAGE_ALIASES[first.toLowerCase()]||first.toLowerCase();
   if(!GOOGLE_LANGUAGES.has(primary))return null;
-  if(primary==='zh')return script==='hant'||region==='TW'?'zh-TW':region==='HK'||region==='MO'?'zh-HK':'zh-CN';
+  if(primary==='zh')return region==='HK'||region==='MO'?'zh-HK':script==='hant'||region==='TW'?'zh-TW':'zh-CN';
   if(primary==='pt')return region==='BR'?'pt-BR':region==='PT'?'pt-PT':'pt';
   if(primary==='en')return region==='AU'?'en-AU':region==='GB'?'en-GB':'en';
   if(primary==='fr'&&region==='CA')return'fr-CA';
@@ -27,11 +29,8 @@ export function googleLanguageCode(tag){
   return primary;
 }
 export function googleRegionCode(code){
-  // Assigned ISO 3166-1 alpha-2 regions only (ICU knows them); macro/private codes are dropped.
   if(typeof code!=='string'||!/^[A-Za-z]{2}$/.test(code))return null;
-  const upper=code.toUpperCase();if(['EU','EZ','UN','ZZ','XA','XB','XK','QO'].includes(upper))return null;
-  try{regionNames??=new Intl.DisplayNames(['en'],{type:'region',fallback:'none'});}catch{return null}
-  const name=regionNames.of(upper);return name&&name!==upper?upper.toLowerCase():null;
+  const upper=code.toUpperCase();return ISO_REGIONS.has(upper)?upper.toLowerCase():null;
 }
 const OPTIONAL_LOCALE=['languageCode','regionCode'];
 export function parsePlaceRequest(body,mode) {
@@ -88,7 +87,8 @@ export async function handlePlacesRequest(request,env,pathname,{approvedQuotaPol
   if(!user)return answer({code:'AUTH_REQUIRED'},401);
   if(!env.GOOGLE_MAPS_PLACES_API_KEY||!env.PLACES_LIMITER)return answer({code:'PLACES_NOT_CONFIGURED'},503);
   const quota=placesQuotaPolicy(env,approvedQuotaPolicies);
-  if(quota.misconfigured)return answer({code:'PLACES_NOT_CONFIGURED'},503);
+  // The allowance (and its gate) concern Autocomplete only; Place ID verification never depends on it.
+  if(mode==='autocomplete'&&quota.misconfigured)return answer({code:'PLACES_NOT_CONFIGURED'},503);
   let payload;try{
     const raw=await request.text();if(raw.length>768)return answer({code:'PLACES_BAD_REQUEST'},400);
     payload=parsePlaceRequest(JSON.parse(raw),mode);

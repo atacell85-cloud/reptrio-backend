@@ -11,8 +11,9 @@
 
 ## 2026-10-22 — Build 48 B48-B worldwide Places Autocomplete (no Turkey default)
 - Decision #2 (docs/build48/DECISIONS.md): the hard-coded `languageCode:'tr', regionCode:'tr'` is removed. Autocomplete accepts two OPTIONAL fields, `languageCode` (device language tag) and `regionCode` (device region setting, never a location). Build 47 bodies `{input,sessionToken}` stay valid and now reach Google with neither field: Google's documented defaults (Accept-Language, else `en`) and no region bias.
-- The Worker maps the tag to a language Places documents (e.g. `he`→`iw`, `nb`→`no`, `zh-Hant`→`zh-TW`, `en-GB`, `pt-BR`, `es-419`) and keeps only assigned ISO 3166-1 regions; anything else is dropped (never INVALID_ARGUMENT, never Turkey). Malformed types/characters/oversized values and unknown keys are refused (400). `regionCode` is bias/formatting only (official docs); `includedRegionCodes`, location bias/restriction are never sent.
+- The Worker maps the tag to a language Places documents (e.g. `he`→`iw`, `nb`→`no`, `zh-Hant`→`zh-TW`, `en-GB`, `pt-BR`, `es-419`) and keeps only the 249 assigned ISO 3166-1 alpha-2 regions (explicit list; reserved/deprecated/user-assigned codes such as IC, UK, AN, XK are dropped); anything else is dropped rather than forwarded, avoiding known INVALID_ARGUMENT causes, and never replaced by Turkey. Malformed types/characters/oversized values and unknown keys are refused (400). `regionCode` is bias/formatting only (official docs); `includedRegionCodes`, location bias/restriction are never sent.
 - Place ID verification body is unchanged `{placeId,sessionToken}`; nothing new is stored or logged.
+- **Rollout order:** this Worker must be deployed before a Build 48 mobile client ships; the Build 47 Worker refuses the new optional keys (400), which would leave search unavailable (manual entry still works).
 
 ### 2026-10-17 — B46-03 içe aktarma sonrası OpenAI yanıtı silme (Seçenek C; Build 46)
 

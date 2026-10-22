@@ -78,7 +78,7 @@ assert.equal(verified.body.verified,true);
   ['Academia','pt-BR','BR',{languageCode:'pt-BR',regionCode:'br'}],
   ['Gimnasio','es-419','MX',{languageCode:'es-419',regionCode:'mx'}],
   // Well-formed but unsupported/unassigned values are dropped (never an upstream INVALID_ARGUMENT, never Turkey).
-  ['Some Gym','xx-YY','ZZ',{}],['Some Gym','tlh','EU',{}],['Some Gym','en','XK',{languageCode:'en'}],['Some Gym','en','QQ',{languageCode:'en'}],
+  ['Some Gym','xx-YY','ZZ',{}],['Some Gym','es-ES','IC',{languageCode:'es'}],['Some Gym','nl','AN',{languageCode:'nl'}],['Some Gym','en-GB','UK',{languageCode:'en-GB'}],['Some Gym','en','AC',{languageCode:'en'}],['香港健身','zh-Hant-HK','HK',{languageCode:'zh-HK',regionCode:'hk'}],['Some Gym','tlh','EU',{}],['Some Gym','en','XK',{languageCode:'en'}],['Some Gym','en','QQ',{languageCode:'en'}],
  ]){
   const body={input,sessionToken:token,languageCode,...(regionCode?{regionCode}:{})};
   const parsed=parsePlaceRequest(body,'autocomplete');assert.deepEqual(parsed,{input:input.trim(),sessionToken:token,...expected},languageCode+'/'+regionCode);
@@ -94,12 +94,12 @@ assert.equal(verified.body.verified,true);
   {input:'Gold Gym',sessionToken:token,languageCode:'tr";drop'},{input:'Gold Gym',sessionToken:token,regionCode:'t r'},
   {input:'Gold Gym',sessionToken:token,languageCode:'a'.repeat(36)},{input:'Gold Gym',sessionToken:token,includedRegionCodes:['tr']},
   {input:'Gold Gym',sessionToken:token,locationBias:{circle:{}}},{input:'Gold\nGym',sessionToken:token},
-  {input:'Gold Gym',sessionToken:token,__proto__:{x:1},extra:1},{input:'Gold Gym'},{sessionToken:token,languageCode:'en'},
+  JSON.parse(`{"input":"Gold Gym","sessionToken":"${token}","__proto__":{"x":1}}`),{input:'Gold Gym',sessionToken:token,extra:1},{input:'Gold Gym'},{sessionToken:token,languageCode:'en'},
  ])assert.equal(parsePlaceRequest(bad,'autocomplete'),null,JSON.stringify(bad));
  // Place ID verification is unchanged: exactly {placeId,sessionToken}; locale fields are not accepted there.
  assert.deepEqual(parsePlaceRequest({placeId,sessionToken:token},'verify'),{placeId,sessionToken:token});
  assert.equal(parsePlaceRequest({placeId,sessionToken:token,languageCode:'en'},'verify'),null);
  assert.equal(googleLanguageCode('zh'),'zh-CN');assert.equal(googleLanguageCode('zh-HK'),'zh-HK');assert.equal(googleLanguageCode(null),null);
- assert.equal(googleRegionCode('TR'),'tr');assert.equal(googleRegionCode('UN'),null);assert.equal(googleRegionCode(undefined),null);
+ assert.equal(googleRegionCode('TR'),'tr');for(const dropped of ['IC','EA','AC','DG','TA','CP','UK','FX','AN','CS','YU','SU','TP','DD','BU','XK','EU'])assert.equal(googleRegionCode(dropped),null,dropped);assert.equal(googleRegionCode('ax'),'ax');assert.equal(googleRegionCode('UN'),null);assert.equal(googleRegionCode(undefined),null);
 }
 console.log('PASS: Places proxy payloads, Google IDs only, session token and secret isolation, auth/lifecycle -> config -> body -> rate limit -> upstream order');

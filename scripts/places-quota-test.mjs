@@ -59,6 +59,9 @@ const code = async response => (await response.json()).code;
     assert.equal(r.status, 503, policy); assert.equal(await code(r), 'PLACES_NOT_CONFIGURED');
   }
   assert.equal(f.counters.autocomplete, 3, 'unapproved policy: no provider request'); assert.equal(f.counters.limiter, 3, 'and no burst-limiter spend');
+  // Verification never depends on the allowance or its gate.
+  for (const policy of ['utc-day', 'Europe/Istanbul']) assert.equal((await f.call('qa:phone', { mode: 'verify', policy, viaWorker: true })).status, 200, 'verify under ' + policy);
+  assert.equal(f.counters.verify, 2, 'verification reached Google once per call');
   assert.deepEqual(placesQuotaPolicy({}), { enabled: false });
   assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'utc-day' }).misconfigured, true);
   assert.equal(placesQuotaPolicy({ PLACES_DAILY_QUOTA_POLICY: 'utc-day' }, ['utc-day']).enabled, true);
