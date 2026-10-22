@@ -11,7 +11,7 @@ Branches: `build48/integration` in `reptrio-mobile` and `reptrio-backend`
 
 ## Locked product decisions (latest decisions override older handover text)
 1. **Google Places Autocomplete allowance:** maximum **100 actual Autocomplete requests per verified user per day**, not 10. The counter is account-based, shared across the user's devices, enforced in the backend with durable/atomic concurrency-safe accounting. Place ID verification does not consume the Autocomplete allowance.
-2. **Global product:** REPTRIO must function worldwide. Do not hard-code Turkey, Turkish, Istanbul or `Europe/Istanbul` as a global default for time windows, locale, format, search geography or UX. **Daily quota boundary/time-zone policy still requires explicit product/technical resolution**; the old Istanbul-midnight rule is superseded, not an instruction to silently substitute another time zone.
+2. **Global product:** REPTRIO must function worldwide. Do not hard-code Turkey, Turkish, Istanbul or `Europe/Istanbul` as a global default for time windows, locale, format, search geography or UX. Daily quota boundary: **resolved 2026-10-22 as `first-use-24h`** (see "User decision — 2026-10-22" below); the old Istanbul-midnight rule is superseded, not an instruction to silently substitute another time zone.
 3. **Salon search UX:** no separate **“Ara”** button and no visible “remaining searches” counter. Design responsive Autocomplete without multiplying billable requests unnecessarily (minimum query length, input debounce, in-flight cancellation/deduplication, server-side protections). The earlier button-per-request approach is superseded.
 4. **Entry label:** the workout screen's add-gym entry must say only **“Salon ekle”**, not “Google Haritalar” / “Google Maps”. Preserve the Google attribution/logo and terms wherever required by the Places experience; removing the wording from this button is not permission to remove legally required attribution.
 5. **Fallbacks & cost controls:** manual gym entry remains available even when the user's quota is reached; preserve Place ID verification and safe stale-results behavior. Keep global provider-usage/cost protection distinct from per-user limits; monthly Google free usage is not itself an application quota.
@@ -22,7 +22,7 @@ Branches: `build48/integration` in `reptrio-mobile` and `reptrio-backend`
 
 ## User decision — 2026-10-22 (B48-C reset policy)
 - **Approved:** the daily Autocomplete allowance resets **24 hours after the first counted search** (`first-use-24h`): a window opens at the user's first dispatched Autocomplete request and lasts 24 h; a new window opens only after it expires. No time zone, no Istanbul or UTC calendar day. User's words: "ilk aramadan sonra 24 saat olsun".
-- Enabling in production still requires separately approved steps: apply migration 0017, deploy the Build 48 Worker, set `PLACES_DAILY_QUOTA_POLICY=first-use-24h`.
+- Enabling in production still requires separately approved steps: apply migration 0017, add `PLACES_DAILY_QUOTA_POLICY: first-use-24h` to `wrangler.jsonc` `vars` (not the dashboard; deploy would erase it), deploy the Build 48 Worker.
 
 ## Delivery gates
 - This record commits decisions only, not feature implementation or tests.

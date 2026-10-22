@@ -1,6 +1,6 @@
 // Build 48 B48-C: per-account Places Autocomplete allowance (100 dispatched requests per window, shared by devices).
-// Real Worker route + real migrations over SQLite. The reset boundary is NOT approved: production code has no approved
-// policy, so candidate policies are exercised only through the test-only `approvedQuotaPolicies` option.
+// Real Worker route + real migrations over SQLite. Reset policy approved by the user on 2026-10-22: `first-use-24h`
+// (the only value enabled on the real route; `utc-day` is exercised only via the test-only `approvedQuotaPolicies`).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import worker from '../worker/index.js';
@@ -80,6 +80,16 @@ const code = async response => (await response.json()).code;
   const g = await fixture({ migrationsUpTo: '0016_sync_data_features.sql' });
   const missing = await g.call('qa:phone', { policy: 'first-use-24h', viaWorker: true });
   assert.equal(missing.status, 503); assert.equal(await code(missing), 'PLACES_UNAVAILABLE'); assert.equal(g.counters.upstream, 0);
+}
+
+// 1c. Deployed configuration: the policy lives ONLY in wrangler.jsonc `vars` (wrangler deploy replaces dashboard-set
+//     vars because keep_vars is not set, which would silently turn the quota off). Allowed: absent (not enabled yet)
+//     or exactly 'first-use-24h'; dashboard-only settings are not supported.
+{
+  const config = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const vars = JSON.parse(config.replace(/^\s*\/\/.*$/gm, '')).vars || {};
+  assert.ok(!('PLACES_DAILY_QUOTA_POLICY' in vars) || vars.PLACES_DAILY_QUOTA_POLICY === 'first-use-24h', 'only the approved policy in vars');
+  assert.ok(!/"keep_vars"\s*:\s*true/.test(config), 'keep_vars would let a dashboard value drift from git');
 }
 
 // 2. Exactly 100 dispatched per account, shared across devices; the 101st is refused before Google; verification is

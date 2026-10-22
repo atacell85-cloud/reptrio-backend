@@ -6,7 +6,7 @@
 
 ## 2026-10-22 — Build 48 B48-C per-account Autocomplete allowance (release-gated)
 - Decision #1: max 100 Autocomplete requests actually dispatched upstream per account per day, shared across devices; Place ID verification never counted. Implemented as one atomic conditional D1 upsert (migration 0017, additive) after the burst limiter and before dispatch; units are not refunded after dispatch (conservative billing). Separate from `PLACES_LIMITER` and from Google Cloud quota/budget protection.
-- Reset boundary decided by the user on 2026-10-22: **`first-use-24h`** (24 h from the first counted search; no time zone). `APPROVED_PLACES_QUOTA_POLICIES = ['first-use-24h']`; env unset = Build 47 behaviour, any other value (incl. the rejected `utc-day`) = fail closed. Details, options and cost model: `docs/build48/B48C_PLACES_QUOTA.md`.
+- Reset boundary decided by the user on 2026-10-22: **`first-use-24h`** (24 h from the first counted search; no time zone). `APPROVED_PLACES_QUOTA_POLICIES = ['first-use-24h']`; env unset = Build 47 behaviour, any other value (incl. the rejected `utc-day`) = fail closed. Enabled only via `wrangler.jsonc` `vars` (not the dashboard: deploy would erase it), after 0017, each step separately approved. Details, options and cost model: `docs/build48/B48C_PLACES_QUOTA.md`.
 - No migration applied, no deploy.
 
 ## 2026-10-22 — Build 48 B48-B worldwide Places Autocomplete (no Turkey default)

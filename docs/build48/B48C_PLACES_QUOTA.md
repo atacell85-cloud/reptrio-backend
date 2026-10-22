@@ -1,7 +1,7 @@
 # B48-C — Per-account Places Autocomplete allowance (100 / day)
 
 Status: IMPLEMENTED; reset policy **APPROVED 2026-10-22: `first-use-24h`**. **Not enabled anywhere:** migration 0017 NOT
-applied to any remote D1, no deploy, `PLACES_DAILY_QUOTA_POLICY` not set (each needs separate approval).
+applied to any remote D1, no deploy, `PLACES_DAILY_QUOTA_POLICY` not in `wrangler.jsonc` (each needs separate approval).
 
 ## 1. What is implemented (branch `build48/integration`)
 - `migrations/0017_places_autocomplete_quota.sql` — additive table `places_autocomplete_usage`, one row per account:
@@ -40,8 +40,10 @@ The superseded rule was Istanbul midnight. Options that were evaluated (B chosen
 | C. Account-local calendar day | Midnight in a stored account time zone | Matches users' notion of "today" | Needs a validated stored time zone (new data, consent/UX); travel and time-zone changes can refill early or block; client-supplied zone can be gamed |
 | D. True rolling 24 h | Count of requests in the last 24 h | Smoothest; strict | Needs per-request rows or buckets (more D1 writes/reads); not implemented |
 
-Chosen: **B**. Enabling = apply 0017 (explicit permission) → deploy the Worker → set
-`PLACES_DAILY_QUOTA_POLICY=first-use-24h`. Rollback = unset the variable (no D1 access).
+Chosen: **B**. Enabling (each step separately approved): apply 0017 → a reviewed commit adds
+`"PLACES_DAILY_QUOTA_POLICY": "first-use-24h"` to `wrangler.jsonc` `vars` → deploy. Rollback = remove it and redeploy.
+**Never set it only in the Cloudflare dashboard:** `wrangler.jsonc` has `vars` and no `keep_vars`, so the next
+`wrangler deploy` would delete a dashboard value and silently disable the quota (guarded by `places-quota-test` §1c).
 
 ## 4. Cost and provider protection (validated 2026-10-22 against official docs)
 - Google Maps Platform pricing page: **Autocomplete Requests** (Essentials) 10,000 free billable events/month, then
@@ -60,7 +62,9 @@ Chosen: **B**. Enabling = apply 0017 (explicit permission) → deploy the Worker
   (100,000 rows written/day across the database) heavy use competes with sync/purge budgets; monitor before enabling.
 - **Worker before mobile:** the Build 48 Worker (B48-B optional locale keys) must be live before any Build 48 mobile
   client ships; the Build 47 Worker answers 400 to the new keys.
-- Rollout order (each step separately approved): apply 0017 → deploy Worker → set `PLACES_DAILY_QUOTA_POLICY=first-use-24h`.
+- Rollout order (each step separately approved): apply 0017 → commit the `wrangler.jsonc` var → deploy. After deploy,
+  verify with a synthetic test account that the 101st Autocomplete within 24 h returns `429 PLACES_DAILY_LIMIT` (and
+  that `/api/places/verify` still works); Google Cloud usage should not grow beyond 100 for that account.
   Rolling back = unset env var (no D1 access). Build 47 clients keep working; they show the generic search error text
   on `PLACES_DAILY_LIMIT` and can still save manually.
 
