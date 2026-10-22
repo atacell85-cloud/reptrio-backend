@@ -1,5 +1,6 @@
 // Google Places New: authenticated server-only relay; no secret in mobile, no name/cache/location logging.
 import {currentUser,sameOrigin} from './account-api.js';
+import {placesQuotaPolicy,reservePlacesAutocomplete} from './places-quota.js';
 const BASE='https://places.googleapis.com/v1/places/';
 const PID=/^[A-Za-z0-9_-]{8,250}$/;
 const UUID=/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
@@ -77,7 +78,7 @@ export async function googlePlacesRequest(mode,payload,key,provider=fetch){
   }catch{return{status:503,body:{code:'PLACES_UPSTREAM_UNAVAILABLE'}}}
   finally{clearTimeout(timeout)}
 }
-export async function handlePlacesRequest(request,env,pathname){
+export async function handlePlacesRequest(request,env,pathname,{approvedQuotaPolicies,now=Date.now}={}){
   const mode=pathname==='/api/places/autocomplete'?'autocomplete':pathname==='/api/places/verify'?'verify':null;
   if(!mode)return null;
   if(request.method!=='POST')return answer({code:'METHOD_NOT_ALLOWED'},405);
@@ -86,6 +87,8 @@ export async function handlePlacesRequest(request,env,pathname){
   let user;try{user=await currentUser(request,env)}catch{return answer({code:'AUTH_UNAVAILABLE'},503)}
   if(!user)return answer({code:'AUTH_REQUIRED'},401);
   if(!env.GOOGLE_MAPS_PLACES_API_KEY||!env.PLACES_LIMITER)return answer({code:'PLACES_NOT_CONFIGURED'},503);
+  const quota=placesQuotaPolicy(env,approvedQuotaPolicies);
+  if(quota.misconfigured)return answer({code:'PLACES_NOT_CONFIGURED'},503);
   let payload;try{
     const raw=await request.text();if(raw.length>768)return answer({code:'PLACES_BAD_REQUEST'},400);
     payload=parsePlaceRequest(JSON.parse(raw),mode);
@@ -95,6 +98,12 @@ export async function handlePlacesRequest(request,env,pathname){
     const throttle=await env.PLACES_LIMITER.limit({key:'places:'+user.id});
     if(!throttle?.success)return answer({code:'PLACES_RATE_LIMITED'},429);
   }catch{return answer({code:'PLACES_UNAVAILABLE'},503)}
+  // Build 48: the daily allowance counts only Autocomplete actually sent upstream (after the burst limiter, before
+  // dispatch); verification is never counted. Accounting failure fails closed with no provider request.
+  if(mode==='autocomplete'&&quota.enabled){
+    let admitted;try{admitted=await reservePlacesAutocomplete(env.DB,user.id,quota,now())}catch{return answer({code:'PLACES_UNAVAILABLE'},503)}
+    if(!admitted)return answer({code:'PLACES_DAILY_LIMIT'},429);
+  }
   const result=await googlePlacesRequest(mode,payload,env.GOOGLE_MAPS_PLACES_API_KEY);
   return answer(result.body,result.status);
 }

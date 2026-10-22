@@ -4,6 +4,11 @@
   
 # Reptrio backend karar kaydı
 
+## 2026-10-22 — Build 48 B48-C per-account Autocomplete allowance (release-gated)
+- Decision #1: max 100 Autocomplete requests actually dispatched upstream per account per day, shared across devices; Place ID verification never counted. Implemented as one atomic conditional D1 upsert (migration 0017, additive) after the burst limiter and before dispatch; units are not refunded after dispatch (conservative billing). Separate from `PLACES_LIMITER` and from Google Cloud quota/budget protection.
+- The reset boundary is NOT decided (Istanbul midnight superseded; UTC not chosen). Candidates `utc-day` and `first-use-24h` are implemented and tested; `APPROVED_PLACES_QUOTA_POLICIES` is empty, so the quota cannot be enabled: env unset = Build 47 behaviour, any configured policy = fail closed. Details, options and cost model: `docs/build48/B48C_PLACES_QUOTA.md`.
+- No migration applied, no deploy.
+
 ## 2026-10-22 — Build 48 B48-B worldwide Places Autocomplete (no Turkey default)
 - Decision #2 (docs/build48/DECISIONS.md): the hard-coded `languageCode:'tr', regionCode:'tr'` is removed. Autocomplete accepts two OPTIONAL fields, `languageCode` (device language tag) and `regionCode` (device region setting, never a location). Build 47 bodies `{input,sessionToken}` stay valid and now reach Google with neither field: Google's documented defaults (Accept-Language, else `en`) and no region bias.
 - The Worker maps the tag to a language Places documents (e.g. `he`→`iw`, `nb`→`no`, `zh-Hant`→`zh-TW`, `en-GB`, `pt-BR`, `es-419`) and keeps only assigned ISO 3166-1 regions; anything else is dropped (never INVALID_ARGUMENT, never Turkey). Malformed types/characters/oversized values and unknown keys are refused (400). `regionCode` is bias/formatting only (official docs); `includedRegionCodes`, location bias/restriction are never sent.
