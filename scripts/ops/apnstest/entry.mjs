@@ -29,19 +29,19 @@ async function operator(request, env, pathname) {
   if (!(await authorized(request, env))) return json({ code: 'UNAUTHORIZED' }, 401);
   const now = Date.now();
   if (pathname === '/apnstest/probe' && request.method === 'POST') {
+    // B48-D: each host is probed with its own credential (production: APNS_*, sandbox: APNS_SANDBOX_*).
     const config = apnsConfig(env);
-    const jwt = config.ready ? await providerToken(config, now) : null;
     const results = [];
     for (const [name, host] of Object.entries(APNS_HOSTS)) {
       const started = Date.now();
       const anonymous = await postLiveActivity({ host, token: UNREGISTERED, jwt: null, payload: endPayload(now), nowMs: now });
       results.push({ host: name, auth: 'none', ...anonymous, apnsId: Boolean(anonymous.apnsId), ms: Date.now() - started });
-      if (jwt) {
-        const signed = await postLiveActivity({ host, token: UNREGISTERED, jwt, payload: endPayload(now), nowMs: now });
+      if (config[name]) {
+        const signed = await postLiveActivity({ host, token: UNREGISTERED, jwt: await providerToken(config[name], now), payload: endPayload(now), nowMs: now });
         results.push({ host: name, auth: 'es256', ...signed, apnsId: Boolean(signed.apnsId) });
       }
     }
-    return json({ configured: config.ready, results });
+    return json({ configured: { production: Boolean(config.production), sandbox: Boolean(config.sandbox) }, results });
   }
   if (pathname === '/apnstest/run' && request.method === 'POST') {
     const waits = [];

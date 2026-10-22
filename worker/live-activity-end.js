@@ -15,7 +15,7 @@
 // Wiring: `POST /api/live-activity/end` and `/api/live-activity/end/cancel` (session auth, handleLiveActivityRequest);
 // the minute step runs inside the existing `* * * * *` cron only when the minute probe (LIVE_ACTIVITY_PROBE_SQL folded
 // into account-lifecycle.js MINUTE_PROBE_SQL) reports work, so an idle minute costs no extra D1 call.
-import { APNS_HOSTS, apnsConfig, classify, endPayload, postLiveActivity, providerToken, PUSH_TOKEN_PATTERN } from './apns.js';
+import { APNS_HOSTS, apnsConfig, classify, CREDENTIAL_MISSING, endPayload, postLiveActivity, providerToken, PUSH_TOKEN_PATTERN } from './apns.js';
 import { currentUser, error, isJsonPost, json, methodOrTypeError, sameOrigin } from './account-api.js';
 
 export const LIVE_ACTIVITY_DORMANT_MS = 30 * 60 * 1000;
@@ -140,19 +140,28 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
   if (!rows.length) return { sent: 0, rows: 0 };
   const config = apnsConfig(env);
   if (!config.ready) { log({ event: 'live_activity_end_unconfigured', due: rows.length }); return { sent: 0, rows: rows.length, unconfigured: true }; }
-  const jwt = await providerToken(config, nowMs);
   let sent = 0;
   for (const row of rows) {
     const claim = await env.DB.prepare(CLAIM_SQL).bind(nowMs, row.user_id, row.workout_id, row.revision).run();
     if (!claim.meta?.changes) continue;
     const payload = endPayload(nowMs);
     const hosts = row.apns_env === 'auto' ? ['production', 'sandbox'] : [row.apns_env];
-    let result, used;
+    // B48-D: each host is signed with its OWN credential; a host without one is skipped (never sent another key's token).
+    let result = null, used = null, missing = null;
+    const legs = [];
     for (const name of hosts) {
+      const credential = config[name];
+      if (!credential) { missing ??= name; continue; }
       used = name;
-      result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt, payload, nowMs, fetchImpl });
-      // A sandbox token on production is BadDeviceToken; a Sandbox-only key on production is a wrong-environment key.
+      result = await postLiveActivity({ host: APNS_HOSTS[name], token: row.push_token, jwt: await providerToken(credential, nowMs), payload, nowMs, fetchImpl });
+      legs.push({ env: name, status: result.status, reason: result.reason });
+      // A sandbox token on production is BadDeviceToken; a key of the other environment is a wrong-environment key.
       if (!(hosts.length > 1 && FALLBACK_REASONS.has(result.reason))) break;
+    }
+    // Nothing sent, or the only host we could try answered "not for this environment" while the other host's credential
+    // is missing: the token may be valid there, so this is a missing credential (retry), never a dead token.
+    if (missing && (!result || (result.status !== 200 && FALLBACK_REASONS.has(result.reason)))) {
+      result = { status: 0, reason: CREDENTIAL_MISSING[missing], apnsId: null };
     }
     const outcome = classify(result);
     const attempts = row.attempts + 1;
@@ -164,7 +173,7 @@ export async function runLiveActivityEnds(env, { nowMs = Date.now(), fetchImpl =
     const finalEnv = row.apns_env === 'auto' && outcome === 'sent' ? used : row.apns_env;
     await env.DB.prepare(FINAL_SQL).bind(state, retry, outcome === 'sent' ? null : `${result.status}:${result.reason || ''}`.slice(0, 80), finalEnv, row.user_id, row.workout_id, row.revision, nowMs).run();
     // Never log the push token or the provider token.
-    log({ event: 'live_activity_end', outcome, status: result.status, reason: result.reason, apnsId: Boolean(result.apnsId), env: used });
+    log({ event: 'live_activity_end', outcome, status: result.status, reason: result.reason, apnsId: Boolean(result.apnsId), env: used, legs });
   }
   return { sent, rows: rows.length };
 }

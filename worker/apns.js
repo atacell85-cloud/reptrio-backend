@@ -1,6 +1,6 @@
 // Build 45 B45-APNs-01 CANDIDATE: APNs provider API for ActivityKit Live Activity pushes (token-based auth, ES256).
 // Workers `fetch` speaks HTTP/2 to APNs on the deployed edge (not under local `wrangler dev`); APNs refuses HTTP/1.1.
-// The .p8 key only ever comes from the Worker secret APNS_PRIVATE_KEY; it is never logged or returned.
+// The .p8 keys only ever come from Worker secrets (APNS_PRIVATE_KEY, APNS_SANDBOX_PRIVATE_KEY); never logged or returned.
 
 export const APNS_HOSTS = { production: 'https://api.push.apple.com', sandbox: 'https://api.sandbox.push.apple.com' };
 export const LIVE_ACTIVITY_TOPIC = 'com.reptrio.mobile.push-type.liveactivity';
@@ -11,22 +11,37 @@ export const END_CONTENT_STATE = { uiJsonData: 'G94BoIzUVnkjBA9BAPNK/VbluEdJ8ACl
 // A provider token is valid for one hour and must not be refreshed more often than every 20 minutes: claims are bucketed
 // to 40 minutes, so every invocation inside a bucket presents the same iat (and an isolate reuses the signed string).
 const TOKEN_BUCKET_SECONDS = 40 * 60;
-let memo = { key: '', token: '' };
+// Build 48 B48-D: one memo entry per credential (key id, team, key material, bucket), so alternating production and
+// sandbox sends never re-sign every time and a token signed with one key can never be served for another.
+const memo = new Map();
+const MEMO_LIMIT = 4;
 
+// Build 48 B48-D: Apple APNs keys can be environment-scoped (Apple Developer shows a Production-only REPTRIO key and a
+// Sandbox-only Live Activity key). Each host is signed with its own credential and never with the other's:
+// - production: APNS_KEY_ID + APNS_PRIVATE_KEY (+ APNS_TEAM_ID) — the existing secrets, unchanged;
+// - sandbox:    APNS_SANDBOX_KEY_ID + APNS_SANDBOX_PRIVATE_KEY (+ APNS_SANDBOX_TEAM_ID, else APNS_TEAM_ID).
+// A missing/invalid credential is null: that host is never contacted (no production token on the sandbox host).
+const KEY_OR_TEAM = /^[A-Z0-9]{10}$/;
+function credential(keyId, teamId, privateKey) {
+  return KEY_OR_TEAM.test(keyId || '') && KEY_OR_TEAM.test(teamId || '') && privateKey ? { keyId, teamId, privateKey } : null;
+}
 export function apnsConfig(env) {
-  const config = { keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID, privateKey: env.APNS_PRIVATE_KEY };
-  return { ...config, ready: Boolean(/^[A-Z0-9]{10}$/.test(config.keyId || '') && /^[A-Z0-9]{10}$/.test(config.teamId || '') && config.privateKey) };
+  const production = credential(env.APNS_KEY_ID, env.APNS_TEAM_ID, env.APNS_PRIVATE_KEY);
+  const sandbox = credential(env.APNS_SANDBOX_KEY_ID, env.APNS_SANDBOX_TEAM_ID || env.APNS_TEAM_ID, env.APNS_SANDBOX_PRIVATE_KEY);
+  return { production, sandbox, ready: Boolean(production || sandbox) };
 }
 
 export async function providerToken(config, nowMs) {
   const iat = Math.floor(nowMs / 1000 / TOKEN_BUCKET_SECONDS) * TOKEN_BUCKET_SECONDS;
   const memoKey = `${config.keyId}:${config.teamId}:${iat}:${config.privateKey}`;
-  if (memo.key === memoKey) return memo.token;
+  if (memo.has(memoKey)) return memo.get(memoKey);
   const input = `${b64urlJson({ alg: 'ES256', kid: config.keyId })}.${b64urlJson({ iss: config.teamId, iat })}`;
   const key = await crypto.subtle.importKey('pkcs8', pemBytes(config.privateKey), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const signature = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(input)));
-  memo = { key: memoKey, token: `${input}.${b64url(signature)}` };
-  return memo.token;
+  const token = `${input}.${b64url(signature)}`;
+  if (memo.size >= MEMO_LIMIT) memo.delete(memo.keys().next().value);
+  memo.set(memoKey, token);
+  return token;
 }
 
 export function endPayload(nowMs) {
@@ -64,8 +79,12 @@ export async function postLiveActivity({ host, token, jwt, payload, nowMs, expir
 
 // APNs outcome -> what the scheduler does with the row.
 // Reasons per Apple's "Handling notification responses from APNs".
+// No credential for the host this token needs (B48-D): nothing was sent there; retry like an auth problem (15 min) so the
+// row survives until the operator adds the secret, and never DEAD on that basis.
+export const CREDENTIAL_MISSING = { production: 'ProductionCredentialMissing', sandbox: 'SandboxCredentialMissing' };
 export function classify({ status, reason }) {
   if (status === 200) return 'sent';
+  if (reason === CREDENTIAL_MISSING.production || reason === CREDENTIAL_MISSING.sandbox) return 'auth';
   if (reason === 'InvalidTokenFormat') return 'dead';
   if (status === 0 || reason === 'IdleTimeout') return 'retry';
   // Apple: do not retry Forbidden.

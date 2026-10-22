@@ -17,9 +17,14 @@ const ec = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' 
 const pkcs8 = Buffer.from(await crypto.subtle.exportKey('pkcs8', ec.privateKey)).toString('base64');
 const PEM = `-----BEGIN PRIVATE KEY-----\n${pkcs8.match(/.{1,64}/g).join('\n')}\n-----END PRIVATE KEY-----`;
 
-function setup({ configured = true } = {}) {
+// B48-D: a separate Sandbox key (Apple: environment-scoped keys).
+const sbx = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+const SANDBOX_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey('pkcs8', sbx.privateKey)).toString('base64').match(/.{1,64}/g).join('\n')}\n-----END PRIVATE KEY-----`;
+const SANDBOX_SECRETS = { APNS_SANDBOX_KEY_ID: 'SBX1234567', APNS_SANDBOX_PRIVATE_KEY: SANDBOX_PEM };
+
+function setup({ configured = true, sandbox = false, production = configured } = {}) {
   const db = createD1();
-  const env = { DB: db, ...(configured ? { APNS_KEY_ID: 'KEY1234567', APNS_TEAM_ID: 'C4P47F32C8', APNS_PRIVATE_KEY: PEM } : {}) };
+  const env = { DB: db, ...(production ? { APNS_KEY_ID: 'KEY1234567', APNS_PRIVATE_KEY: PEM } : {}), ...(configured || sandbox ? { APNS_TEAM_ID: 'C4P47F32C8' } : {}), ...(sandbox ? SANDBOX_SECRETS : {}) };
   db.raw.prepare("INSERT INTO users(id,email,password_hash,password_salt,created_at) VALUES ('u1','u1@example.test','h','s',?)").run(new Date(T0).toISOString());
   const pushes = [];
   let respond = () => new Response(null, { status: 200, headers: { 'apns-id': 'id-1' } });
@@ -184,7 +189,7 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   await t.report(T0 + 40 * MIN, TOKEN_A, T0 + 40 * MIN);
   assert.equal(t.row().state, 'PENDING', 'exhausted retries re-arm on newer activity'); assert.equal(t.row().attempts, 0);
   // 'auto': a development-signed build's sandbox token is BadDeviceToken on production, then sent via sandbox.
-  const auto = setup(); await auto.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  const auto = setup({ sandbox: true }); await auto.report(T0, TOKEN_A, T0, 'w1', 'auto');
   auto.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(400, 'BadDeviceToken')() : reply(200)());
   await auto.run(T0 + 30 * MIN);
   assert.deepEqual(auto.pushes.map(p => new URL(p.url).host), ['api.push.apple.com', 'api.sandbox.push.apple.com']);
@@ -192,7 +197,7 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   // A Sandbox-only key on production: Apple's live answer is 403 BadEnvironmentKeyInToken (observed 2026-10-16), the
   // documented spelling BadEnvironmentKeyIdInToken. 'auto' falls back to sandbox for both; a fixed env does not.
   for (const reason of ['BadEnvironmentKeyInToken', 'BadEnvironmentKeyIdInToken']) {
-    const sandboxKey = setup(); await sandboxKey.report(T0, TOKEN_A, T0, 'w1', 'auto');
+    const sandboxKey = setup({ sandbox: true }); await sandboxKey.report(T0, TOKEN_A, T0, 'w1', 'auto');
     sandboxKey.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(403, reason)() : reply(200)());
     await sandboxKey.run(T0 + 30 * MIN);
     assert.equal(sandboxKey.row().state, 'SENT', reason); assert.equal(sandboxKey.row().apns_env, 'sandbox');
@@ -406,7 +411,7 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
 // (network) keeps 'auto', so the sandbox fallback still happens next time; (b) a run whose send outlived the lease
 // never overwrites the outcome another run recorded for the same revision.
 {
-  const t = setup(); await t.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  const t = setup({ sandbox: true }); await t.report(T0, TOKEN_A, T0, 'w1', 'auto');
   t.setRespond(() => { throw new Error('connection reset'); });
   await t.run(T0 + 30 * MIN);
   assert.equal(t.row().apns_env, 'auto', 'environment not learned from a failed attempt');
@@ -441,4 +446,110 @@ const reply = (status, reason) => () => new Response(reason ? JSON.stringify({ r
   assert.equal(t.db.metrics.batches, 1); assert.equal(t.db.metrics.queries, 5);
 }
 
-console.log('Live Activity end (Build 45): 30:00 deadline, late Watch events, continuation, token rotation, send race, delayed/undelivered end push, new workout, offline expiry, APNs outcomes + sandbox fallback, lease sweep, validation/skew/120-min, exact request + decodable content-state, ES256 token, log hygiene, FK cascade and D1 cost passed.');
+// 19. Build 48 B48-D: one credential per APNs host. Production evidence 2026-10-22: a development-signed iPhone (sandbox
+// token), row 'auto', production key only -> production BadDeviceToken -> sandbox signed with the PRODUCTION key ->
+// 403 BadEnvironmentKeyInToken. Now the sandbox host is signed only with the sandbox key, or not contacted at all.
+{
+  const jwtOf = push => push.init.headers.authorization.replace(/^bearer /, '');
+  const part = (jwt, i) => JSON.parse(Buffer.from(jwt.split('.')[i], 'base64url').toString());
+  const signedBy = async (jwt, publicKey) => { const [h, p, sig] = jwt.split('.'); return crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, publicKey, Buffer.from(sig, 'base64url'), new TextEncoder().encode(`${h}.${p}`)); };
+  const host = push => new URL(push.url).host;
+  const sandboxFirst = url => url.startsWith('https://api.push.apple.com') ? reply(400, 'BadDeviceToken')() : reply(200)();
+
+  // a. Both keys: each host gets a JWT of its own key (kid + signature); never the production key on sandbox.
+  const both = setup({ sandbox: true }); await both.report(T0, TOKEN_A, T0, 'w1', 'auto'); both.setRespond(sandboxFirst);
+  await both.run(T0 + 30 * MIN);
+  assert.deepEqual(both.pushes.map(host), ['api.push.apple.com', 'api.sandbox.push.apple.com']);
+  const [prodJwt, sbxJwt] = both.pushes.map(jwtOf);
+  assert.equal(part(prodJwt, 0).kid, 'KEY1234567'); assert.ok(await signedBy(prodJwt, ec.publicKey));
+  assert.equal(part(sbxJwt, 0).kid, 'SBX1234567'); assert.ok(await signedBy(sbxJwt, sbx.publicKey), 'sandbox JWT signed with the sandbox key');
+  assert.ok(!(await signedBy(sbxJwt, ec.publicKey)), 'never a production-key token on the sandbox host');
+  assert.equal(part(sbxJwt, 1).iss, 'C4P47F32C8', 'shared team by default');
+  assert.equal(both.row().state, 'SENT'); assert.equal(both.row().apns_env, 'sandbox');
+
+  // b. The observed production situation (sandbox secret not yet added): no request to sandbox at all, the row is
+  //    kept (retry in 15 min, not DEAD); once the operator adds the sandbox secrets, the retry is delivered.
+  const prodOnly = setup(); await prodOnly.report(T0, TOKEN_A, T0, 'w1', 'auto'); prodOnly.setRespond(sandboxFirst);
+  await prodOnly.run(T0 + 30 * MIN);
+  assert.deepEqual(prodOnly.pushes.map(host), ['api.push.apple.com'], 'sandbox host not contacted without its key');
+  assert.equal(prodOnly.row().state, 'PENDING'); assert.equal(prodOnly.row().last_error, '0:SandboxCredentialMissing');
+  assert.equal(prodOnly.row().retry_ms, T0 + 45 * MIN); assert.equal(prodOnly.row().apns_env, 'auto');
+  Object.assign(prodOnly.env, SANDBOX_SECRETS);
+  await prodOnly.run(T0 + 45 * MIN);
+  assert.deepEqual(prodOnly.pushes.map(host), ['api.push.apple.com', 'api.push.apple.com', 'api.sandbox.push.apple.com']);
+  assert.equal(part(jwtOf(prodOnly.pushes[2]), 0).kid, 'SBX1234567');
+  assert.equal(prodOnly.row().state, 'SENT'); assert.equal(prodOnly.row().apns_env, 'sandbox'); assert.equal(prodOnly.row().last_error, null);
+
+  // c. Explicit environments use only their own credential.
+  const sbxRow = setup({ sandbox: true }); await sbxRow.report(T0, TOKEN_A, T0, 'w1', 'sandbox'); await sbxRow.run(T0 + 30 * MIN);
+  assert.deepEqual(sbxRow.pushes.map(host), ['api.sandbox.push.apple.com']); assert.equal(part(jwtOf(sbxRow.pushes[0]), 0).kid, 'SBX1234567');
+  const prodRow = setup({ sandbox: true }); await prodRow.report(T0); await prodRow.run(T0 + 30 * MIN);
+  assert.deepEqual(prodRow.pushes.map(host), ['api.push.apple.com']); assert.equal(part(jwtOf(prodRow.pushes[0]), 0).kid, 'KEY1234567');
+  const sbxMissing = setup(); await sbxMissing.report(T0, TOKEN_A, T0, 'w1', 'sandbox'); await sbxMissing.run(T0 + 30 * MIN);
+  assert.equal(sbxMissing.pushes.length, 0); assert.equal(sbxMissing.row().state, 'PENDING'); assert.equal(sbxMissing.row().last_error, '0:SandboxCredentialMissing');
+  const prodMissing = setup({ production: false, sandbox: true }); await prodMissing.report(T0); await prodMissing.run(T0 + 30 * MIN);
+  assert.equal(prodMissing.pushes.length, 0); assert.equal(prodMissing.row().last_error, '0:ProductionCredentialMissing'); assert.equal(prodMissing.row().state, 'PENDING');
+
+  // d. 'auto' with only the sandbox key: sandbox delivers; a BadDeviceToken there is NOT proof of a dead token (it may be
+  //    a production token whose host has no key yet) -> retry, never DEAD. With both keys and both hosts refusing -> DEAD.
+  const onlySbx = setup({ production: false, sandbox: true }); await onlySbx.report(T0, TOKEN_A, T0, 'w1', 'auto'); await onlySbx.run(T0 + 30 * MIN);
+  assert.deepEqual(onlySbx.pushes.map(host), ['api.sandbox.push.apple.com']); assert.equal(onlySbx.row().state, 'SENT');
+  const prodToken = setup({ production: false, sandbox: true }); await prodToken.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  prodToken.setRespond(reply(400, 'BadDeviceToken')); await prodToken.run(T0 + 30 * MIN);
+  assert.equal(prodToken.row().state, 'PENDING', 'not DEAD while the production host is untried'); assert.equal(prodToken.row().last_error, '0:ProductionCredentialMissing');
+  const deadBoth = setup({ sandbox: true }); await deadBoth.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  deadBoth.setRespond(reply(400, 'BadDeviceToken')); await deadBoth.run(T0 + 30 * MIN);
+  assert.equal(deadBoth.pushes.length, 2); assert.equal(deadBoth.row().state, 'DEAD', 'both hosts tried and refused');
+  // A non-environment answer on production (e.g. Unregistered) ends there, as before.
+  const gone = setup({ sandbox: true }); await gone.report(T0, TOKEN_A, T0, 'w1', 'auto'); gone.setRespond(reply(410, 'Unregistered')); await gone.run(T0 + 30 * MIN);
+  assert.equal(gone.pushes.length, 1); assert.equal(gone.row().state, 'DEAD');
+  // Production key valid but the sandbox key is the wrong environment (misconfigured secret): retry, not DEAD.
+  const wrongSbx = setup({ sandbox: true }); await wrongSbx.report(T0, TOKEN_A, T0, 'w1', 'auto');
+  wrongSbx.setRespond(url => url.startsWith('https://api.push.apple.com') ? reply(400, 'BadDeviceToken')() : reply(403, 'BadEnvironmentKeyInToken')());
+  await wrongSbx.run(T0 + 30 * MIN);
+  assert.equal(wrongSbx.row().state, 'PENDING'); assert.equal(wrongSbx.row().last_error, '403:BadEnvironmentKeyInToken'); assert.equal(wrongSbx.row().retry_ms, T0 + 45 * MIN);
+
+  // e. Missing credential keeps retrying every 15 min and ends FAILED after the attempt cap, before the 150-min expiry;
+  //    newer activity re-arms (as for any exhausted retry).
+  const capped = setup(); await capped.report(T0, TOKEN_A, T0, 'w1', 'sandbox');
+  let at = T0 + 30 * MIN;
+  for (let i = 0; i < 8 && capped.row().state === 'PENDING'; i++) { await capped.run(at); at = capped.row().retry_ms ?? at; }
+  assert.equal(capped.row().state, 'FAILED'); assert.equal(capped.row().attempts, 6); assert.equal(capped.pushes.length, 0);
+  assert.ok(at - T0 < 150 * MIN);
+
+  // f. Credentials: optional APNS_SANDBOX_TEAM_ID; malformed key id = missing; neither = unconfigured (no claim).
+  const team = setup({ sandbox: true }); team.env.APNS_SANDBOX_TEAM_ID = 'TEAMSBX123';
+  await team.report(T0, TOKEN_A, T0, 'w1', 'sandbox'); await team.run(T0 + 30 * MIN);
+  assert.equal(part(jwtOf(team.pushes[0]), 1).iss, 'TEAMSBX123');
+  const bad = setup({ sandbox: true }); bad.env.APNS_SANDBOX_KEY_ID = 'bad'; await bad.report(T0, TOKEN_A, T0, 'w1', 'sandbox'); await bad.run(T0 + 30 * MIN);
+  assert.equal(bad.pushes.length, 0); assert.equal(bad.row().last_error, '0:SandboxCredentialMissing');
+  const none = setup({ configured: false }); await none.report(T0, TOKEN_A, T0, 'w1', 'auto'); const r = await none.run(T0 + 30 * MIN);
+  assert.equal(r.unconfigured, true); assert.equal(none.row().attempts, 0, 'unconfigured: not claimed');
+
+  // g. Provider-token cache per credential: alternating hosts reuse each key's own token inside the 40-min bucket.
+  const alt = setup({ sandbox: true });
+  for (const [w, env] of [['w1', 'production'], ['w2', 'sandbox'], ['w3', 'production'], ['w4', 'sandbox']]) await alt.report(T0, TOKEN_A, T0, w, env);
+  await alt.run(T0 + 30 * MIN); await alt.run(T0 + 31 * MIN);
+  const byHost = {}; for (const p of alt.pushes) (byHost[host(p)] ??= new Set()).add(jwtOf(p));
+  assert.equal(byHost['api.push.apple.com'].size, 1); assert.equal(byHost['api.sandbox.push.apple.com'].size, 1);
+  assert.notEqual([...byHost['api.push.apple.com']][0], [...byHost['api.sandbox.push.apple.com']][0]);
+
+  // h. Logs: every leg's env/status/reason for diagnosis; never a push token, provider token, key id or key material.
+  const logs = [...both.logs, ...prodOnly.logs, ...wrongSbx.logs];
+  const legs = JSON.parse(both.logs.at(-1)).legs;
+  assert.deepEqual(legs, [{ env: 'production', status: 400, reason: 'BadDeviceToken' }, { env: 'sandbox', status: 200, reason: null }]);
+  for (const line of logs) { assert.ok(!line.includes(TOKEN_A)); assert.ok(!/bearer|eyJ|PRIVATE KEY|KEY1234567|SBX1234567/.test(line)); }
+}
+
+// 20. B48-D operator key probe (scripts/ops/apns-key-probe.mjs): Apple's answer to an unregistered token -> verdict.
+{
+  const { keyProbeVerdict } = await import('./ops/apns-key-probe.mjs');
+  assert.equal(keyProbeVerdict({ status: 400, reason: 'BadDeviceToken' }), 'ACCEPTED');
+  assert.equal(keyProbeVerdict({ status: 403, reason: 'BadEnvironmentKeyInToken' }), 'WRONG_ENVIRONMENT');
+  assert.equal(keyProbeVerdict({ status: 403, reason: 'BadEnvironmentKeyIdInToken' }), 'WRONG_ENVIRONMENT');
+  assert.equal(keyProbeVerdict({ status: 403, reason: 'InvalidProviderToken' }), 'INVALID_KEY_OR_TEAM');
+  assert.equal(keyProbeVerdict({ status: 0, reason: 'NetworkError' }), 'NETWORK_ERROR');
+  assert.equal(keyProbeVerdict({ status: 200, reason: null }), 'UNEXPECTED', 'an unregistered token can never be delivered');
+}
+
+console.log('Live Activity end (Build 45): 30:00 deadline, late Watch events, continuation, token rotation, send race, delayed/undelivered end push, new workout, offline expiry, APNs outcomes + sandbox fallback, lease sweep, validation/skew/120-min, exact request + decodable content-state, ES256 token, log hygiene, FK cascade and D1 cost passed; B48-D per-host credentials (no production key on sandbox, missing key = retry not DEAD, per-credential token cache, leg logs).');

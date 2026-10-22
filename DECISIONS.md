@@ -4,6 +4,9 @@
   
 # Reptrio backend karar kaydı
 
+## 2026-10-23 — Build 48 B48-D APNs credentials per environment
+- User-approved task (2026-10-23). Each APNs host is signed with its own key: production `APNS_KEY_ID/APNS_PRIVATE_KEY(+APNS_TEAM_ID)` (unchanged), sandbox `APNS_SANDBOX_KEY_ID/APNS_SANDBOX_PRIVATE_KEY(+APNS_SANDBOX_TEAM_ID or APNS_TEAM_ID)`. No shared fallback; a host without its credential is not contacted and the row retries (15 min) instead of being marked dead. Per-credential JWT cache; per-leg logs without secrets. Root cause of the 2026-10-22 `403:BadEnvironmentKeyInToken`: the sandbox leg was signed with the production key. Runbook, key probe and acceptance: `docs/build48/B48D_APNS_CREDENTIALS.md`. No deploy, no secret change.
+
 ## 2026-10-22 — Build 48 B48-C per-account Autocomplete allowance (release-gated)
 - Decision #1: max 100 Autocomplete requests actually dispatched upstream per account per day, shared across devices; Place ID verification never counted. Implemented as one atomic conditional D1 upsert (migration 0017, additive) after the burst limiter and before dispatch; units are not refunded after dispatch (conservative billing). Separate from `PLACES_LIMITER` and from Google Cloud quota/budget protection.
 - Reset boundary decided by the user on 2026-10-22: **`first-use-24h`** (24 h from the first counted search; no time zone). `APPROVED_PLACES_QUOTA_POLICIES = ['first-use-24h']`; env unset = Build 47 behaviour, any other value (incl. the rejected `utc-day`) = fail closed. Enabled only via `wrangler.jsonc` `vars` (not the dashboard: deploy would erase it), after 0017, each step separately approved. Details, options and cost model: `docs/build48/B48C_PLACES_QUOTA.md`.

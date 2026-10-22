@@ -6,6 +6,8 @@
 // - one cron, the production minute cron (account purge + Live Activity end). Workers Free allows 5 crons per account;
 //   production needs 3 after the Build 44 deploy.
 // - APNS_TEAM_ID is public; APNS_KEY_ID / APNS_PRIVATE_KEY / APNSTEST_TOKEN are Worker secrets (never in the repo).
+// - Build 48 B48-D: the sandbox host is signed only with APNS_SANDBOX_KEY_ID / APNS_SANDBOX_PRIVATE_KEY; this staging
+//   Worker's Sandbox key must also be stored under those names before deploying B48-D here (see docs/build48/B48D_APNS_CREDENTIALS.md).
 {
   "$schema": "../../../node_modules/wrangler/config-schema.json",
   "name": "a2-workout-apnstest",
