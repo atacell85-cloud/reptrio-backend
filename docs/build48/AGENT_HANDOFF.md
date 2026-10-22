@@ -1,14 +1,14 @@
 # REPTRIO Build 48 — Coding Agent Execution Handoff
 
 Created: 2026-10-22
-Status: READY FOR AGENT / APNs PHYSICAL OBSERVATION IN PROGRESS
+Status: READY FOR AGENT / B48-D QUEUED AFTER APNs 403 EVIDENCE
 Read this file and `docs/build48/DECISIONS.md` in **both** repositories before any changes.
 Repos:
 - `atacell85-cloud/reptrio-mobile`, branch `build48/integration` (baseline Build 47 `ea80a22192cbb02ff8b4b185bd542f70381facc9`)
 - `atacell85-cloud/reptrio-backend`, branch `build48/integration` (baseline Build 47 `0dfca57c445140597bba01c3fc61e37476ac4b18`)
 
 ## Agent mission
-Implement the **non-APNs Build 48 scope** now, in safe, reviewable slices. Do not repeat work already present in Build 47. Start with a read-only audit of the exact current branches, diff, decisions and tests. Use isolated worktrees if necessary; do not touch or reset the operator's existing Build 47 / installed iOS build / dirty worktrees. All code changes must remain on Build 48 branches. Tests and Guardian before marking any slice done. Explicitly separate implemented/tested from proposed/pending.
+Implement approved Build 48 work in safe, reviewable slices: B48-A/B/C first, then queued backend APNs credential routing B48-D. Do not repeat work already present in Build 47. Start with a read-only audit of the exact current branches, diff, decisions and tests. Use isolated worktrees if necessary; do not touch or reset the operator's existing Build 47 / installed iOS build / dirty worktrees. All code changes must remain on Build 48 branches. Tests and Guardian before marking any slice done. Explicitly separate implemented/tested from proposed/pending.
 
 ## Confirmed existing behavior to preserve
 - `src/GymPickerModal.tsx`: Autocomplete **already fires automatically** for 3+ character input after a **400 ms debounce**; there is **no separate 'Ara' button** and **no visible quota counter**. Keep this; do not invent a second search control or spend time recreating it.
@@ -42,20 +42,33 @@ Implement the **non-APNs Build 48 scope** now, in safe, reviewable slices. Do no
 4. Preserve provider account-wide spending protection and real provider usage monitoring distinct from individual-user quotas. Validate current Google Places (New) pricing/terms, session token billing and attribution against current official docs before asserting a cost model.
 5. Tests: concurrency across two+ devices, exactly 100 admitted and 101st rejected, reset boundary once chosen, restart persistence, duplicate requests, verification untouched, legacy clients, low/free budget, account deletion, partial migration/rollout compatibility.
 
-## APNs / Live Activity — HOLD, not a coding task yet
-- Current device: physical iPhone installed `1.2.0 (47)`, local signed release `.app` verified: Voltra push enabled, `aps-environment=development` (Sandbox), `main.jsbundle` SHA matched, signature PASS.
-- Production Cloudflare secret **names** `APNS_KEY_ID`, `APNS_PRIVATE_KEY`, `APNS_TEAM_ID` are all present (their values/environments not yet proven).
-- Production `live_activity_end` D1 row last observed: `PENDING`, `auto`, `attempts=0`, no error; last meaningful activity 2026-10-22 16:52:47 UTC and **deadline 2026-10-22 17:22:47 UTC = 20:22:47 Istanbul**. Observation was at 16:59:39 UTC, **before** deadline, so zero attempts is expected and NOT evidence of a failing cron.
-- Operator is conducting physical lock-screen test. **DO NOT** edit Live Activity/Watch code, APNs keys, scheduled Workers, production D1, production Worker or device builds while this test is in progress. No diagnosis or 'fix' based on a pending pre-deadline row.
-- After the user supplies post-deadline read-only evidence (row state/attempts/error + actual lock-screen result), separately analyze server scheduling, APNs acceptance and foreground local dormancy. Existing Build 45 staging APNs end test PASS is not proof of this Build 47 production end-to-end.
-- Read existing Build 45 record before suggesting any reimplementation: mobile `docs/builds/BUILD_1.2.0-45.md`, backend `docs/BUILD_45_APNS_01_FEASIBILITY.md`.
+### B48-D — APNs Sandbox/Production credential separation (backend, after A/B and unblocked C slices)
+**New verified defect (2026-10-22):** physical iPhone runs development-signed 1.2.0 (47), `aps-environment=development`; production D1 recorded `live_activity_end` `PENDING`, `auto`, deadline **2026-10-22 17:22:47 UTC**, and **after deadline** at 17:26:41 UTC: `attempts=1`, `last_error=403:BadEnvironmentKeyInToken`. Thus mobile scheduling, 30-min server deadline and cron send attempt are observed working; APNs environment/credential mismatch is the confirmed **remote-end delivery** blocker. Do not claim the foreground/local or Watch dormancy problem is fixed by this.
+
+Apple Developer UI shows distinct Team Scoped keys: **REPTRIO Production APNs** (Production, created Oct 18) and **Reptrio Live Activity APNs** (Sandbox, created Oct 16), plus an unrelated Expo key supporting Sandbox & Production. Production Worker has `APNS_KEY_ID`, `APNS_PRIVATE_KEY`, `APNS_TEAM_ID` **secret names** present; the secret *values* / which key ID is actually installed have not been read or proven. Current `worker/apns.js` / `worker/live-activity-end.js` reuse the same credential/JWT for both hosts, despite host fallback on `BadEnvironmentKeyInToken`.
+
+**Scope and order:**
+1. First confirm code paths, historical Build 45 sandbox acceptance and current Build 47 production send error. Preserve Build 45 scheduler architecture, cron schedule, 30m event semantics, existing D1 data and backward compatibility.
+2. Implement separate **environment-specific credentials** for Apple provider token generation on Build 48 backend. **Keep existing** `APNS_KEY_ID` + `APNS_PRIVATE_KEY` as the production credential *only after validating its environment via safe metadata/probe*; add separate `APNS_SANDBOX_KEY_ID` + `APNS_SANDBOX_PRIVATE_KEY` for Sandbox. Existing team ID can be shared if valid for both keys; do not assume if accounts/teams differ. JWT cache and token selection must be scoped by credential/environment; never reuse a production-only token on the sandbox host. For `apns_env=auto`, preserve safe host fallback and make each host use its matching credential. Prefer missing-credential fail-closed handling that does not drop a valid pending activity prematurely.
+3. Do not rotate/delete/overwrite production APNs secrets or touch Expo/Apple OAuth keys. Do not print private keys, live activity tokens, device IDs or JWTs in tests/logs. Never put secrets in Git.
+4. Test sandbox and production separate keys, auto fallback `BadEnvironmentKeyInToken`/`BadDeviceToken`, explicit environments, invalid/missing host credential, retry/expiration, race/revision guard, APNs 200 and 403 responses, cron/resource budgets and no regression to production push or Build 47 client payloads. Document how to identify the currently deployed Key ID safely without reading its private key.
+5. Have independent HIGH Guardian review focused on credentials, auth, push correctness and regressions; commit/push tested code to **Build 48 backend only**. Prepare an operator runbook for adding the new **Sandbox secret names**, verifying both environments and observing physical 30-minute Live Activity dismissal.
+6. **Release gate:** no `wrangler secret put/delete`, key uploads, production deployments, D1 writes/migrations, iOS builds, TestFlight or device install without a separate explicit approval. After backend release, validate real locked iPhone (Sandbox) and separate production/TestFlight APNs behavior. Independently investigate app foreground-local dormancy and Watch return-to-watch-face; do not claim this credential fix solves them.
+
+**Scheduling:** This is newly queued after B48-A/B and the independently implementable B48-C work. Since the C daily reset policy is unresolved, **do not block D solely on that product decision**. Other already-started Build 48 work should continue without interruption.
+
+## Physical APNs follow-up — remote-end evidence captured; no device mutation
+- Latest post-deadline production read is `PENDING`, `auto`, `attempts=1`, `last_error=403:BadEnvironmentKeyInToken` (2026-10-22 17:26:41 UTC), after scheduled 17:22:47 UTC. Earlier `attempts=0` was a valid pre-deadline state; do not perpetuate it as the latest evidence.
+- The user confirmed the development-signed physical Build 47 binary has Voltra push enabled and matching local JS bundle/signature. Production Worker contains all three APNs secret *names*, but the actual key identities are not verified; Apple Developer lists distinct Production and Sandbox APNs keys.
+- The new credential-routing **code task** is B48-D above. Device-side local foreground timeout and Apple Watch returning to the watch face must be independently investigated after explicit device test evidence. Keep the current user device/build and production configuration untouched until separately approved.
+- Prior Build 45 locked-iPhone staging APNs end push passed. Preserve it; do not reimplement an already shipped design. Read mobile `docs/builds/BUILD_1.2.0-45.md` and backend `docs/BUILD_45_APNS_01_FEASIBILITY.md`.
 
 ## Safety / deliverables
 - Keep Build 47, `main`, previous builds, user data and installed app intact. No merges, production migrations, production deploy, APNs secret edits, TestFlight/EAS, native install, or cloud resource creation without separate user approval.
 - Preflight: print current repo path, branch, exact HEAD, worktree status; preserve any existing user changes; read both decision files plus relevant source/tests.
 - Implement incrementally with meaningful tests. Run focused suites, typecheck and relevant repo Guardian; never report tests as run unless actual logs/results exist. Review backward compatibility and billing/policy compliance.
 - Commit/push only verified Build 48 changes to the designated Build 48 branches (not any Build 47 branch); use small named commits and report SHAs. If a concurrent Build 48 update exists, fetch/reconcile safely, no force push.
-- Output a final factual report: source baselines, exact changes, old behavior not modified, test evidence, unresolved quota reset decision, deferred APNs work, and the precise next physical/production acceptance checks.
+- Output a final factual report: source baselines, exact changes, old behavior not modified, test evidence, unresolved quota reset decision, B48-D APNs key-separation evidence and gates, and the precise next physical/production acceptance checks.
 
 ## Explicit blocker handling
 If policy reset remains undecided, proceed fully with B48-A and B48-B and independently testable portions of B48-C. Report the one required policy decision clearly; do not stall everything or fabricate an answer.
