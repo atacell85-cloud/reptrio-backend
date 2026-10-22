@@ -1,14 +1,14 @@
 # REPTRIO Build 48 — Coding Agent Execution Handoff
 
 Created: 2026-10-22
-Status: READY FOR AGENT / B48-D QUEUED AFTER APNs 403 EVIDENCE
+Status: READY FOR AGENT / B48-D AND B48-E QUEUED (NO CODE CHANGE BY THIS DOC)
 Read this file and `docs/build48/DECISIONS.md` in **both** repositories before any changes.
 Repos:
 - `atacell85-cloud/reptrio-mobile`, branch `build48/integration` (baseline Build 47 `ea80a22192cbb02ff8b4b185bd542f70381facc9`)
 - `atacell85-cloud/reptrio-backend`, branch `build48/integration` (baseline Build 47 `0dfca57c445140597bba01c3fc61e37476ac4b18`)
 
 ## Agent mission
-Implement approved Build 48 work in safe, reviewable slices: B48-A/B/C first, then queued backend APNs credential routing B48-D. Do not repeat work already present in Build 47. Start with a read-only audit of the exact current branches, diff, decisions and tests. Use isolated worktrees if necessary; do not touch or reset the operator's existing Build 47 / installed iOS build / dirty worktrees. All code changes must remain on Build 48 branches. Tests and Guardian before marking any slice done. Explicitly separate implemented/tested from proposed/pending.
+Implement approved Build 48 work in safe, reviewable slices: B48-A/B/C first, then queued backend APNs credential routing B48-D and legacy catalog-link compatibility B48-E (mobile). Do not repeat work already present in Build 47. Start with a read-only audit of the exact current branches, diff, decisions and tests. Use isolated worktrees if necessary; do not touch or reset the operator's existing Build 47 / installed iOS build / dirty worktrees. All code changes must remain on Build 48 branches. Tests and Guardian before marking any slice done. Explicitly separate implemented/tested from proposed/pending.
 
 ## Confirmed existing behavior to preserve
 - `src/GymPickerModal.tsx`: Autocomplete **already fires automatically** for 3+ character input after a **400 ms debounce**; there is **no separate 'Ara' button** and **no visible quota counter**. Keep this; do not invent a second search control or spend time recreating it.
@@ -57,6 +57,21 @@ Apple Developer UI shows distinct Team Scoped keys: **REPTRIO Production APNs** 
 
 **Scheduling:** This is newly queued after B48-A/B and the independently implementable B48-C work. Since the C daily reset policy is unresolved, **do not block D solely on that product decision**. Other already-started Build 48 work should continue without interruption.
 
+### B48-E — Legacy RepDB IDs in routine-to-catalog linking (mobile; detailed investigation and safe migration)
+**Status: QUEUED / diagnosis grounded in code; installed user's exact row ID still needs confirmation.** Full engineering contract and regression matrix: **mobile `docs/build48/B48_E_LEGACY_CATALOG_LINK.md`**. READ IT IN FULL BEFORE CODING. This entry is not a one-line UI change and does not authorize automatic migration.
+
+**Observed:** On physical Build 47, user sees an exercise named `glute-bridge` in routine edit but **"Katalogdaki hareketle eşleştir"** is absent. The *old* RepDB catalog includes canonical ID `glute-bridge` (`data/exercise-analytics.v1.json`), whereas the *new* 302-exercise catalog has `ex_000123` with `nameTr/nameEn: 'Glute Bridge'` and `sourceSlug: 'glute-bridge'` (`data/exercises.v2.json`). The newer importer makes `custom:name:glute-bridge-<hash>` and should already expose the action. The installed row's **actual** `exerciseId` was not read: reproduce with a synthetic legacy-ID fixture before claiming that particular row's root cause.
+
+**True code root cause:** `isCustomExerciseId(x)` in `src/model.ts` accepts ONLY `custom:` prefix. This gate blocks legacy canonicals in (i) `app/builder.tsx` edit-modal button visibility, (ii) its `onReplace` callback, (iii) `chooseReplacement`, and (iv–v) `src/routine-catalog-link.ts` `previewRoutineCatalogLink` and `linkRoutineCatalogExercise`. Fixing just the button will still fail at confirmation/commit. The catalog query normalizer `src/exercises.ts` **already turns hyphens into spaces**, so replacing punctuation or fuzzy search globally is the wrong fix.
+
+**Authorized behavior/design:** In all five gates, consistently allow *existing custom IDs* OR *known frozen pre-Build-46 RepDB canonical IDs* (validated by exact membership, e.g. the legacy metadata ID registry), with **no existing `catalogLink`**; keep modern `ex_######` IDs, unknown hyphenated IDs and malformed IDs ineligible. Do not broaden `isCustomExerciseId` globally, collapse historical alias identities, or use a separator check. Create one pure shared eligibility predicate and re-check against persisted row at commit. Require the user's **explicit** choice of a real active 302-catalog target and confirmation with exact matching/skipped historical counts; never auto-map `glute-bridge` to `ex_000123` from name alone. Preserve source ID and labels in reversible `catalogLink` journal.
+
+**Data integrity:** Link only the chosen program/day/item and historical rows proved by matching `programId`, `dayId`, `itemId`, row's own `exerciseId` and exact pre-link `canonicalExerciseId`; skip ambiguous/unmatched data. Preserve independent routines, days, identical-name exercises, weights/reps/time, deleted history, 1.2 MB program-record limit, current Undo semantics and null-vs-absent label restoration. Old RepDB IDs remain standalone statistics identities except rows explicitly reclassified by this user action. Verify normalize/sync/backups and current Build 47 clients before release.
+
+**Required tests:** `glute-bridge` legacy ID -> button -> picker `Glute Bridge (ex_000123)` -> explicit preview/confirm -> isolated history -> **exact Undo**. Also custom-ID unchanged, modern ex-ID no button, unknown hyphen ID no button, variants `glute bridge`/`Glute-Bridge` as search text, distinct barbell/single-leg candidates, cross-routine/date collisions, partial/foreign records, deleted history, null/absent fields, stale writes, backup/restore, stats and accessibility. Run `scripts/test-routine-catalog-link.mjs` plus new **red-before/green-after** tests and HIGH Guardian. Do not alter production data or installed Build 47.
+
+**Queue:** follow B48-D in the ordered backlog, but this is a standalone mobile slice and is not blocked by the undecided B48-C daily-reset policy. No iOS installation, TestFlight, production deploy, migration or main merge without separate authorization.
+
 ## Physical APNs follow-up — remote-end evidence captured; no device mutation
 - Latest post-deadline production read is `PENDING`, `auto`, `attempts=1`, `last_error=403:BadEnvironmentKeyInToken` (2026-10-22 17:26:41 UTC), after scheduled 17:22:47 UTC. Earlier `attempts=0` was a valid pre-deadline state; do not perpetuate it as the latest evidence.
 - The user confirmed the development-signed physical Build 47 binary has Voltra push enabled and matching local JS bundle/signature. Production Worker contains all three APNs secret *names*, but the actual key identities are not verified; Apple Developer lists distinct Production and Sandbox APNs keys.
@@ -68,7 +83,7 @@ Apple Developer UI shows distinct Team Scoped keys: **REPTRIO Production APNs** 
 - Preflight: print current repo path, branch, exact HEAD, worktree status; preserve any existing user changes; read both decision files plus relevant source/tests.
 - Implement incrementally with meaningful tests. Run focused suites, typecheck and relevant repo Guardian; never report tests as run unless actual logs/results exist. Review backward compatibility and billing/policy compliance.
 - Commit/push only verified Build 48 changes to the designated Build 48 branches (not any Build 47 branch); use small named commits and report SHAs. If a concurrent Build 48 update exists, fetch/reconcile safely, no force push.
-- Output a final factual report: source baselines, exact changes, old behavior not modified, test evidence, unresolved quota reset decision, B48-D APNs key-separation evidence and gates, and the precise next physical/production acceptance checks.
+- Output a final factual report: source baselines, exact changes, old behavior not modified, test evidence, unresolved quota reset decision, B48-D APNs key-separation evidence/gates, B48-E legacy-linking verification and history/Undo test evidence, and the precise next physical/production acceptance checks.
 
 ## Explicit blocker handling
 If policy reset remains undecided, proceed fully with B48-A and B48-B and independently testable portions of B48-C. Report the one required policy decision clearly; do not stall everything or fabricate an answer.
