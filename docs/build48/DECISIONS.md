@@ -24,6 +24,13 @@ Branches: `build48/integration` in `reptrio-mobile` and `reptrio-backend`
 - **Approved:** the daily Autocomplete allowance resets **24 hours after the first counted search** (`first-use-24h`): a window opens at the user's first dispatched Autocomplete request and lasts 24 h; a new window opens only after it expires. No time zone, no Istanbul or UTC calendar day. User's words: "ilk aramadan sonra 24 saat olsun".
 - Enabling in production still requires separately approved steps: apply migration 0017, add `PLACES_DAILY_QUOTA_POLICY: first-use-24h` to `wrangler.jsonc` `vars` (not the dashboard; deploy would erase it), deploy the Build 48 Worker.
 
+## Acceptance — 2026-10-23 (B48-A/B/C)
+- **B48-A, B48-B, B48-C: COMPLETE and ACCEPTED by the user.** Production canary accepted (backend Worker `900e5cbf`,
+  `first-use-24h` quota live; record: backend `docs/build48/PRODUCTION_ROLLOUT.md`).
+- Google 429 source separation, Google Cloud quota and cost audit are deferred to pre-App-Store work:
+  backend `prelaunch/topics` → `docs/prelaunch/AS_PRE_001_PLACES_429_QUOTA_BILLING.md` (does not block Build 48,
+  physical tests or TestFlight).
+
 ## Delivery gates
 - This record commits decisions only, not feature implementation or tests.
 - Before code changes, validate request accounting, API compatibility, global reset policy, Google attribution and physical iPhone/Watch acceptance checklist.
