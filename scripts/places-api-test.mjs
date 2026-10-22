@@ -51,4 +51,55 @@ assert.equal(verified.body.verified,true);
   }
  }finally{globalThis.fetch=realFetch;}
 }
+// Build 48 B48-B: worldwide. No built-in Turkish language or region; optional device locale, validated and mapped.
+{
+ const {googleLanguageCode,googleRegionCode}=await import('../worker/places-api.js');
+ const sent=[];const capture=async(url,opts)=>{sent.push(JSON.parse(opts.body));return{ok:true,text:async()=>JSON.stringify({suggestions:[]})};};
+ // Build 47 body: still valid, and the provider gets NO languageCode/regionCode (Google defaults, no country bias).
+ const legacy=parsePlaceRequest({input:'Gold Gym',sessionToken:token},'autocomplete');
+ assert.deepEqual(legacy,{input:'Gold Gym',sessionToken:token});
+ await googlePlacesRequest('autocomplete',legacy,'secret',capture);
+ assert.deepEqual(sent.at(-1),{input:'Gold Gym',sessionToken:token},'unspecified user: no language, no region, no restriction');
+ assert.ok(!('includedRegionCodes' in sent.at(-1))&&!('locationBias' in sent.at(-1))&&!('locationRestriction' in sent.at(-1)));
+ const source=(await import('node:fs')).readFileSync(new URL('../worker/places-api.js',import.meta.url),'utf8');
+ assert.doesNotMatch(source,/languageCode:\s*'tr'|regionCode:\s*'tr'|Istanbul|includedRegionCodes:/,'no hard-coded Turkey/Istanbul');
+ // Device locale (language tag + region setting) is mapped to codes Places documents.
+ for(const [input,languageCode,regionCode,expected] of [
+  ['İstanbul Spor','tr-TR','TR',{languageCode:'tr',regionCode:'tr'}],
+  ['ISPARTA FIT','tr','',{languageCode:'tr'}],
+  ['Gold Gym Venice','en-US','US',{languageCode:'en',regionCode:'us'}],
+  ['Muscle Factory','en-GB','GB',{languageCode:'en-GB',regionCode:'gb'}],
+  ['ゴールドジム 渋谷','ja-JP','JP',{languageCode:'ja',regionCode:'jp'}],
+  ['健身房 台北','zh-Hant-TW','TW',{languageCode:'zh-TW',regionCode:'tw'}],
+  ['Фитнес Москва','ru','RU',{languageCode:'ru',regionCode:'ru'}],
+  ['نادي رياضي','ar-EG','EG',{languageCode:'ar',regionCode:'eg'}],
+  ['חדר כושר','he-IL','IL',{languageCode:'iw',regionCode:'il'}],
+  ['Treningssenter','nb-NO','NO',{languageCode:'no',regionCode:'no'}],
+  ['Academia','pt-BR','BR',{languageCode:'pt-BR',regionCode:'br'}],
+  ['Gimnasio','es-419','MX',{languageCode:'es-419',regionCode:'mx'}],
+  // Well-formed but unsupported/unassigned values are dropped (never an upstream INVALID_ARGUMENT, never Turkey).
+  ['Some Gym','xx-YY','ZZ',{}],['Some Gym','tlh','EU',{}],['Some Gym','en','XK',{languageCode:'en'}],['Some Gym','en','QQ',{languageCode:'en'}],
+ ]){
+  const body={input,sessionToken:token,languageCode,...(regionCode?{regionCode}:{})};
+  const parsed=parsePlaceRequest(body,'autocomplete');assert.deepEqual(parsed,{input:input.trim(),sessionToken:token,...expected},languageCode+'/'+regionCode);
+  await googlePlacesRequest('autocomplete',parsed,'secret',capture);
+  assert.deepEqual(sent.at(-1),{input,sessionToken:token,...expected},'provider body '+languageCode);
+ }
+ // Unicode length is in characters: 100 non-Latin characters are accepted, 101 refused.
+ assert.ok(parsePlaceRequest({input:'健'.repeat(100),sessionToken:token},'autocomplete'));
+ assert.equal(parsePlaceRequest({input:'健'.repeat(101),sessionToken:token},'autocomplete'),null);
+ // Malicious / malformed bodies are refused (strict keys and types).
+ for(const bad of [
+  {input:'Gold Gym',sessionToken:token,languageCode:7},{input:'Gold Gym',sessionToken:token,regionCode:['tr']},
+  {input:'Gold Gym',sessionToken:token,languageCode:'tr";drop'},{input:'Gold Gym',sessionToken:token,regionCode:'t r'},
+  {input:'Gold Gym',sessionToken:token,languageCode:'a'.repeat(36)},{input:'Gold Gym',sessionToken:token,includedRegionCodes:['tr']},
+  {input:'Gold Gym',sessionToken:token,locationBias:{circle:{}}},{input:'Gold\nGym',sessionToken:token},
+  {input:'Gold Gym',sessionToken:token,__proto__:{x:1},extra:1},{input:'Gold Gym'},{sessionToken:token,languageCode:'en'},
+ ])assert.equal(parsePlaceRequest(bad,'autocomplete'),null,JSON.stringify(bad));
+ // Place ID verification is unchanged: exactly {placeId,sessionToken}; locale fields are not accepted there.
+ assert.deepEqual(parsePlaceRequest({placeId,sessionToken:token},'verify'),{placeId,sessionToken:token});
+ assert.equal(parsePlaceRequest({placeId,sessionToken:token,languageCode:'en'},'verify'),null);
+ assert.equal(googleLanguageCode('zh'),'zh-CN');assert.equal(googleLanguageCode('zh-HK'),'zh-HK');assert.equal(googleLanguageCode(null),null);
+ assert.equal(googleRegionCode('TR'),'tr');assert.equal(googleRegionCode('UN'),null);assert.equal(googleRegionCode(undefined),null);
+}
 console.log('PASS: Places proxy payloads, Google IDs only, session token and secret isolation, auth/lifecycle -> config -> body -> rate limit -> upstream order');

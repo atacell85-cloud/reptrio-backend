@@ -4,6 +4,11 @@
   
 # Reptrio backend karar kaydı
 
+## 2026-10-22 — Build 48 B48-B worldwide Places Autocomplete (no Turkey default)
+- Decision #2 (docs/build48/DECISIONS.md): the hard-coded `languageCode:'tr', regionCode:'tr'` is removed. Autocomplete accepts two OPTIONAL fields, `languageCode` (device language tag) and `regionCode` (device region setting, never a location). Build 47 bodies `{input,sessionToken}` stay valid and now reach Google with neither field: Google's documented defaults (Accept-Language, else `en`) and no region bias.
+- The Worker maps the tag to a language Places documents (e.g. `he`→`iw`, `nb`→`no`, `zh-Hant`→`zh-TW`, `en-GB`, `pt-BR`, `es-419`) and keeps only assigned ISO 3166-1 regions; anything else is dropped (never INVALID_ARGUMENT, never Turkey). Malformed types/characters/oversized values and unknown keys are refused (400). `regionCode` is bias/formatting only (official docs); `includedRegionCodes`, location bias/restriction are never sent.
+- Place ID verification body is unchanged `{placeId,sessionToken}`; nothing new is stored or logged.
+
 ### 2026-10-17 — B46-03 içe aktarma sonrası OpenAI yanıtı silme (Seçenek C; Build 46)
 
 - Kullanıcı kararı (2026-10-14 Seçenek C, 2026-10-17 Build 46 talimatı): başarılı arka plan içe aktarmasının OpenAI'de saklanan yanıtı, önizleme D1'e kalıcı yazıldığı anda silinir. Tetik yalnız `done` yazımının kazanılmasıdır; başarısız/geçersiz işler değişmeden yalnız hesap silmede temizlenir.
