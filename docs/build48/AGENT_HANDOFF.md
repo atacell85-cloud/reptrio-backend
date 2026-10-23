@@ -57,6 +57,17 @@ Apple Developer UI shows distinct Team Scoped keys: **REPTRIO Production APNs** 
 
 **Scheduling:** This is newly queued after B48-A/B and the independently implementable B48-C work. Since the C daily reset policy is unresolved, **do not block D solely on that product decision**. Other already-started Build 48 work should continue without interruption.
 
+**Status (2026-10-23):** implemented (`d154836`, `4896c17`), Guardian round 2 PASS; deployed to production as Worker
+`2d52c211-665e-418a-9d60-d7d952576596` with `APNS_SANDBOX_*` secrets (record: `PRODUCTION_ROLLOUT.md`). Physical
+locked-iPhone and TestFlight acceptance pending; staging secrets pending.
+
+### OPS-PREFLIGHT — automated backend deploy preflight (queued 2026-10-23, separate code change)
+User request after the B48-D deploy: before every backend deploy, a script must verify (read-only, never printing
+secret values) the candidate version against the live one and the repo: required secret **names** incl. APNs
+production + sandbox, D1/queue/rate-limiter/assets bindings, cron schedules, `PLACES_DAILY_QUOTA_POLICY` and other
+vars, and the per-host APNs routing (production host ⇒ `APNS_*`, sandbox host ⇒ `APNS_SANDBOX_*`). Fail closed on
+any mismatch. Build, test and review it as its own change; it must not alter the already-deployed package.
+
 ### B48-E — Legacy RepDB IDs in routine-to-catalog linking (mobile; detailed investigation and safe migration)
 **Status: IMPLEMENTED 2026-10-23 (mobile `build48/integration`, tests + HIGH Guardian PASS); installed user's exact row ID still needs physical confirmation.** Full engineering contract and regression matrix: **mobile `docs/build48/B48_E_LEGACY_CATALOG_LINK.md`**. READ IT IN FULL BEFORE CODING. This entry is not a one-line UI change and does not authorize automatic migration.
 

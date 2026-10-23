@@ -19,3 +19,20 @@ Build 47 clients (test phase, single test user). APNs code unchanged; no user da
 
 Rollback: previous version `8db02608…` via `wrangler rollback` (0017 is additive and harmless to it), or remove the
 `wrangler.jsonc` var and redeploy to disable only the quota.
+
+## B48-D — per-host APNs credentials (2026-10-23)
+
+User approvals (chat, one per step): 1 key probe, 2 secret staging without deploy, 3a version upload without deploy,
+3b deploy of the verified version at 100%. No key material, JWT or push token was printed, logged or committed.
+
+| Step | Result |
+|---|---|
+| 1 Key probe (`scripts/ops/apns-key-probe.mjs`, team `C4P47F32C8`) | `U3823N4ZK5`: production ACCEPTED, sandbox WRONG_ENVIRONMENT. `6WD2B976UM`: sandbox ACCEPTED, production WRONG_ENVIRONMENT. `4WQVKDCLV3` (App Store Connect key): invalid on both, not an APNs key. Installed `APNS_KEY_ID` inferred Production-only from the 2026-10-22 record (accepted on production, `403:BadEnvironmentKeyInToken` on sandbox); value not readable |
+| 2 Secrets staged | `wrangler versions secret bulk` (stdin, no file): `APNS_SANDBOX_KEY_ID`, `APNS_SANDBOX_PRIVATE_KEY` → version `03113e98-4c64-437d-b369-182b6bbe5ec5` (code = `900e5cbf`), not deployed. Note: `wrangler secret list` reads the latest version; `wrangler versions secret list` shows the deployed one |
+| 3a Upload | `wrangler versions upload` from `0b3e408` (clean tree) → **`2d52c211-665e-418a-9d60-d7d952576596`**; 15 secrets inherited (13 + 2 sandbox); non-secret bindings fingerprint identical to `900e5cbf` (vars incl. `PLACES_DAILY_QUOTA_POLICY=first-use-24h`, D1 `a2-workout-pilot`, queue, 4 rate limiters, assets); bundle diff vs `feb6afd` only in `worker/apns.js`, `worker/live-activity-end.js` and an esbuild rename (`credential`→`credential2`) in `worker/account-lifecycle.js`; 481 assets hash-identical; backend `npm test` PASS |
+| 3b Deploy | Pre-check repeated (no newer version, same fingerprints, live crons `* * * * *`, `0 6 * * *`, `*/15 * * * *` via API). `wrangler versions deploy 2d52c211…@100%` at 2026-10-23T19:08:42Z; previous `900e5cbf` |
+| Post-deploy | `/api/auth/providers` 200, `/runtime-config.js` 200, `/` 200, `app.reptrio.com` 200, `/api/me` 401, `/api/places/autocomplete` + `/verify` 401 `AUTH_REQUIRED` (same as baseline). Tail on `2d52c211`: minute cron ×7 and `*/15` ok, 0 exceptions, 0 error logs. D1 read-only: `live_activity_end` 0 rows, users 87, `places_autocomplete_usage` 0. No 100-search Places canary (not repeated by decision) |
+| APNs | **Not yet verified on a device**: no Live Activity row existed, so no APNs send happened after deploy. Acceptance = physical locked-iPhone test (row `SENT`, `apns_env='sandbox'`, legs production 400 `BadDeviceToken` → sandbox 200) plus a separate TestFlight/production check |
+
+Rollback: `wrangler versions deploy 900e5cbf-414b-4f63-83d9-fe85a3bc2dae@100%` (no schema change in B48-D; the
+sandbox secrets stay on `03113e98`/`2d52c211`). Staging Worker `a2-workout-apnstest` still lacks `APNS_SANDBOX_*`.
