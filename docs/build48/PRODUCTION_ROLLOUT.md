@@ -36,3 +36,21 @@ User approvals (chat, one per step): 1 key probe, 2 secret staging without deplo
 
 Rollback: `wrangler versions deploy 900e5cbf-414b-4f63-83d9-fe85a3bc2dae@100%` (no schema change in B48-D; the
 sandbox secrets stay on `03113e98`/`2d52c211`). Staging Worker `a2-workout-apnstest` still lacks `APNS_SANDBOX_*`.
+
+### B48-D physical acceptance — locked dev iPhone, Build 47 app (2026-10-23)
+
+Owner ran the workout; the agent only observed (read-only D1, redacted `wrangler tail`). No code, config, secret or
+deploy change during the test; live Worker `2d52c211-665e-418a-9d60-d7d952576596` at 100% throughout.
+
+| Check | Result |
+|---|---|
+| Schedule | `POST /api/live-activity/end` 200 at 20:20:38 UTC; row `PENDING`, `apns_env=auto`, `revision=0` |
+| Clock | last meaningful activity 20:20:36 UTC → server end 20:50:36 UTC (exactly +30 min); app was not opened before the end |
+| APNs legs | cron 20:51:21 UTC: production `400 BadDeviceToken` → sandbox `200` (apns-id present); no 403, so installed `APNS_KEY_ID` is the Production key and `APNS_SANDBOX_*` is accepted on sandbox |
+| D1 | `SENT`, `apns_env='sandbox'`, `attempts=1`, `last_error` null |
+| Worker health | 0 exceptions, 0 error logs for the whole window |
+| Lock screen (owner-reported) | Live Activity **disappeared** after the end push |
+
+Verdict: **B48-D sandbox path ACCEPTED** (physical, locked, development-signed iPhone). Not covered: TestFlight /
+App Store (`apns_env='production'`) send, staging Worker secrets, foreground local dormancy, Apple Watch dormancy.
+The exact wall-clock time of disappearance was not recorded.

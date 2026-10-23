@@ -59,7 +59,8 @@ Apple Developer UI shows distinct Team Scoped keys: **REPTRIO Production APNs** 
 
 **Status (2026-10-23):** implemented (`d154836`, `4896c17`), Guardian round 2 PASS; deployed to production as Worker
 `2d52c211-665e-418a-9d60-d7d952576596` with `APNS_SANDBOX_*` secrets (record: `PRODUCTION_ROLLOUT.md`). Physical
-locked-iPhone and TestFlight acceptance pending; staging secrets pending.
+locked-iPhone (sandbox) acceptance PASSED 2026-10-23 (see `PRODUCTION_ROLLOUT.md`); TestFlight/production-token
+acceptance and staging secrets still pending.
 
 ### OPS-PREFLIGHT — automated backend deploy preflight (queued 2026-10-23, separate code change)
 User request after the B48-D deploy: before every backend deploy, a script must verify (read-only, never printing
