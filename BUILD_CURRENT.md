@@ -1,3 +1,6 @@
+## Build 49 — B49-001 Places konum / Nearby (2026-10-24, DEPLOY EDİLMEDİ)
+- `worker/places-api.js`: Autocomplete'e isteğe bağlı `location` → `locationBias` (50 km); yeni `POST /api/places/nearby` (5 km, 20 sonuç, mesafe sıralı, Pro field mask). `worker/places-nearby-quota.js`: hesap başına 5/24s + proje günlük tavanı, env ile açılan fail-closed kapı. Migration `0018_places_nearby_quota.sql` (uygulanmadı). Test: `npm run test:places-nearby`; tam `npm test` PASS. Ayrıntı: `docs/build49/B49_001_PLACES_NEARBY_CONTRACT.md`.
+
 ## 2026-10-21 — Build 47 eski istemci veri koruması (HIGH: sync/restore yazım yolları, migration 0016)
 
 - Hesap bazlı, sunucuda türetilen, monoton veri seviyesi: `worker/data-feature-guard.js`, migration `0016_sync_data_features.sql` (ek, yeniden çalıştırılabilir). Legacy push, root-delta mutation ve restore/staged-sync start/commit/undo, `X-Reptrio-Data-Level` bildirmeyen istemciyi Build 47 verisi olan hesaplarda sıfır yazımla `SYNC_CLIENT_UPGRADE_REQUIRED` ile reddeder. 0016 yoksa yazıcılar `SYNC_STORAGE_MIGRATION_REQUIRED`.

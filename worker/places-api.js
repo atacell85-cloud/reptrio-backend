@@ -1,6 +1,7 @@
 // Google Places New: authenticated server-only relay; no secret in mobile, no name/cache/location logging.
 import {currentUser,sameOrigin} from './account-api.js';
 import {placesQuotaPolicy,reservePlacesAutocomplete} from './places-quota.js';
+import {placesNearbyConfig,reservePlacesNearby,PLACES_NEARBY_MAX_RESULTS,PLACES_NEARBY_RADIUS_METERS} from './places-nearby-quota.js';
 const BASE='https://places.googleapis.com/v1/places/';
 const PID=/^[A-Za-z0-9_-]{8,250}$/;
 const UUID=/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
@@ -33,10 +34,38 @@ export function googleRegionCode(code){
   const upper=code.toUpperCase();return ISO_REGIONS.has(upper)?upper.toLowerCase():null;
 }
 const OPTIONAL_LOCALE=['languageCode','regionCode'];
+// Build 49 B49-001: the device's own coordinates (never an IP/Worker location). Exactly two finite numbers in range, rounded
+// to 4 decimals (~11 m) before they can be used; never stored or logged.
+const NEARBY_BASE='https://places.googleapis.com/v1/places:searchNearby';
+const roundCoord=n=>Math.round(n*1e4)/1e4;
+export function parseCoordinates(value){
+  if(!value||typeof value!=='object'||Array.isArray(value))return null;
+  const keys=Object.keys(value);
+  if(keys.length!==2||!keys.includes('latitude')||!keys.includes('longitude'))return null;
+  const {latitude,longitude}=value;
+  if(typeof latitude!=='number'||typeof longitude!=='number'||!Number.isFinite(latitude)||!Number.isFinite(longitude))return null;
+  if(latitude<-90||latitude>90||longitude<-180||longitude>180)return null;
+  return{latitude:roundCoord(latitude),longitude:roundCoord(longitude)};
+}
+export function distanceMeters(a,b){
+  const rad=d=>d*Math.PI/180,dLat=rad(b.latitude-a.latitude),dLon=rad(b.longitude-a.longitude);
+  const h=Math.sin(dLat/2)**2+Math.cos(rad(a.latitude))*Math.cos(rad(b.latitude))*Math.sin(dLon/2)**2;
+  return 2*6371008.8*Math.asin(Math.min(1,Math.sqrt(h)));
+}
 export function parsePlaceRequest(body,mode) {
   if(!body||typeof body!=='object'||Array.isArray(body))return null;
+  if(mode==='nearby'){
+    // {latitude,longitude} are flat; language/region are the optional device settings, validated like Autocomplete's.
+    const keys=Object.keys(body);
+    if(!['latitude','longitude'].every(k=>keys.includes(k))||keys.some(k=>!['latitude','longitude',...OPTIONAL_LOCALE].includes(k)))return null;
+    const coordinates=parseCoordinates({latitude:body.latitude,longitude:body.longitude});
+    if(!coordinates)return null;
+    for(const k of OPTIONAL_LOCALE)if(k in body&&(typeof body[k]!=='string'||body[k].length>35||/[^A-Za-z0-9-]/.test(body[k])))return null;
+    const languageCode=googleLanguageCode(body.languageCode),regionCode=googleRegionCode(body.regionCode);
+    return{...coordinates,...(languageCode?{languageCode}:{}),...(regionCode?{regionCode}:{})};
+  }
   const required=mode==='autocomplete'?['input','sessionToken']:['placeId','sessionToken'];
-  const allowed=mode==='autocomplete'?[...required,...OPTIONAL_LOCALE]:required;
+  const allowed=mode==='autocomplete'?[...required,...OPTIONAL_LOCALE,'location']:required;
   const keys=Object.keys(body);
   if(!required.every(k=>keys.includes(k))||keys.some(k=>!allowed.includes(k)))return null;
   if(typeof body.sessionToken!=='string'||!UUID.test(body.sessionToken))return null;
@@ -45,21 +74,32 @@ export function parsePlaceRequest(body,mode) {
     // Present locale fields must be short strings; well-formed but unsupported values are dropped, not refused.
     for(const k of OPTIONAL_LOCALE)if(k in body&&(typeof body[k]!=='string'||body[k].length>35||/[^A-Za-z0-9-]/.test(body[k])))return null;
     const languageCode=googleLanguageCode(body.languageCode),regionCode=googleRegionCode(body.regionCode);
-    return {input:body.input.trim(),sessionToken:body.sessionToken,...(languageCode?{languageCode}:{}),...(regionCode?{regionCode}:{})};
+    // A present but malformed location is refused outright (it is a security-relevant input), never silently dropped.
+    const location='location' in body?parseCoordinates(body.location):undefined;
+    if('location' in body&&!location)return null;
+    return {input:body.input.trim(),sessionToken:body.sessionToken,...(languageCode?{languageCode}:{}),...(regionCode?{regionCode}:{}),...(location?{location}:{})};
   }
   return typeof body.placeId==='string'&&PID.test(body.placeId)?{placeId:body.placeId,sessionToken:body.sessionToken}:null;
 }
 export async function googlePlacesRequest(mode,payload,key,provider=fetch){
   // Same per-search token terminates Autocomplete at Place Details (New). IDs Only is billed per autocomplete request.
-  const url=mode==='autocomplete'?'https://places.googleapis.com/v1/places:autocomplete':BASE+encodeURIComponent(payload.placeId)+'?sessionToken='+encodeURIComponent(payload.sessionToken);
+  const url=mode==='nearby'?NEARBY_BASE:mode==='autocomplete'?'https://places.googleapis.com/v1/places:autocomplete':BASE+encodeURIComponent(payload.placeId)+'?sessionToken='+encodeURIComponent(payload.sessionToken);
+  const post=mode==='autocomplete'||mode==='nearby';
   const abort=new AbortController(),timeout=setTimeout(()=>abort.abort(),5000);
   try{
     const response=await provider(url,{
-      method:mode==='autocomplete'?'POST':'GET',
+      method:post?'POST':'GET',
       headers:{'X-Goog-Api-Key':key,'Accept':'application/json',
         ...(mode==='verify'?{'X-Goog-FieldMask':'id'}:{}),
-        ...(mode==='autocomplete'?{'Content-Type':'application/json'}:{})},
-      ...(mode==='autocomplete'?{body:JSON.stringify({input:payload.input,sessionToken:payload.sessionToken,...(payload.languageCode?{languageCode:payload.languageCode}:{}),...(payload.regionCode?{regionCode:payload.regionCode}:{})})}:{}),
+        // Nearby Search Pro SKU: only these four fields (id, displayName, formattedAddress, location); nothing from a higher tier.
+        ...(mode==='nearby'?{'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location'}:{}),
+        ...(post?{'Content-Type':'application/json'}:{})},
+      ...(mode==='autocomplete'?{body:JSON.stringify({input:payload.input,sessionToken:payload.sessionToken,...(payload.languageCode?{languageCode:payload.languageCode}:{}),...(payload.regionCode?{regionCode:payload.regionCode}:{}),
+        // Bias (not restriction): nearby results rank first, far ones can still appear. 50 km is the documented maximum.
+        ...(payload.location?{locationBias:{circle:{center:{latitude:payload.location.latitude,longitude:payload.location.longitude},radius:50000}}}:{})})}:{}),
+      ...(mode==='nearby'?{body:JSON.stringify({includedTypes:['gym','fitness_center'],maxResultCount:PLACES_NEARBY_MAX_RESULTS,rankPreference:'DISTANCE',
+        locationRestriction:{circle:{center:{latitude:payload.latitude,longitude:payload.longitude},radius:PLACES_NEARBY_RADIUS_METERS}},
+        ...(payload.languageCode?{languageCode:payload.languageCode}:{}),...(payload.regionCode?{regionCode:payload.regionCode}:{})})}:{}),
       signal:abort.signal,
     });
     if(!response.ok)return{status:response.status===429?429:502,body:{code:response.status===429?'PLACES_RATE_LIMITED':'PLACES_UPSTREAM_ERROR'}};
@@ -67,6 +107,18 @@ export async function googlePlacesRequest(mode,payload,key,provider=fetch){
     let json;try{json=JSON.parse(raw)}catch{return{status:502,body:{code:'PLACES_UPSTREAM_ERROR'}}}
     if(mode==='verify')return json?.id===payload.placeId
       ?{status:200,body:{placeId:json.id,verified:true}}:{status:404,body:{code:'PLACE_NOT_FOUND'}};
+    if(mode==='nearby'){
+      const origin={latitude:payload.latitude,longitude:payload.longitude};
+      // Distances are computed here from the (rounded) request point; Google's place coordinates are not passed on.
+      const places=(Array.isArray(json?.places)?json.places:[]).flatMap(p=>{
+        if(typeof p?.id!=='string'||!PID.test(p.id))return[];
+        const name=String(p.displayName?.text||'').trim().slice(0,120);
+        const lat=p.location?.latitude,lon=p.location?.longitude;
+        if(!name||typeof lat!=='number'||typeof lon!=='number'||!Number.isFinite(lat)||!Number.isFinite(lon))return[];
+        return[{placeId:p.id,name,address:String(p.formattedAddress||'').trim().slice(0,220),distanceMeters:Math.round(distanceMeters(origin,{latitude:lat,longitude:lon}))}];
+      }).sort((a,b)=>a.distanceMeters-b.distanceMeters).slice(0,PLACES_NEARBY_MAX_RESULTS);
+      return{status:200,body:{places,attribution:'Google Maps'}};
+    }
     const predictions=Array.isArray(json?.suggestions)?json.suggestions.flatMap(s=>{
       const p=s?.placePrediction;if(typeof p?.placeId!=='string'||!PID.test(p.placeId))return[];
       const name=String(p.structuredFormat?.mainText?.text||p.text?.text||'').trim().slice(0,120);
@@ -78,7 +130,7 @@ export async function googlePlacesRequest(mode,payload,key,provider=fetch){
   finally{clearTimeout(timeout)}
 }
 export async function handlePlacesRequest(request,env,pathname,{approvedQuotaPolicies,now=Date.now}={}){
-  const mode=pathname==='/api/places/autocomplete'?'autocomplete':pathname==='/api/places/verify'?'verify':null;
+  const mode=pathname==='/api/places/autocomplete'?'autocomplete':pathname==='/api/places/verify'?'verify':pathname==='/api/places/nearby'?'nearby':null;
   if(!mode)return null;
   if(request.method!=='POST')return answer({code:'METHOD_NOT_ALLOWED'},405);
   if(!sameOrigin(request))return answer({code:'AUTH_ORIGIN_INVALID'},403);
@@ -89,6 +141,9 @@ export async function handlePlacesRequest(request,env,pathname,{approvedQuotaPol
   const quota=placesQuotaPolicy(env,approvedQuotaPolicies);
   // The allowance (and its gate) concern Autocomplete only; Place ID verification never depends on it.
   if(mode==='autocomplete'&&quota.misconfigured)return answer({code:'PLACES_NOT_CONFIGURED'},503);
+  // Nearby is opt-in and fail closed: without both release-gated settings no D1 access and no Google request happens.
+  const nearby=mode==='nearby'?placesNearbyConfig(env):null;
+  if(mode==='nearby'&&!nearby.enabled)return answer({code:'PLACES_NOT_CONFIGURED'},503);
   let payload;try{
     const raw=await request.text();if(raw.length>768)return answer({code:'PLACES_BAD_REQUEST'},400);
     payload=parsePlaceRequest(JSON.parse(raw),mode);
@@ -103,6 +158,11 @@ export async function handlePlacesRequest(request,env,pathname,{approvedQuotaPol
   if(mode==='autocomplete'&&quota.enabled){
     let admitted;try{admitted=await reservePlacesAutocomplete(env.DB,user.id,quota,now())}catch{return answer({code:'PLACES_UNAVAILABLE'},503)}
     if(!admitted)return answer({code:'PLACES_DAILY_LIMIT'},429);
+  }
+  if(mode==='nearby'){
+    let outcome;try{outcome=await reservePlacesNearby(env.DB,user.id,nearby,now())}catch{return answer({code:'PLACES_UNAVAILABLE'},503)}
+    if(outcome==='USER_LIMIT')return answer({code:'PLACES_NEARBY_DAILY_LIMIT'},429);
+    if(outcome==='PROJECT_CAP')return answer({code:'PLACES_NEARBY_CAPACITY'},503);
   }
   const result=await googlePlacesRequest(mode,payload,env.GOOGLE_MAPS_PLACES_API_KEY);
   return answer(result.body,result.status);

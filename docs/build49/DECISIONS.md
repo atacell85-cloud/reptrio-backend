@@ -18,3 +18,7 @@ Eşlenik mobil spesifikasyon: `atacell85-cloud/reptrio-mobile:build49/integratio
 - Nearby maliyetli ve Autocomplete'ten ayrı bir SKU/kota olabilir: **sayı verilmedi**, kota ve proje maliyet koruması, field mask, abuse/429 ve günlük/oturum sınırları analiz ve açık kullanıcı kararı gerektirir. Eski 100 istek / ilk-use-24h Autocomplete kotası otomatik değiştirilmez.
 - Konum geçmişi/kalıcı koordinat/log yok; API anahtarı sunucuda kalır. Güvenli eski istemci uyumu, D1/Place ID/attribution ve kullanıcı geçmişi korunur.
 - Bu yalnız öncelik ve karar kaydı: backend API implementasyonu, migration, canlı Worker değişimi, secret veya deploy yetkisi vermez.
+
+## B49-001 — kullanıcı kararları ve backend uygulaması (2026-10-24)
+- Kullanıcı: Nearby **muhafazakâr** (hesap başına 24 saatte 5 istek, 5 km, 20 sonuç, mesafeye göre); **expo-location + iOS izin metni onaylı**; backend **kodla+test, deploy yok**.
+- Uygulandı: `docs/build49/B49_001_PLACES_NEARBY_CONTRACT.md`. Production deploy, migration `0018`, env (`PLACES_NEARBY_QUOTA_POLICY`, `PLACES_NEARBY_PROJECT_DAILY_CAP`), secret ve Google Cloud kota/bütçe ayarı hâlâ ayrı açık onay gerektirir.
