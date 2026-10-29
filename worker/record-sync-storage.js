@@ -114,7 +114,7 @@ export async function recordCapabilities(env, userId) {
     const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
     if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false,personalBackupVersions:[], code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
     const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?[1,2]:[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, draftSetDeletion: 1, authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?[1,2]:[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -246,13 +246,17 @@ export function assembleRecordData(rows) {
 
 // Coverage for explicit operational draft clear, recovered from mobile types/workout-finish and PWA
 // normalizeDraft/program-service. This is a deletion-coverage check only, never a storage allowlist.
+const OMITTABLE = Symbol('omittable');
 const scalarFields = names => Object.fromEntries(names.split(' ').map(name => [name,true]));
 const setShape = scalarFields('canonicalExerciseId weightUnit id sessionId exerciseId exerciseName setNumber setType weight kg reps rir rpe rest tempo note completed startedAt completedAt updatedAt');
 const prescriptionShape = scalarFields('id exercisePrescriptionId setNumber setType reps repsText weight weightUnit weightText rir rirText rpe rpeText restSeconds restText notes');
 const exerciseShape = { ...scalarFields('id itemType sectionId exerciseId customExerciseName displayName order sets setsText repsMin repsMax repsText weight weightUnit weightText rir rirText rpe rpeText restSeconds restText tempoText durationSeconds durationText distance distanceUnit distanceText notes groupId groupType text'), individualSets: [prescriptionShape] };
 const programShape = { ...scalarFields('schemaVersion id name description sourceType createdAt updatedAt'), days: [{ ...scalarFields('id programId name order notes'), sections: [{ ...scalarFields('id workoutDayId title sectionType order notes'), items: [exerciseShape] }] }] };
 const timerShape = scalarFields('exerciseId endsAt notificationId setKey startedAt durationSeconds source notified');
-const mobileDraftShape = { ...scalarFields('id programId dayId dayName startedAt lastEditedAt lastActivityAt watchStateRevision gymId excludedFromStats freeWorkout weightUnit'), exercises: [exerciseShape], sets: { '*': { '*': setShape } }, restTimer: timerShape };
+// Build 51 (B51-004) mobile set deletion bookkeeping: per exercise row, the Watch revision of the last set layout change and the
+// running count of deleted sets. Known, and omittable because older clients drop them (their drafts never delete sets).
+const draftLayoutMapShape = Object.assign(Object.create(null), { '*': true, [OMITTABLE]: true });
+const mobileDraftShape = { ...scalarFields('id programId dayId dayName startedAt lastEditedAt lastActivityAt watchStateRevision gymId excludedFromStats freeWorkout weightUnit'), exercises: [exerciseShape], sets: { '*': { '*': setShape } }, restTimer: timerShape, setLayoutFence: draftLayoutMapShape, deletedSetCount: draftLayoutMapShape };
 const pwaDraftShape = { ...scalarFields('id programId workoutDayId startedAt status'), completedActivities: { '*': true }, sets: { '*': { '*': setShape } }, timer: timerShape };
 const mobileSessionShape = { ...scalarFields('id programId dayId workoutDayId title startedAt completedAt updatedAt status gymId excludedFromStats weightUnit'), completedActivities: [true], summary: scalarFields('totalSets completedSets'), sets: { '*': { '*': setShape } } };
 const pwaSetShape = scalarFields('id sessionId exerciseId exerciseName setNumber setType weight reps rir completedAt updatedAt');
@@ -260,7 +264,6 @@ const pwaSessionShape = { ...scalarFields('id programId workoutDayId startedAt c
 const measurementShape = scalarFields('id recordedAt weightKg waistCm bodyFatPercent');
 // Build 47 (data level 1) shapes: only a client that declares level 1 may delete/clear these known fields. Old clients
 // keep the frozen shapes above and are refused earlier by the account data-feature guard anyway.
-const OMITTABLE = Symbol('omittable');
 const catalogLinkShape = { ...scalarFields('originalExerciseId originalDisplayName originalCustomExerciseName catalogId catalogName'), changes: [scalarFields('sessionId groupKey storageKey hadCanonicalExerciseId beforeCanonicalExerciseId hadExerciseName beforeExerciseName')], [OMITTABLE]: true };
 const exerciseShape47 = { ...exerciseShape, catalogLink: catalogLinkShape };
 const programShape47 = { ...programShape, days: [{ ...programShape.days[0], sections: [{ ...programShape.days[0].sections[0], items: [exerciseShape47] }] }] };
@@ -349,6 +352,55 @@ function noFieldLoss(previous, next, clearCoverage = null, context = null) {
     }
   } else if (previous && typeof previous === 'object' && previous !== next) fail('SYNC_SCHEMA_LOSS_RISK');
 }
+// Build 51 (B51-004): a schema 8 mobile draft may delete sets of an exercise row and renumber the later ones (set keys are
+// the set identity; the Watch needs contiguous keys). Allowed only for the same draft and only by exactly the number of
+// deletions the client declares (`deletedSetCount[row]` grew by d): the row's sets must then be explained, in order, as the
+// previous sets with exactly d of them removed (each removed set fully known: nothing unknown is discarded), every kept set
+// passing the normal per-set loss rule against its new key, and only new sets appended after the kept ones. A row without
+// a declared deletion keeps the per-key rule, so older clients (which never delete sets) are checked exactly as before.
+const MAX_LAYOUT_CELLS = 40_000;
+function setKeysInOrder(rows) {
+  const keys = Object.keys(rows);
+  return keys.every(key => /^[1-9]\d{0,5}$/.test(key)) ? keys.sort((a,b) => Number(a)-Number(b)) : null;
+}
+function declaredDeletions(previous,next,row) {
+  const before = object(previous.deletedSetCount) && own(previous.deletedSetCount,row) ? previous.deletedSetCount[row] : 0;
+  const after = object(next.deletedSetCount) && own(next.deletedSetCount,row) ? next.deletedSetCount[row] : 0;
+  return Number.isSafeInteger(before) && Number.isSafeInteger(after) && before >= 0 && after > before ? after - before : 0;
+}
+function setLayoutExplained(group,before,after,deletions,setCoverage) {
+  const oldKeys = setKeysInOrder(before), newKeys = setKeysInOrder(after);
+  if (!oldKeys || !newKeys || deletions > oldKeys.length || (oldKeys.length+1)*(newKeys.length+1)*(deletions+1) > MAX_LAYOUT_CELLS) return false;
+  const kept = new Map();
+  const keeps = (i,j) => {
+    const id = i+':'+j;
+    if (!kept.has(id)) {
+      try { noFieldLoss(before[oldKeys[i]],after[newKeys[j]],setCoverage,{schemaVersion:8,path:['draft','sets',group,newKeys[j]]}); kept.set(id,true); }
+      catch (cause) { if (cause.code !== 'SYNC_SCHEMA_LOSS_RISK') throw cause; kept.set(id,false); }
+    }
+    return kept.get(id);
+  };
+  const memo = new Map();
+  const explain = (i,j,left) => {
+    // All previous sets consumed: exactly d removed, the remaining new sets are additions.
+    if (i === oldKeys.length) return left === 0;
+    const id = i+':'+j+':'+left;
+    if (memo.has(id)) return memo.get(id);
+    const result = (left > 0 && knownShape(before[oldKeys[i]],setCoverage) && explain(i+1,j,left-1)) || (j < newKeys.length && keeps(i,j) && explain(i+1,j+1,left));
+    memo.set(id,result);
+    return result;
+  };
+  return explain(0,0,deletions);
+}
+function draftLoss(previous,next,clearCoverage) {
+  const context = { schemaVersion: 8, path: ['draft'] };
+  if (!object(previous) || !object(next) || previous.id !== next.id || !object(previous.sets) || !object(next.sets)) return noFieldLoss(previous,next,clearCoverage,context);
+  const setCoverage = clearCoverage.sets['*']['*'];
+  const relayout = Object.keys(previous.sets).filter(row => object(previous.sets[row]) && own(next.sets,row) && object(next.sets[row]) && declaredDeletions(previous,next,row) > 0);
+  for (const row of relayout) if (!setLayoutExplained(row,previous.sets[row],next.sets[row],declaredDeletions(previous,next,row),setCoverage)) fail('SYNC_SCHEMA_LOSS_RISK');
+  const without = draft => ({ ...draft, sets: Object.fromEntries(Object.entries(draft.sets).filter(([row]) => !relayout.includes(row))) });
+  noFieldLoss(without(previous),without(next),clearCoverage,context);
+}
 export function compatible(previous, submitted, dataLevel = 0) {
   if (!previous) return submitted;
   const shape = shapes(dataLevel);
@@ -395,6 +447,7 @@ export function compatible(previous, submitted, dataLevel = 0) {
   }
   for (const field of Object.keys(next)) if (!collections[field] && own(previous,field)) {
     const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? shape.mobileDraft : pwaDraftShape) : field === 'programBuilderDraft' ? shape.program : field === 'settings' ? { gyms: [shape.gym] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
+    if (field === 'draft' && schemaVersion === 8) { draftLoss(previous.draft,next.draft,clearCoverage); continue; }
     noFieldLoss(previous[field],next[field],clearCoverage,{schemaVersion,path:[field]});
   }
   return next;
