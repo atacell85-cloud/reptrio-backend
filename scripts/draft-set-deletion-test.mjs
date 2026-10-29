@@ -99,7 +99,7 @@ const strip = value => JSON.parse(JSON.stringify(value));
 // 4b. Ten or more sets: keys are ordered numerically (10 after 9), so the renumbering of 3..11 down to 2..10 is explained.
 {
   const f = await fixture(); const d = strip(base()); d.draft.sets['row-bench'] = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, set(i + 1, { weight: String(100 + i), startedAt: `2026-10-29T08:${String(10 + i).padStart(2, '0')}:00.000Z`, completedAt: `2026-10-29T08:${String(10 + i).padStart(2, '0')}:30.000Z` })]));
-  d.draft.sets['row-bench'][11].privateFuture = { keep: true }; // only the numeric order pairs it with new key 10
+  d.draft.sets['row-bench'][11].privateFuture = { keep: true }; // the unknown field must survive under some new key
   assert.equal((await f.push(d,0)).status,200);
   const deleted = deleteSet(d,'row-bench',2,5); assert.equal((await f.push(deleted,1)).status,200);
   assert.deepEqual((await f.pull()).data,deleted);
@@ -127,6 +127,10 @@ const strip = value => JSON.parse(JSON.stringify(value));
   assert.deepEqual(compatible(d,next,1).draft.sets['row-bench'],next.draft.sets['row-bench']);
   assert.throws(() => compatible(d,{ ...next, draft: { ...next.draft, deletedSetCount: undefined } },1),{ code: 'SYNC_SCHEMA_LOSS_RISK' });
   const f = await fixture(); assert.equal((await (await f.call('capabilities')).json()).draftSetDeletion,1);
+  // Operational switch: stop offering the capability (the safe way back; reverting the code would make the old rule refuse
+  // clearing drafts that carry the bookkeeping). Accepting declared deletions and the known fields stay.
+  const off = await worker.fetch(new Request(`${ORIGIN}/api/sync/capabilities`, { headers: { Authorization: 'Bearer local-token-' + sequence } }), { DB: f.db, DRAFT_SET_DELETION_ENABLED: 'false' }, { waitUntil() {} });
+  const offBody = await off.json(); assert.equal(off.status,200); assert.equal(offBody.writable,true); assert.equal(offBody.draftSetDeletion, undefined, 'switched off: not offered');
   const missing = await fixture({ migrationsUpTo: '0007_password_reset_tokens.sql' }); assert.equal((await (await missing.call('capabilities')).json()).draftSetDeletion,undefined,'not writable → no capability');
 }
 console.log('Draft set deletion PASS: declared deletions only, renumbered sets keep every field, unknown never discarded, offline multi-delete / delete+add / undo, older clients unchanged, finish clears bookkeeping, capability.');
