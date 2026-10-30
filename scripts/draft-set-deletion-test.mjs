@@ -109,6 +109,10 @@ const addSet = (data, row) => { const next = clone(data); const n = Object.keys(
   assert.equal((await g.push(addSet(deleteSet(d,'row-bench',2),'row-bench'),1)).status,200,'deleted then added');
   const h = await fixture(); assert.equal((await h.push(d,0)).status,200);
   assert.equal((await h.push(deleteSet(addSet(d,'row-bench'),'row-bench',4),1)).status,200,'added then deleted the added set');
+  // Deleting a post-sync addition never makes an earlier set unprotected: set 3 losing an unknown field is still refused.
+  const p = await fixture(); const withFuture = base(); withFuture.draft.sets['row-bench'][3].privateFuture = { keep: true }; assert.equal((await p.push(withFuture,0)).status,200);
+  const sneaky = deleteSet(addSet(withFuture,'row-bench'),'row-bench',4); delete sneaky.draft.sets['row-bench'][3].privateFuture;
+  await refused(p,() => p.push(sneaky,1));
   const u = await fixture(); assert.equal((await u.push(d,0)).status,200);
   const undo = deleteSet(d,'row-bench',1); const moved = undo.draft.sets['row-bench'][1]; delete moved.completedAt; moved.completed = false;
   assert.equal((await u.push(undo,1)).status,200,'true→false completion undo keeps working on the new key');
