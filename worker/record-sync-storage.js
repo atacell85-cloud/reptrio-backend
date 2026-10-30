@@ -254,9 +254,11 @@ const exerciseShape = { ...scalarFields('id itemType sectionId exerciseId custom
 const programShape = { ...scalarFields('schemaVersion id name description sourceType createdAt updatedAt'), days: [{ ...scalarFields('id programId name order notes'), sections: [{ ...scalarFields('id workoutDayId title sectionType order notes'), items: [exerciseShape] }] }] };
 const timerShape = scalarFields('exerciseId endsAt notificationId setKey startedAt durationSeconds source notified');
 // Build 51 (B51-004) mobile set deletion bookkeeping: per exercise row, the Watch revision of the last set layout change and the
-// running count of deleted sets. Known, and omittable because older clients drop them (their drafts never delete sets).
-const draftLayoutMapShape = Object.assign(Object.create(null), { '*': true, [OMITTABLE]: true });
-const mobileDraftShape = { ...scalarFields('id programId dayId dayName startedAt lastEditedAt lastActivityAt watchStateRevision gymId excludedFromStats freeWorkout weightUnit'), exercises: [exerciseShape], sets: { '*': { '*': setShape } }, restTimer: timerShape, setLayoutFence: draftLayoutMapShape, deletedSetCount: draftLayoutMapShape };
+// ordered log of set deletions ({id, key}: a unique id per deletion and the key removed in the layout at that moment). Known, and
+// omittable because older clients that never pulled them drop them (their drafts never delete sets).
+const draftFenceShape = Object.assign(Object.create(null), { '*': true, [OMITTABLE]: true });
+const draftDeletionLogShape = Object.assign(Object.create(null), { '*': [scalarFields('id key')], [OMITTABLE]: true });
+const mobileDraftShape = { ...scalarFields('id programId dayId dayName startedAt lastEditedAt lastActivityAt watchStateRevision gymId excludedFromStats freeWorkout weightUnit'), exercises: [exerciseShape], sets: { '*': { '*': setShape } }, restTimer: timerShape, setLayoutFence: draftFenceShape, setDeletionLog: draftDeletionLogShape };
 const pwaDraftShape = { ...scalarFields('id programId workoutDayId startedAt status'), completedActivities: { '*': true }, sets: { '*': { '*': setShape } }, timer: timerShape };
 const mobileSessionShape = { ...scalarFields('id programId dayId workoutDayId title startedAt completedAt updatedAt status gymId excludedFromStats weightUnit'), completedActivities: [true], summary: scalarFields('totalSets completedSets'), sets: { '*': { '*': setShape } } };
 const pwaSetShape = scalarFields('id sessionId exerciseId exerciseName setNumber setType weight reps rir completedAt updatedAt');
@@ -352,52 +354,50 @@ function noFieldLoss(previous, next, clearCoverage = null, context = null) {
     }
   } else if (previous && typeof previous === 'object' && previous !== next) fail('SYNC_SCHEMA_LOSS_RISK');
 }
-// Build 51 (B51-004): a schema 8 mobile draft may delete sets of an exercise row and renumber the later ones (set keys are
-// the set identity; the Watch needs contiguous keys). Allowed only for the same draft and only by exactly the number of
-// deletions the client declares (`deletedSetCount[row]` grew by d): the row's sets must then be explained, in order, as the
-// previous sets with exactly d of them removed (each removed set fully known: nothing unknown is discarded), every kept set
-// passing the normal per-set loss rule against its new key, and only new sets appended after the kept ones. A row without
-// a declared deletion keeps the per-key rule, so older clients (which never delete sets) are checked exactly as before.
-const MAX_LAYOUT_CELLS = 40_000;
+// Build 51 (B51-004): a schema 8 mobile draft may delete sets of an exercise row (also the last one; the row stays {}) and
+// renumber the later ones (set keys are the set identity; the Watch needs contiguous keys). Every deletion is an entry of
+// `setDeletionLog[row]` ({id, key}). For the same draft id:
+// - the server's log of a row must be a prefix of the incoming one; otherwise the push was built on a draft that does not
+//   contain a deletion the server already holds (another phone, an older copy) and would bring the deleted set back or
+//   undo it: refused with SYNC_DRAFT_LAYOUT_STALE (nothing written; the phone reconciles against the server draft);
+// - the new entries are applied in order to the previous contiguous keys, giving an exact old → new key mapping (a key beyond
+//   the mapped sets removes a set added after the last sync, which loses nothing): each removed previous set must be fully
+//   known (nothing unknown is discarded), each kept set passes the per-set loss rule under its new key, additions follow.
+// Rows without new entries keep the per-key rule, so older clients are checked exactly as before.
+const MAX_DELETION_LOG = 200;
 function setKeysInOrder(rows) {
   const keys = Object.keys(rows);
   return keys.every(key => /^[1-9]\d{0,5}$/.test(key)) ? keys.sort((a,b) => Number(a)-Number(b)) : null;
 }
-function declaredDeletions(previous,next,row) {
-  const before = object(previous.deletedSetCount) && own(previous.deletedSetCount,row) ? previous.deletedSetCount[row] : 0;
-  const after = object(next.deletedSetCount) && own(next.deletedSetCount,row) ? next.deletedSetCount[row] : 0;
-  return Number.isSafeInteger(before) && Number.isSafeInteger(after) && before >= 0 && after > before ? after - before : 0;
-}
-function setLayoutExplained(group,before,after,deletions,setCoverage) {
-  const oldKeys = setKeysInOrder(before), newKeys = setKeysInOrder(after);
-  if (!oldKeys || !newKeys || deletions > oldKeys.length || (oldKeys.length+1)*(newKeys.length+1)*(deletions+1) > MAX_LAYOUT_CELLS) return false;
-  const kept = new Map();
-  const keeps = (i,j) => {
-    const id = i+':'+j;
-    if (!kept.has(id)) {
-      try { noFieldLoss(before[oldKeys[i]],after[newKeys[j]],setCoverage,{schemaVersion:8,path:['draft','sets',group,newKeys[j]]}); kept.set(id,true); }
-      catch (cause) { if (cause.code !== 'SYNC_SCHEMA_LOSS_RISK') throw cause; kept.set(id,false); }
-    }
-    return kept.get(id);
-  };
-  const memo = new Map();
-  const explain = (i,j,left) => {
-    // All previous sets consumed: exactly d removed, the remaining new sets are additions.
-    if (i === oldKeys.length) return left === 0;
-    const id = i+':'+j+':'+left;
-    if (memo.has(id)) return memo.get(id);
-    const result = (left > 0 && knownShape(before[oldKeys[i]],setCoverage) && explain(i+1,j,left-1)) || (j < newKeys.length && keeps(i,j) && explain(i+1,j+1,left));
-    memo.set(id,result);
-    return result;
-  };
-  return explain(0,0,deletions);
+function deletionLog(draft,row) {
+  const log = object(draft.setDeletionLog) && own(draft.setDeletionLog,row) ? draft.setDeletionLog[row] : [];
+  const valid = Array.isArray(log) && log.length <= MAX_DELETION_LOG && log.every(entry => object(entry) && typeof entry.id === 'string' && entry.id.length > 0 && entry.id.length <= 64 && Number.isSafeInteger(entry.key) && entry.key >= 1)
+    && new Set(log.map(entry => entry.id)).size === log.length;
+  if (!valid) fail('SYNC_PAYLOAD_INVALID',400);
+  return log;
 }
 function draftLoss(previous,next,clearCoverage) {
   const context = { schemaVersion: 8, path: ['draft'] };
   if (!object(previous) || !object(next) || previous.id !== next.id || !object(previous.sets) || !object(next.sets)) return noFieldLoss(previous,next,clearCoverage,context);
   const setCoverage = clearCoverage.sets['*']['*'];
-  const relayout = Object.keys(previous.sets).filter(row => object(previous.sets[row]) && own(next.sets,row) && object(next.sets[row]) && declaredDeletions(previous,next,row) > 0);
-  for (const row of relayout) if (!setLayoutExplained(row,previous.sets[row],next.sets[row],declaredDeletions(previous,next,row),setCoverage)) fail('SYNC_SCHEMA_LOSS_RISK');
+  const rows = new Set([...(object(previous.setDeletionLog) ? Object.keys(previous.setDeletionLog) : []), ...(object(next.setDeletionLog) ? Object.keys(next.setDeletionLog) : [])]);
+  const relayout = [];
+  for (const row of rows) {
+    const before = deletionLog(previous,row), after = deletionLog(next,row);
+    if (before.length > after.length || before.some((entry,i) => entry.id !== after[i].id || entry.key !== after[i].key)) fail('SYNC_DRAFT_LAYOUT_STALE');
+    if (after.length === before.length || !object(previous.sets[row]) || !own(next.sets,row) || !object(next.sets[row])) continue;
+    const oldKeys = setKeysInOrder(previous.sets[row]), newKeys = setKeysInOrder(next.sets[row]);
+    if (!oldKeys || !newKeys) fail('SYNC_SCHEMA_LOSS_RISK');
+    const kept = [...oldKeys];
+    for (const { key } of after.slice(before.length)) {
+      if (key > kept.length) continue;
+      const [removed] = kept.splice(key-1,1);
+      if (!knownShape(previous.sets[row][removed],setCoverage)) fail('SYNC_SCHEMA_LOSS_RISK');
+    }
+    if (newKeys.length < kept.length) fail('SYNC_SCHEMA_LOSS_RISK');
+    kept.forEach((oldKey,i) => noFieldLoss(previous.sets[row][oldKey],next.sets[row][String(i+1)],setCoverage,{schemaVersion:8,path:['draft','sets',row,String(i+1)]}));
+    relayout.push(row);
+  }
   const without = draft => ({ ...draft, sets: Object.fromEntries(Object.entries(draft.sets).filter(([row]) => !relayout.includes(row))) });
   noFieldLoss(without(previous),without(next),clearCoverage,context);
 }

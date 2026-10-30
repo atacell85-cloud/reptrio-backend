@@ -1,11 +1,12 @@
 // Build 51 (B51-004): mobile active-workout set deletion through the real Worker push/pull on SQLite D1.
-// A schema 8 draft row may lose sets and renumber the later ones only by exactly the deletions the client declares
-// (`deletedSetCount[row]` grows by d); removed sets must be fully known, kept sets keep every field under their new key,
-// only additions may follow. Rows without a declared deletion keep the old per-key rule (older clients unchanged).
+// Every deletion is an entry of `setDeletionLog[row]` ({id, key}). For the same draft id the server's log must be a prefix of
+// the incoming log (else SYNC_DRAFT_LAYOUT_STALE: a copy without a deletion the server holds could bring the set back); the new
+// entries map previous keys to new keys exactly; removed sets must be fully known, kept sets keep every field under their new
+// key, only additions follow. Rows without new entries keep the per-key rule (older clients unchanged).
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
 import { tokenDigest } from '../worker/account-api.js';
-import { compatible } from '../worker/record-sync-storage.js';
+import { compatible, compatibleStorageRow } from '../worker/record-sync-storage.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
 
 const ORIGIN = 'https://fixtures.example';
@@ -15,122 +16,137 @@ async function fixture(options = {}) {
   const db = createD1(options); const id = `u-${++sequence}`; const token = `local-token-${sequence}`;
   db.raw.prepare("INSERT INTO users (id,email,password_hash,password_salt,created_at) VALUES (?,?, 'h','s','2026-10-08')").run(id,`${id}@example.test`);
   db.raw.prepare("INSERT INTO auth_sessions (id,user_id,token_hash,created_at,expires_at) VALUES (?,?,?,'2026-10-08','2099-01-01')").run(`auth-${id}`,id,await tokenDigest(token));
-  const call = (route, init = {}, level = '1') => worker.fetch(new Request(`${ORIGIN}/api/sync/${route}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(level ? { 'X-Reptrio-Data-Level': level } : {}), ...init.headers } }), { DB: db }, { waitUntil() {} });
+  const call = (route, init = {}, level = '1', env = {}) => worker.fetch(new Request(`${ORIGIN}/api/sync/${route}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(level ? { 'X-Reptrio-Data-Level': level } : {}), ...init.headers } }), { DB: db, ...env }, { waitUntil() {} });
   const push = (data, syncVersion, level) => call('push',{method:'POST',body:JSON.stringify({data,syncVersion})},level);
   const pull = async () => { const r = await call('pull'); assert.equal(r.status,200); return r.json(); };
   const dump = () => JSON.stringify(db.rows('SELECT * FROM sync_records ORDER BY kind,record_key'));
   return { db, push, pull, call, dump };
 }
 const code = async response => [response.status,(await response.json()).code];
-const refused = async (f,action) => { const before = f.dump(); assert.deepEqual(await code(await action()),[409,'SYNC_SCHEMA_LOSS_RISK']); assert.equal(f.dump(),before,'nothing written'); };
+const refused = async (f, action, expected = 'SYNC_SCHEMA_LOSS_RISK') => { const before = f.dump(); assert.deepEqual(await code(await action()),[expected === 'SYNC_PAYLOAD_INVALID' ? 400 : 409, expected]); assert.equal(f.dump(),before,'nothing written'); };
 
 const set = (n, over = {}) => ({ exerciseId: 'bench', setNumber: n, weight: String(60 + n * 5), reps: '8', rir: '', rpe: '', rest: '', tempo: '', note: '', completed: true, startedAt: `2026-10-29T08:0${n}:00.000Z`, completedAt: `2026-10-29T08:0${n}:30.000Z`, ...over });
-const base = () => ({
+const strip = value => JSON.parse(JSON.stringify(value));
+const base = () => strip({
   schemaVersion: 8, programs: [], sessions: [], measurements: [],
   draft: { id: 'draft-1', programId: null, dayId: null, dayName: 'Push', startedAt: '2026-10-29T08:00:00.000Z', lastEditedAt: '2026-10-29T08:05:00.000Z', watchStateRevision: 4,
     exercises: [{ id: 'row-bench', exerciseId: 'bench' }, { id: 'row-ohp', exerciseId: 'ohp' }],
     sets: { 'row-bench': { 1: set(1), 2: set(2, { note: 'grip' }), 3: set(3, { completed: false, completedAt: undefined, startedAt: undefined }) }, 'row-ohp': { 1: set(1, { exerciseId: 'ohp' }) } },
     restTimer: null },
 });
-// Mobile deleteSetFromDraft: drop key r, later sets move down one key with their own values, bookkeeping grows.
-function deleteSet(data, row, key, revision) {
+let ids = 0;
+// Mobile deleteSetFromDraft: drop key, later sets move down one key with their own values, the log gets one entry.
+function deleteSet(data, row, key, revision = (data.draft.watchStateRevision || 0) + 1) {
   const next = clone(data); const rows = next.draft.sets[row]; const keys = Object.keys(rows).map(Number).sort((a,b) => a-b);
   const out = {};
   for (const k of keys) { if (k === key) continue; const target = k > key ? k - 1 : k; out[target] = { ...rows[k], setNumber: target }; }
   next.draft.sets[row] = out;
   next.draft.watchStateRevision = revision;
   next.draft.setLayoutFence = { ...(next.draft.setLayoutFence || {}), [row]: revision };
-  next.draft.deletedSetCount = { ...(next.draft.deletedSetCount || {}), [row]: ((next.draft.deletedSetCount || {})[row] || 0) + 1 };
-  return JSON.parse(JSON.stringify(next));
+  next.draft.setDeletionLog = { ...(next.draft.setDeletionLog || {}), [row]: [...((next.draft.setDeletionLog || {})[row] || []), { id: `del-${++ids}`, key }] };
+  return strip(next);
 }
-const strip = value => JSON.parse(JSON.stringify(value));
+const addSet = (data, row) => { const next = clone(data); const n = Object.keys(next.draft.sets[row]).length + 1; next.draft.sets[row][n] = { exerciseId: 'bench', setNumber: n, weight: '75', reps: '8', rir: '', rpe: '', rest: '', tempo: '', note: '', completed: false }; return next; };
 
-// 1. Middle set deleted, set 3 becomes 2 with its own values; the other row untouched. Pull returns exactly it.
+// 1. Middle set deleted, set 3 becomes 2 with its own values; another deletion; the LAST set (row stays {}); finish.
 {
-  const f = await fixture(); const d = strip(base()); assert.equal((await f.push(d,0)).status,200);
-  const deleted = deleteSet(d,'row-bench',2,5);
-  assert.equal((await f.push(deleted,1)).status,200);
+  const f = await fixture(); const d = base(); assert.equal((await f.push(d,0)).status,200);
+  const deleted = deleteSet(d,'row-bench',2); assert.equal((await f.push(deleted,1)).status,200);
   assert.deepEqual((await f.pull()).data,deleted);
-  // A later delete of set 1 in the same row (count 1 → 2) and finishing the workout (draft cleared with the bookkeeping).
-  const again = deleteSet(deleted,'row-bench',1,6); assert.equal((await f.push(again,2)).status,200);
-  const finished = clone(again); finished.draft = null; finished.sessions = [{ id: 's1', title: 'Push', startedAt: again.draft.startedAt, completedAt: '2026-10-29T09:00:00.000Z', sets: again.draft.sets }];
-  assert.equal((await f.push(finished,3)).status,200,'finish clears a draft carrying setLayoutFence / deletedSetCount');
+  const again = deleteSet(deleted,'row-bench',1); assert.equal((await f.push(again,2)).status,200);
+  const empty = deleteSet(again,'row-bench',1); assert.deepEqual(empty.draft.sets['row-bench'], {}, 'last set deleted, row kept');
+  assert.equal((await f.push(empty,3)).status,200,'the last set of an exercise can be deleted');
+  assert.deepEqual((await f.pull()).data.draft.sets['row-bench'], {});
+  const refill = addSet(empty,'row-bench'); assert.equal((await f.push(refill,4)).status,200,'a set added to the empty row');
+  const finished = clone(refill); finished.draft = null; finished.sessions = [{ id: 's1', title: 'Push', startedAt: refill.draft.startedAt, completedAt: '2026-10-29T09:00:00.000Z', sets: refill.draft.sets }];
+  assert.equal((await f.push(finished,5)).status,200,'finish clears a draft carrying setLayoutFence / setDeletionLog');
   assert.deepEqual((await f.pull()).data,finished);
 }
-// 2. Without a declared deletion (old client / bug) the same shape is refused exactly as before; so is a bump of the
-//    fence alone.
+// 2. Stale copies: a push whose log lacks a deletion the server holds is refused (another phone / older copy), whether the
+//    log is missing, shorter, or of equal length but different; nothing written.
 {
-  const f = await fixture(); const d = strip(base()); assert.equal((await f.push(d,0)).status,200);
-  const undeclared = deleteSet(d,'row-bench',2,5); delete undeclared.draft.deletedSetCount;
-  await refused(f,() => f.push(undeclared,1));
-  const otherRow = deleteSet(d,'row-bench',2,5); otherRow.draft.deletedSetCount = { 'row-ohp': 1 };
-  await refused(f,() => f.push(otherRow,1));
-  const shrunk = deleteSet(d,'row-bench',2,5); shrunk.draft.deletedSetCount = { 'row-bench': 0 };
-  await refused(f,() => f.push(shrunk,1));
+  const f = await fixture(); const d = base(); assert.equal((await f.push(d,0)).status,200);
+  const deleted = deleteSet(d,'row-bench',2); assert.equal((await f.push(deleted,1)).status,200);
+  const staleOld = clone(d); staleOld.draft.sets['row-ohp'][1].reps = '12'; // phone B's unrelated edit on the old copy
+  await refused(f,() => f.push(staleOld,2),'SYNC_DRAFT_LAYOUT_STALE');
+  const dropped = clone(deleted); delete dropped.draft.setDeletionLog;
+  await refused(f,() => f.push(dropped,2),'SYNC_DRAFT_LAYOUT_STALE');
+  const other = deleteSet(d,'row-bench',1); // phone B deleted a different set from the same base: equal length, different log
+  await refused(f,() => f.push(other,2),'SYNC_DRAFT_LAYOUT_STALE');
+  const otherRow = clone(deleted); otherRow.draft.setDeletionLog = { 'row-ohp': deleted.draft.setDeletionLog['row-bench'] };
+  await refused(f,() => f.push(otherRow,2),'SYNC_DRAFT_LAYOUT_STALE');
+  const tampered = clone(deleted); tampered.draft.setDeletionLog['row-bench'] = [{ ...deleted.draft.setDeletionLog['row-bench'][0], key: 3 }];
+  await refused(f,() => f.push(tampered,2),'SYNC_DRAFT_LAYOUT_STALE'); // same entry id, another removed key: not the same history
+  // The server copy plus a new deletion on top is accepted.
+  assert.equal((await f.push(deleteSet(deleted,'row-ohp',1),2)).status,200);
 }
-// 3. Exactly d removals: a kept (renumbered) set that also lost a known or unknown field cannot be explained as a second
-//    removal; two sets gone with one declared deletion is refused; a removed set with an unknown field is never discarded.
+// 3. Mapping exactness: kept sets may not lose a known or unknown field; a removed set with an unknown field is never
+//    discarded; a deletion not reflected in the sets (row unchanged) is refused; malformed logs are invalid.
 {
-  const f = await fixture(); const d = strip(base()); d.draft.sets['row-bench'][3].privateFuture = { keep: true }; assert.equal((await f.push(d,0)).status,200);
-  const lostKnown = deleteSet(d,'row-bench',1,5); delete lostKnown.draft.sets['row-bench'][1].note; lostKnown.draft.sets['row-bench'][1].note = undefined;
-  const fieldGone = strip(lostKnown); assert.ok(!('note' in fieldGone.draft.sets['row-bench'][1]));
-  await refused(f,() => f.push(fieldGone,1));
-  const lostUnknown = deleteSet(d,'row-bench',1,5); delete lostUnknown.draft.sets['row-bench'][2].privateFuture;
+  const f = await fixture(); const d = base(); d.draft.sets['row-bench'][3].privateFuture = { keep: true }; assert.equal((await f.push(d,0)).status,200);
+  const lostKnown = deleteSet(d,'row-bench',1); delete lostKnown.draft.sets['row-bench'][1].note;
+  await refused(f,() => f.push(lostKnown,1));
+  const lostUnknown = deleteSet(d,'row-bench',1); delete lostUnknown.draft.sets['row-bench'][2].privateFuture;
   await refused(f,() => f.push(lostUnknown,1));
-  const twoGone = deleteSet(deleteSet(d,'row-bench',1,5),'row-bench',1,6); twoGone.draft.deletedSetCount = { 'row-bench': 1 };
-  await refused(f,() => f.push(twoGone,1));
-  const unknownRemoved = deleteSet(d,'row-bench',3,5);
-  await refused(f,() => f.push(unknownRemoved,1));
-  // Reordered rows are not a deletion.
-  const swapped = deleteSet(d,'row-bench',1,5); const rows = swapped.draft.sets['row-bench']; swapped.draft.sets['row-bench'] = { 1: { ...rows[2], setNumber: 1 }, 2: { ...rows[1], setNumber: 2 } };
+  await refused(f,() => f.push(deleteSet(d,'row-bench',3),1));
+  const notApplied = clone(d); notApplied.draft.setDeletionLog = { 'row-bench': [{ id: 'x1', key: 1 }] };
+  await refused(f,() => f.push(notApplied,1));
+  const swapped = deleteSet(d,'row-bench',1); const rows = swapped.draft.sets['row-bench']; swapped.draft.sets['row-bench'] = { 1: { ...rows[2], setNumber: 1 }, 2: { ...rows[1], setNumber: 2 } };
   await refused(f,() => f.push(swapped,1));
+  const dup = clone(d); dup.draft.setDeletionLog = { 'row-bench': [{ id: 'a', key: 9 }, { id: 'a', key: 9 }] };
+  await refused(f,() => f.push(dup,1),'SYNC_PAYLOAD_INVALID');
+  const bad = clone(d); bad.draft.setDeletionLog = { 'row-bench': [{ id: 'a', key: 0 }] };
+  await refused(f,() => f.push(bad,1),'SYNC_PAYLOAD_INVALID');
+  const long = clone(d); long.draft.setDeletionLog = { 'row-bench': Array.from({ length: 201 }, (_, i) => ({ id: `l${i}`, key: 99 })) };
+  await refused(f,() => f.push(long,1),'SYNC_PAYLOAD_INVALID');
 }
-// 4. Offline: two deletions declared together; delete + add a set in one push; undo of a completion on a renumbered set.
+// 4. Offline sequences between pushes: two deletions; delete + add; add + delete the added set (key beyond the mapped sets);
+//    a completion undone on a renumbered set; ten-plus sets (numeric order).
 {
-  const f = await fixture(); const d = strip(base()); assert.equal((await f.push(d,0)).status,200);
-  const two = deleteSet(deleteSet(d,'row-bench',1,5),'row-bench',1,6); assert.equal((await f.push(two,1)).status,200);
+  const f = await fixture(); const d = base(); assert.equal((await f.push(d,0)).status,200);
+  assert.equal((await f.push(deleteSet(deleteSet(d,'row-bench',1),'row-bench',1),1)).status,200);
   const g = await fixture(); assert.equal((await g.push(d,0)).status,200);
-  const plusOne = deleteSet(d,'row-bench',2,5); plusOne.draft.sets['row-bench'][3] = { exerciseId: 'bench', setNumber: 3, weight: '75', reps: '8', rir: '', rpe: '', rest: '', tempo: '', note: '', completed: false };
-  assert.equal((await g.push(plusOne,1)).status,200,'deleted then added');
+  assert.equal((await g.push(addSet(deleteSet(d,'row-bench',2),'row-bench'),1)).status,200,'deleted then added');
   const h = await fixture(); assert.equal((await h.push(d,0)).status,200);
-  const undo = deleteSet(d,'row-bench',1,5); const moved = undo.draft.sets['row-bench'][1]; delete moved.completedAt; moved.completed = false;
-  assert.equal((await h.push(undo,1)).status,200,'true→false completion undo keeps working on the new key');
+  assert.equal((await h.push(deleteSet(addSet(d,'row-bench'),'row-bench',4),1)).status,200,'added then deleted the added set');
+  const u = await fixture(); assert.equal((await u.push(d,0)).status,200);
+  const undo = deleteSet(d,'row-bench',1); const moved = undo.draft.sets['row-bench'][1]; delete moved.completedAt; moved.completed = false;
+  assert.equal((await u.push(undo,1)).status,200,'true→false completion undo keeps working on the new key');
+  const t = await fixture(); const big = base(); big.draft.sets['row-bench'] = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, set(i + 1)]));
+  big.draft.sets['row-bench'][11].privateFuture = { keep: true };
+  assert.equal((await t.push(big,0)).status,200);
+  const bigDeleted = deleteSet(big,'row-bench',2); assert.equal((await t.push(bigDeleted,1)).status,200);
+  assert.deepEqual((await t.pull()).data.draft.sets['row-bench'][10].privateFuture, { keep: true }, 'former set 11 is now set 10');
 }
-// 4b. Ten or more sets: keys are ordered numerically (10 after 9), so the renumbering of 3..11 down to 2..10 is explained.
+// 5. Older client: one that pulled after the deletion keeps the log (Build 50 keeps unknown draft fields) and is accepted;
+//    a stale one without it is refused (blocked, never corrupting); it still cannot delete sets without a log entry.
 {
-  const f = await fixture(); const d = strip(base()); d.draft.sets['row-bench'] = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i + 1, set(i + 1, { weight: String(100 + i), startedAt: `2026-10-29T08:${String(10 + i).padStart(2, '0')}:00.000Z`, completedAt: `2026-10-29T08:${String(10 + i).padStart(2, '0')}:30.000Z` })]));
-  d.draft.sets['row-bench'][11].privateFuture = { keep: true }; // the unknown field must survive under some new key
-  assert.equal((await f.push(d,0)).status,200);
-  const deleted = deleteSet(d,'row-bench',2,5); assert.equal((await f.push(deleted,1)).status,200);
-  assert.deepEqual((await f.pull()).data,deleted);
-}
-// 5. Older client: drops the bookkeeping (unknown to it) but keeps the layout → accepted; it still cannot delete sets.
-{
-  const f = await fixture(); const d = strip(base()); assert.equal((await f.push(d,0)).status,200);
-  const deleted = deleteSet(d,'row-bench',2,5); assert.equal((await f.push(deleted,1)).status,200);
-  const old = clone(deleted); delete old.draft.setLayoutFence; delete old.draft.deletedSetCount;
-  assert.equal((await f.push(old,2,'1')).status,200,'older client drops the omittable bookkeeping');
-  const oldDelete = clone(old); delete oldDelete.draft.sets['row-bench'][2];
+  const f = await fixture(); const d = base(); assert.equal((await f.push(d,0)).status,200);
+  const deleted = deleteSet(d,'row-bench',2); assert.equal((await f.push(deleted,1)).status,200);
+  const pulledOld = clone(deleted); pulledOld.draft.sets['row-ohp'][1].reps = '10';
+  assert.equal((await f.push(pulledOld,2,'1')).status,200,'old client that pulled the log');
+  const oldDelete = clone(pulledOld); delete oldDelete.draft.sets['row-bench'][2];
   await refused(f,() => f.push(oldDelete,3));
-  // Level 0 shape knows the bookkeeping too.
-  const z = await fixture(); assert.equal((await z.push(d,0,null)).status,200); assert.equal((await z.push(deleteSet(d,'row-bench',2,5),1,null)).status,200);
+  const z = await fixture(); assert.equal((await z.push(d,0,null)).status,200); assert.equal((await z.push(deleteSet(d,'row-bench',2),1,null)).status,200,'level 0 shape knows the bookkeeping');
 }
-// 6. A different draft (new workout) is not a relayout of the previous one.
+// 6. A different draft (new workout) is not a relayout; a new draft id with its own log starts fresh.
 {
-  const f = await fixture(); const d = strip(base()); assert.equal((await f.push(d,0)).status,200);
-  const other = deleteSet(d,'row-bench',2,5); other.draft.id = 'draft-2';
+  const f = await fixture(); const d = base(); assert.equal((await f.push(d,0)).status,200);
+  const other = deleteSet(d,'row-bench',2); other.draft.id = 'draft-2';
   await refused(f,() => f.push(other,1));
+  const fresh = base(); fresh.draft.id = 'draft-3'; assert.equal((await f.push(fresh,1)).status,200);
 }
-// 7. Pure rule (also used by the staged record transport for the draft metadata row) and capability.
+// 7. Pure rule, staged transport (metadata row → compatible) and capability (+ operational switch).
 {
-  const d = strip(base()); const next = deleteSet(d,'row-bench',2,5);
+  const d = base(); const next = deleteSet(d,'row-bench',2);
   assert.deepEqual(compatible(d,next,1).draft.sets['row-bench'],next.draft.sets['row-bench']);
-  assert.throws(() => compatible(d,{ ...next, draft: { ...next.draft, deletedSetCount: undefined } },1),{ code: 'SYNC_SCHEMA_LOSS_RISK' });
+  assert.throws(() => compatible(next,d,1),{ code: 'SYNC_DRAFT_LAYOUT_STALE' });
+  const row = data => ({ kind: 'metadata', address_json: JSON.stringify({ field: 'draft' }), payload_json: JSON.stringify(data.draft) });
+  assert.deepEqual(compatibleStorageRow(row(d),row(next),8,1).sets['row-bench'], next.draft.sets['row-bench'], 'staged transport accepts the same relayout');
+  assert.throws(() => compatibleStorageRow(row(next),row(d),8,1),{ code: 'SYNC_DRAFT_LAYOUT_STALE' }, 'and refuses the same stale copy');
   const f = await fixture(); assert.equal((await (await f.call('capabilities')).json()).draftSetDeletion,1);
-  // Operational switch: stop offering the capability (the safe way back; reverting the code would make the old rule refuse
-  // clearing drafts that carry the bookkeeping). Accepting declared deletions and the known fields stay.
-  const off = await worker.fetch(new Request(`${ORIGIN}/api/sync/capabilities`, { headers: { Authorization: 'Bearer local-token-' + sequence } }), { DB: f.db, DRAFT_SET_DELETION_ENABLED: 'false' }, { waitUntil() {} });
-  const offBody = await off.json(); assert.equal(off.status,200); assert.equal(offBody.writable,true); assert.equal(offBody.draftSetDeletion, undefined, 'switched off: not offered');
+  const off = await f.call('capabilities',{},'1',{ DRAFT_SET_DELETION_ENABLED: 'false' }); const offBody = await off.json();
+  assert.equal(off.status,200); assert.equal(offBody.writable,true); assert.equal(offBody.draftSetDeletion, undefined, 'switched off: not offered');
   const missing = await fixture({ migrationsUpTo: '0007_password_reset_tokens.sql' }); assert.equal((await (await missing.call('capabilities')).json()).draftSetDeletion,undefined,'not writable → no capability');
 }
-console.log('Draft set deletion PASS: declared deletions only, renumbered sets keep every field, unknown never discarded, offline multi-delete / delete+add / undo, older clients unchanged, finish clears bookkeeping, capability.');
+console.log('Draft set deletion PASS: deletion log prefix guard (stale copies refused), exact key mapping, last set / empty row, unknown never discarded, offline sequences, older clients, staged transport, capability.');

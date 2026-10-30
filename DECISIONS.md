@@ -4,6 +4,9 @@
   
 # Reptrio backend karar kaydı
 
+## 2026-10-30 — Build 51 senkron bütünlüğü (kullanıcı: silinen set geri gelmesin, sessiz kayıp olmasın)
+- `deletedSetCount` yerine satır günlüğü; sunucu eski kopyayı `SYNC_DRAFT_LAYOUT_STALE` ile reddeder. 2026-10-29'daki "düşen sayacı reddetme (o cihazın senkronu tıkanır)" kararı tersine çevrildi: eski kopyalı istemcinin senkronu bekler, veri bozulmaz; Build 51 telefonu reddi uzlaştırır (üç yönlü birleştirme / çakışma arşivi).
+
 ## 2026-10-29 — Build 51 B51-004 taslak set silme (kullanıcı görevi: backend senkron planını tamamla ve uygula, deploy yok)
 - Seçim: sunucu kayıpsızlığı istemci beyanıyla sınırlı biçimde doğrular (`deletedSetCount`); genel "bilinen satır silinebilir" kuralı reddedildi, çünkü eski bir istemcinin son setten alan düşürmesini sil+ekle gibi kabul ederdi. Çit (`setLayoutFence`) senkrona girer ama sunucu onu yalnız bilinen/omittable alan olarak taşır; Watch olayı ve ekran düzenlemesi reddi mobilde yapılır.
 - Bilinen sınır: aynı aktif antrenmanı iki telefonda aynı anda düzenlemek (yerel taslak kazanır) silinen seti diğer cihazdan geri getirebilir — mevcut çok cihaz taslak semantiği, bu değişiklikle gelmedi.
