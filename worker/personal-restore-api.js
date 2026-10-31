@@ -28,7 +28,7 @@ export async function personalRestoreRequest(request,env,userId,purpose,id,actio
   // H1: an old client cannot start, publish or undo into an account that holds Build 47 data (chunks/finalize/preview
   // only touch its own staging rows and stay within their query budget). Every publishing batch below raises the level
   // in the same CAS, so a raise between this check and an old client's commit invalidates that client's pin.
-  if(['start','commit','undo'].includes(action)&&clientDataLevel(request)<1)assertClientMayWrite(0,await accountDataLevel(db,userId));
+  if(['start','commit','undo'].includes(action))assertClientMayWrite(clientDataLevel(request),await accountDataLevel(db,userId));
   const p=await portableBody(request);
   if(action==='start')return json(await start(db,userId,purpose,state,p));
   const op=await operation(db,userId,id,purpose);

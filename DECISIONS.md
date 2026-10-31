@@ -4,6 +4,9 @@
   
 # Reptrio backend karar kaydı
 
+## 2026-10-31 — B52-002 sunucu: kişisel kartlar için veri seviyesi 2 ve tombstone-only silme
+- Kart koleksiyonu migration'sız tek `metadata` satırıdır; tombstone kullanıldığından normal akışta dizi küçülmez, yalnız tombstone dizi dışına çıkabilir. Eski sürümlerin yazması bilinçli engellenir (Build 47 örüntüsü, ürün etkisi: ilk kart oluştuktan sonra eski uygulama sürümleri güncelleme ister). Deploy/migration yok; kart varken Worker geri alınmaz.
+
 ## 2026-10-30 — Build 51 senkron bütünlüğü (kullanıcı: silinen set geri gelmesin, sessiz kayıp olmasın)
 - `deletedSetCount` yerine satır günlüğü; sunucu eski kopyayı `SYNC_DRAFT_LAYOUT_STALE` ile reddeder. 2026-10-29'daki "düşen sayacı reddetme (o cihazın senkronu tıkanır)" kararı tersine çevrildi: eski kopyalı istemcinin senkronu bekler, veri bozulmaz; Build 51 telefonu reddi uzlaştırır (üç yönlü birleştirme / çakışma arşivi).
 

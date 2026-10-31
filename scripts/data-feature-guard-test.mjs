@@ -62,7 +62,7 @@ const build47 = () => {
     sqlite.prepare('INSERT INTO sync_records VALUES (?,?,?,0)').run(kind, key, payload);
     assert.equal(sqlite.prepare(`SELECT COUNT(*) AS n FROM sync_records WHERE ${dataLevelPredicate()}`).get().n, expected, 'SQL ' + payload);
   }
-  for (const [value, expected] of [[null, 0], ['', 0], ['0', 0], ['1', 1], [' 2 ', 1], ['abc', 0], ['-1', 0], ['1.5', 0]]) {
+  for (const [value, expected] of [[null, 0], ['', 0], ['0', 0], ['1', 1], [' 2 ', 2], ['3', 2], ['999', 2], ['abc', 0], ['-1', 0], ['1.5', 0]]) {
     assert.equal(clientDataLevel(new Request(ORIGIN, value === null ? {} : { headers: { 'X-Reptrio-Data-Level': value } })), expected, String(value));
   }
 }

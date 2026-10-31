@@ -1,7 +1,7 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import { storageJSON } from './record-sync-storage.js';
 import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
-import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement, dataLevelPredicate } from './data-feature-guard.js';
+import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement, dataLevelCase } from './data-feature-guard.js';
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -212,7 +212,7 @@ export async function recordMutation(request,env,userId) {
     const previous=assembleRecordData(oldRows);
     if(previous.schemaVersion===9)fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     // Schema 5 cannot edit an account containing any mobile-only root, even if that root is untouched.
-    const maxima=(await db.prepare(`SELECT kind,MAX(ordinal) AS maximum,COUNT(*) AS count,MAX(CASE WHEN tombstone=0 AND ((kind='session' AND COALESCE(json_extract(address_json,'$.container'),'absent')<>'array') OR (kind='program' AND COALESCE(json_extract(payload_json,'$.schemaVersion'),'absent')<>'1.0')) THEN 1 ELSE 0 END) AS pwa_incompatible,MAX(CASE WHEN tombstone=0 AND ${dataLevelPredicate()} THEN 1 ELSE 0 END) AS data_level FROM sync_records WHERE user_id=? GROUP BY kind`).bind(userId).all()).results;
+    const maxima=(await db.prepare(`SELECT kind,MAX(ordinal) AS maximum,COUNT(*) AS count,MAX(CASE WHEN tombstone=0 AND ((kind='session' AND COALESCE(json_extract(address_json,'$.container'),'absent')<>'array') OR (kind='program' AND COALESCE(json_extract(payload_json,'$.schemaVersion'),'absent')<>'1.0')) THEN 1 ELSE 0 END) AS pwa_incompatible,MAX(CASE WHEN tombstone=0 THEN ${dataLevelCase()} ELSE 0 END) AS data_level FROM sync_records WHERE user_id=? GROUP BY kind`).bind(userId).all()).results;
     // H1: an old client may not edit any root of an account holding Build 47 data, even an untouched one.
     const clientLevel=clientDataLevel(request),storedLevel=await storedDataLevel(db,userId);
     const accountLevel=Math.max(storedLevel,rowsDataLevel(oldRows),...maxima.map(row=>Number(row.data_level)||0));
@@ -267,7 +267,7 @@ export async function recordMutation(request,env,userId) {
       SELECT ?,?,?,?,?,?,?,?,? WHERE ${RECORD_WRITE_GATE_SQL}
       ON CONFLICT(user_id,mutation_id) DO UPDATE SET request_hash=excluded.request_hash,plan_hash=excluded.plan_hash,base_revision=excluded.base_revision,committed_revision=excluded.committed_revision,outcome_json=excluded.outcome_json,created_at=excluded.created_at,expires_at=excluded.expires_at WHERE sync_mutation_receipts.expires_at<=excluded.created_at`)
       .bind(userId,p.mutationId,requestHash,planHash,p.baseRevision,version,outcomeJSON,now,expires,userId,version,token);
-    const result=await db.batch([cas,...chunks.map(chunk=>db.prepare(chunkSQL).bind(userId,chunk,userId,version,token)),...order.map(c=>orderStatement(db,userId,version,token,c)),receiptInsert,...(raiseLevel?[raiseDataLevelStatement(db,userId,version,token,now,true)]:[])]);
+    const result=await db.batch([cas,...chunks.map(chunk=>db.prepare(chunkSQL).bind(userId,chunk,userId,version,token)),...order.map(c=>orderStatement(db,userId,version,token,c)),receiptInsert,...(raiseLevel?[raiseDataLevelStatement(db,userId,version,token,now,true,Math.max(accountLevel,submittedLevel))]:[])]);
     const outcome=await db.prepare(`SELECT m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision FROM sync_mutation_receipts m JOIN users u ON u.id=m.user_id JOIN sync_account_state s ON s.user_id=m.user_id WHERE m.user_id=? AND m.mutation_id=? AND u.deleted_at IS NULL AND s.write_status='ACTIVE' AND s.storage_schema_version=1`).bind(userId,p.mutationId).first();
     if(result[0]?.meta?.changes!==1) {
       if(outcome && outcome.expires_at>new Date().toISOString()) { if(outcome.request_hash!==requestHash) fail('SYNC_MUTATION_ID_CONFLICT'); if(outcome.base_revision!==p.baseRevision || outcome.committed_revision!==version) fail('SYNC_STORAGE_UNAVAILABLE',503); return json(JSON.parse(outcome.outcome_json)); }

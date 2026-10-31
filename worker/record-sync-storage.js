@@ -114,7 +114,7 @@ export async function recordCapabilities(env, userId) {
     const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
     if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false,personalBackupVersions:[], code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
     const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?[1,2]:[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?[1,2]:[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -275,6 +275,24 @@ const measurementShape47 = { ...measurementShape, ...scalarFields('shoulderCm ch
 // Reactivating an archived gym removes archivedAt; nothing else of a gym may disappear.
 const gymShape47 = { ...scalarFields('id name note googlePlaceId'), archivedAt: Object.assign(Object.create(null), { [OMITTABLE]: true }) };
 const mobileDraftShape47 = { ...mobileDraftShape, exercises: [exerciseShape47] };
+// Build 52 (data level 2): the account-level personal exercise cards (root `personalExercises`). A card is a tombstoned record, never
+// deleted from the array while live; only a tombstone may be released (the client keeps at most 500). Known fields are closed
+// coverage; unknown future fields on a surviving card are protected by the generic loss rule.
+const personalDisplacedShape = { ...scalarFields('name primaryMuscle equipment description rev updatedAt deletedAt reason displacedAt'), assistingMuscles: [true], legacyCustomIds: [true], catalogMatch: scalarFields('catalogId matchedAt') };
+const personalExerciseShape = { ...scalarFields('id v name primaryMuscle equipment description createdAt updatedAt rev deletedAt'), assistingMuscles: [true], legacyCustomIds: [true], catalogMatch: scalarFields('catalogId matchedAt'), displaced: [personalDisplacedShape] };
+const MAX_PERSONAL_EXERCISES = 1000;
+function personalExercisesLoss(previous, next) {
+  if (!Array.isArray(next) || next.length > MAX_PERSONAL_EXERCISES || next.some(card => !object(card) || typeof card.id !== 'string' || card.id === '') || new Set(next.map(card => card.id)).size !== next.length) fail('SYNC_PAYLOAD_INVALID', 400);
+  if (!Array.isArray(previous)) return;
+  const kept = new Map(next.map(card => [card.id, card]));
+  for (const card of previous) {
+    if (!object(card) || typeof card.id !== 'string') continue;
+    const successor = kept.get(card.id);
+    if (successor) noFieldLoss(card, successor, personalExerciseShape);
+    // Only a tombstone (deletedAt is a string) with fully known fields may leave the array; a live card never disappears.
+    else if (typeof card.deletedAt !== 'string' || !knownShape(card, personalExerciseShape)) fail('SYNC_SCHEMA_LOSS_RISK');
+  }
+}
 // Undo of a catalog link restores set rows exactly, which can remove these two identity labels again.
 const omittableScalar = () => Object.assign(Object.create(null), { [OMITTABLE]: true });
 const setShape47 = { ...setShape, exerciseName: omittableScalar(), canonicalExerciseId: omittableScalar() };
@@ -448,6 +466,7 @@ export function compatible(previous, submitted, dataLevel = 0) {
   for (const field of Object.keys(next)) if (!collections[field] && own(previous,field)) {
     const clearCoverage = field === 'draft' ? (schemaVersion === 8 ? shape.mobileDraft : pwaDraftShape) : field === 'programBuilderDraft' ? shape.program : field === 'settings' ? { gyms: [shape.gym] } : field === 'importHistory' ? [{ ...scalarFields('importId finalProgramId finalizedAt'), source: scalarFields('fileName') }] : null;
     if (field === 'draft' && schemaVersion === 8) { draftLoss(previous.draft,next.draft,clearCoverage); continue; }
+    if (field === 'personalExercises') { personalExercisesLoss(previous.personalExercises,next.personalExercises); continue; }
     noFieldLoss(previous[field],next[field],clearCoverage,{schemaVersion,path:[field]});
   }
   return next;
@@ -521,7 +540,7 @@ export async function recordPush(request, env, userId) {
         ON CONFLICT(user_id,kind,record_key) DO UPDATE SET parent_key = excluded.parent_key, ordinal = excluded.ordinal, address_json = excluded.address_json,
           payload_json = excluded.payload_json, modified_revision = excluded.modified_revision, tombstone = excluded.tombstone, deleted_revision = excluded.deleted_revision
         WHERE sync_records.tombstone = 0`).bind(userId,chunk,userId,version,token)),
-      ...(raiseLevel ? [raiseDataLevelStatement(db,userId,version,token,now,true)] : [])];
+      ...(raiseLevel ? [raiseDataLevelStatement(db,userId,version,token,now,true,Math.max(accountLevel,submittedLevel))] : [])];
     const results = await db.batch(statements);
     if (results[0]?.meta?.changes !== 1) {
       const latest = await db.prepare(`SELECT s.revision, s.write_status, u.deleted_at FROM users u LEFT JOIN sync_account_state s ON s.user_id = u.id WHERE u.id = ?`).bind(userId).first();
