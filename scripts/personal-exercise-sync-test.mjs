@@ -230,6 +230,96 @@ for (const [value, expected] of [[null, 0], ['0', 0], ['1', 1], ['2', 2], [' 2 '
   assert.deepEqual(f.level(), { level: 2, raised_revision: 2 }, 'the next level-2 write records the observed level');
 }
 
+// ---- Designed transitions must not wedge sync: unlink / relink a catalog match, rotate the recoverable versions, device union.
+{
+  const f = await fixture();
+  const entry = (n, extra = {}) => ({ name: `V${n}`, primaryMuscle: null, assistingMuscles: [], equipment: null, description: null, legacyCustomIds: [], catalogMatch: n % 2 ? { catalogId: 'ex_000001', matchedAt: '2026-10-31T10:00:00.000Z' } : null, rev: n, updatedAt: `2026-10-31T10:0${n}:00.000Z`, deletedAt: null, reason: 'edit-conflict', displacedAt: `2026-10-31T11:0${n}:00.000Z`, ...extra });
+  const matched = card('lnk', { catalogMatch: { catalogId: 'ex_000001', matchedAt: '2026-10-31T10:00:00.000Z' }, rev: 2 });
+  assert.equal((await f.push(withCards([matched]), 0, 2)).status, 200);
+  const unlinked = card('lnk', { catalogMatch: null, rev: 3 });                                  // undo of the catalog match
+  assert.equal((await f.push(withCards([unlinked]), 1, 2)).status, 200, 'object -> null');
+  assert.equal((await f.push(withCards([matched]), 2, 2)).status, 200, 'null -> object');
+  assert.equal((await f.push(withCards([{ ...matched, catalogMatch: { catalogId: 'ex_000002', matchedAt: '2026-10-31T13:00:00.000Z' } }]), 3, 2)).status, 200, 'object -> other object');
+  const omitted = clone(matched); delete omitted.catalogMatch;
+  await rejected(f, () => f.push(withCards([omitted]), 4, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);                   // the key itself may not vanish
+  const withUnknownMatch = { ...matched, catalogMatch: { catalogId: 'ex_000001', matchedAt: 'x', futureNote: 'keep' } };
+  assert.equal((await f.push(withCards([withUnknownMatch]), 4, 2)).status, 200);
+  await rejected(f, () => f.push(withCards([{ ...matched, catalogMatch: null }]), 5, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);   // would drop an unknown field
+  // displaced rotation at the five-entry cap (fresh account): oldest leaves, the rest shift, a null/object swaps position
+  const g = await fixture(); const plain = card('rot'); assert.equal((await g.push(withCards([plain]), 0, 2)).status, 200);
+  const five = [1, 2, 3, 4, 5].map(n => entry(n));
+  assert.equal((await g.push(withCards([{ ...plain, displaced: five }]), 1, 2)).status, 200);
+  const rotated = [2, 3, 4, 5, 6].map(n => entry(n));
+  assert.equal((await g.push(withCards([{ ...plain, displaced: rotated }]), 2, 2)).status, 200, 'rotation with catalogMatch object/null swapping positions');
+  const interleaved = [entry(2), entry(3, { name: 'dev-b' }), entry(4), entry(5), entry(7)];
+  assert.equal((await g.push(withCards([{ ...plain, displaced: interleaved }]), 3, 2)).status, 200, 'cross-device union interleaves entries');
+  assert.equal((await g.push(withCards([{ ...plain, displaced: [] }]), 4, 2)).status, 200, 'known entries may all leave');
+  const futureEntry = { ...entry(1), futureField: 1 };
+  assert.equal((await g.push(withCards([{ ...plain, displaced: [futureEntry] }]), 5, 2)).status, 200);
+  await rejected(g, () => g.push(withCards([{ ...plain, displaced: [] }]), 6, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);        // an entry with unknown fields cannot be dropped
+  assert.equal((await g.push(withCards([{ ...plain, displaced: [futureEntry, entry(2)] }]), 6, 2)).status, 200);
+  const noKey = clone(plain); delete noKey.displaced;
+  await rejected(g, () => g.push(withCards([noKey]), 7, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);
+}
+
+// ---- Shape sanity applies on FIRST introduction too (no previous state, or a previous state without the key).
+{
+  const cases = {
+    'duplicate ids': withCards([card('d'), card('d')]), 'no id': withCards([{ name: 'x' }]), 'empty id': withCards([{ ...card('e'), id: '' }]),
+    'string': withCards('x'), 'null': { ...base(), personalExercises: null }, 'plain object': withCards({ id: 'x' }), 'too many': withCards(Array.from({ length: 1001 }, (_, i) => card(`o${i}`))),
+  };
+  for (const [name, data] of Object.entries(cases)) {
+    const empty = await fixture();                                       // no previous state at all
+    await rejected(empty, () => empty.push(data, 0, 2), [400, 'SYNC_PAYLOAD_INVALID']);
+    const existing = await fixture(); assert.equal((await existing.push(base(), 0, 2)).status, 200);   // previous state without the key
+    await rejected(existing, () => existing.push(data, 1, 2), [400, 'SYNC_PAYLOAD_INVALID']);
+  }
+  const f = await fixture();
+  assert.equal((await f.push(withCards(Array.from({ length: 1000 }, (_, i) => card(`b${i}`))), 0, 2)).status, 200, 'exactly 1000 is accepted');
+}
+
+// ---- Tombstone strictness: a real timestamp and fully known fields are required to release a card.
+{
+  const f = await fixture();
+  const emptyStamp = card('es', { deletedAt: '' });
+  const future = card('ft', { deletedAt: '2026-10-31T11:00:00.000Z', futureField: 1 });
+  const ok = card('ok', { deletedAt: '2026-10-31T11:00:00.000Z' });
+  assert.equal((await f.push(withCards([emptyStamp, future, ok]), 0, 2)).status, 200);
+  await rejected(f, () => f.push(withCards([future, ok]), 1, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);      // "" is not a deletion
+  await rejected(f, () => f.push(withCards([emptyStamp, ok]), 1, 2), [409, 'SYNC_SCHEMA_LOSS_RISK']);  // unknown field would be lost
+  assert.equal((await f.push(withCards([emptyStamp, future]), 1, 2)).status, 200, 'a known tombstone can be released');
+}
+
+// ---- Level detection parity when a card row also carries a level-1 token, and the level derived by the non-forced raise.
+{
+  const sqlite = new DatabaseSync(':memory:');
+  sqlite.exec('CREATE TABLE sync_records(kind TEXT,record_key TEXT,payload_json TEXT,tombstone INTEGER)');
+  const payload = JSON.stringify([{ ...card('lv'), catalogLink: { x: 1 } }]);   // a future field that looks like a level-1 token
+  assert.equal(payloadDataLevel('metadata', '["personalExercises"]', payload), 2);
+  sqlite.prepare('INSERT INTO sync_records VALUES (?,?,?,0)').run('metadata', '["personalExercises"]', payload);
+  assert.equal(sqlite.prepare(`SELECT ${dataLevelCase()} AS level FROM sync_records`).get().level, 2, 'SQL agrees: level 2 wins over a level-1 token');
+  const f = await fixture(); assert.equal((await f.push(withCards([card('nf')]), 0, 2)).status, 200);
+  const state = () => f.db.rows('SELECT revision,write_token FROM sync_account_state WHERE user_id=?', f.id)[0];
+  f.db.raw.prepare('DELETE FROM sync_account_data_features WHERE user_id=?').run(f.id);
+  const { revision, write_token } = state();
+  await f.db.batch([raiseDataLevelStatement(f.db, f.id, revision, write_token, '2026-10-31T12:00:00.000Z')]);   // restore-style: level derived from the rows written at this revision
+  assert.deepEqual(f.level(), { level: 2, raised_revision: revision }, 'a card row written at this revision raises to 2');
+  const g = await fixture(); assert.equal((await g.push(build47(), 0, 1)).status, 200);
+  g.db.raw.prepare('DELETE FROM sync_account_data_features WHERE user_id=?').run(g.id);
+  const gs = g.db.rows('SELECT revision,write_token FROM sync_account_state WHERE user_id=?', g.id)[0];
+  await g.db.batch([raiseDataLevelStatement(g.db, g.id, gs.revision, gs.write_token, '2026-10-31T12:00:00.000Z')]);
+  assert.deepEqual(g.level(), { level: 1, raised_revision: gs.revision }, 'only level-1 data raises to 1');
+}
+
+// ---- Undo is gated for every client level (the gate runs before the operation is looked up).
+{
+  const f = await fixture(); assert.equal((await f.push(withCards([card('u')]), 0, 2)).status, 200);
+  const undo = level => f.call('/api/backup/restore/operations/00000000-0000-4000-8000-000000000000/undo', { method: 'POST', body: JSON.stringify({}) }, level);
+  await rejected(f, () => undo(1), [409, 'SYNC_CLIENT_UPGRADE_REQUIRED']);
+  await rejected(f, () => undo(null), [409, 'SYNC_CLIENT_UPGRADE_REQUIRED']);
+  const status = (await undo(2)).status; assert.notEqual(status, 409, 'a level-2 client passes the gate (the unknown operation then fails on its own)');
+}
+
 // ---- Accounts without cards behave exactly as before (level-0 and level-1 clients unaffected).
 {
   const f = await fixture(); const d = base();

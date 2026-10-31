@@ -114,7 +114,7 @@ export async function recordCapabilities(env, userId) {
     const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
     if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false,personalBackupVersions:[], code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
     const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?[1,2]:[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?(env.PERSONAL_EXERCISES_ENABLED==='false'?[1,2]:[1,2,3]):[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -281,16 +281,43 @@ const mobileDraftShape47 = { ...mobileDraftShape, exercises: [exerciseShape47] }
 const personalDisplacedShape = { ...scalarFields('name primaryMuscle equipment description rev updatedAt deletedAt reason displacedAt'), assistingMuscles: [true], legacyCustomIds: [true], catalogMatch: scalarFields('catalogId matchedAt') };
 const personalExerciseShape = { ...scalarFields('id v name primaryMuscle equipment description createdAt updatedAt rev deletedAt'), assistingMuscles: [true], legacyCustomIds: [true], catalogMatch: scalarFields('catalogId matchedAt'), displaced: [personalDisplacedShape] };
 const MAX_PERSONAL_EXERCISES = 1000;
-function personalExercisesLoss(previous, next) {
+const personalCatalogMatchShape = scalarFields('catalogId matchedAt');
+// Shape sanity of a submitted list. Applies whenever the root is present, including its first introduction.
+export function assertPersonalExercisesShape(next) {
   if (!Array.isArray(next) || next.length > MAX_PERSONAL_EXERCISES || next.some(card => !object(card) || typeof card.id !== 'string' || card.id === '') || new Set(next.map(card => card.id)).size !== next.length) fail('SYNC_PAYLOAD_INVALID', 400);
+}
+// A tombstone carries a real timestamp (an empty or invalid `deletedAt` is not a deletion).
+const isPersonalTombstone = card => typeof card.deletedAt === 'string' && Number.isFinite(Date.parse(card.deletedAt));
+// Loss rule for a card that survives. `catalogMatch` may be set, replaced or cleared (reversible catalog match) and `displaced` is a
+// rotating list of recoverable versions (the client keeps the newest five; entries have no id, so they are not compared by
+// position): a previous entry may leave only if it is fully known; an entry with unknown future fields must remain unchanged.
+function personalCardLoss(previous, next) {
+  const { catalogMatch: previousMatch, displaced: previousDisplaced, ...previousRest } = previous;
+  const { catalogMatch: nextMatch, displaced: nextDisplaced, ...nextRest } = next;
+  noFieldLoss(previousRest, nextRest, personalExerciseShape);
+  if (own(previous, 'catalogMatch')) {
+    if (!own(next, 'catalogMatch') || (nextMatch !== null && !object(nextMatch))) fail('SYNC_SCHEMA_LOSS_RISK');
+    if (JSON.stringify(previousMatch) !== JSON.stringify(nextMatch) && !knownShape(previousMatch, personalCatalogMatchShape)) fail('SYNC_SCHEMA_LOSS_RISK');
+    if (object(nextMatch)) noFieldLoss(object(previousMatch) ? previousMatch : {}, nextMatch, personalCatalogMatchShape);
+  }
+  if (own(previous, 'displaced')) {
+    if (!own(next, 'displaced') || !Array.isArray(nextDisplaced)) fail('SYNC_SCHEMA_LOSS_RISK');
+    const kept = new Set(nextDisplaced.map(entry => JSON.stringify(entry)));
+    for (const entry of Array.isArray(previousDisplaced) ? previousDisplaced : []) {
+      if (!knownShape(entry, personalDisplacedShape) && !kept.has(JSON.stringify(entry))) fail('SYNC_SCHEMA_LOSS_RISK');
+    }
+  }
+}
+export function personalExercisesLoss(previous, next) {
+  assertPersonalExercisesShape(next);
   if (!Array.isArray(previous)) return;
   const kept = new Map(next.map(card => [card.id, card]));
   for (const card of previous) {
     if (!object(card) || typeof card.id !== 'string') continue;
     const successor = kept.get(card.id);
-    if (successor) noFieldLoss(card, successor, personalExerciseShape);
-    // Only a tombstone (deletedAt is a string) with fully known fields may leave the array; a live card never disappears.
-    else if (typeof card.deletedAt !== 'string' || !knownShape(card, personalExerciseShape)) fail('SYNC_SCHEMA_LOSS_RISK');
+    if (successor) personalCardLoss(card, successor);
+    // Only a tombstone with fully known fields may leave the array; a live card never disappears.
+    else if (!isPersonalTombstone(card) || !knownShape(card, personalExerciseShape)) fail('SYNC_SCHEMA_LOSS_RISK');
   }
 }
 // Undo of a catalog link restores set rows exactly, which can remove these two identity labels again.
@@ -420,6 +447,7 @@ function draftLoss(previous,next,clearCoverage) {
   noFieldLoss(without(previous),without(next),clearCoverage,context);
 }
 export function compatible(previous, submitted, dataLevel = 0) {
+  if (object(submitted) && own(submitted, 'personalExercises')) assertPersonalExercisesShape(submitted.personalExercises);
   if (!previous) return submitted;
   const shape = shapes(dataLevel);
   // Preserve omitted top-level fields, including measurements absent from PWA. Explicit null is still presence.

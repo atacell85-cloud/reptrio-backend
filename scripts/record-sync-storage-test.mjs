@@ -281,7 +281,7 @@ console.log('Record sync storage PASS: real SQLite CAS/bootstrap races, rollback
 
 // V2 archive support requires enabled restore and the existing schema; no writer change.
 {
- const f=await fixture();const ready=await(await f.call('capabilities')).json();assert.equal(ready.personalRestoreProtocol,1);assert.deepEqual(ready.personalBackupVersions,[1,2]);
+ const f=await fixture();const ready=await(await f.call('capabilities')).json();assert.equal(ready.personalRestoreProtocol,1);assert.deepEqual(ready.personalBackupVersions,[1,2,3]);
  const response=await worker.fetch(new Request(`${ORIGIN}/api/sync/capabilities`,{headers:{Authorization:`Bearer ${f.token}`}}),{DB:f.db,PERSONAL_RESTORE_ENABLED:'false'},{waitUntil(){}});const disabled=await response.json();assert.equal(disabled.personalRestoreProtocol,false);assert.deepEqual(disabled.personalBackupVersions,[]);
  const missing=await fixture({migrationsUpTo:'0009_record_transport_indexes.sql'});assert.deepEqual((await(await missing.call('capabilities')).json()).personalBackupVersions,[]);
 }

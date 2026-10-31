@@ -306,7 +306,7 @@ await test('V2 accessor direct codec and routed unknown/secret/invalid profile r
 });
 await test('V2 routed protocol negotiation frozen version and unchanged SYNC/default',async()=>{
  const f=environment(),base={sourceNamespace:'source',archiveRetryHash:'a'.repeat(64),localBinding:'local-7',dataSchemaVersion:9,expectedChunks:1,expectedCounts:expectedFor(v2Roots()),baseRevision:0};
- for(const version of [0,3,null,'2'])assert.equal((await f.call('start',{...base,backupSchemaVersion:version})).body.code,'RESTORE_BACKUP_VERSION_INVALID');
+ for(const version of [0,4,null,'2','3'])assert.equal((await f.call('start',{...base,backupSchemaVersion:version})).body.code,'RESTORE_BACKUP_VERSION_INVALID');
  assert.equal((await f.call('start',{...base,backupSchemaVersion:2},undefined,'SYNC')).body.code,'RESTORE_ENVELOPE_INVALID');
  const old=await ok(f.call('start',base));assert.equal(old.protocol,1);assert.equal((await f.call('chunks',{localBinding:'local-7',index:0,roots:v2Roots()},old.operationId)).body.code,'RESTORE_UNSUPPORTED_PERSONAL_FIELD');
  const op=await ok(f.call('start',{...base,backupSchemaVersion:2}));assert.equal(op.protocol,2);assert.equal((await f.call('chunks',{localBinding:'local-7',index:0,roots:v2Roots(),backupSchemaVersion:1},op.operationId)).body.code,'RESTORE_ENVELOPE_INVALID');await ok(f.call('chunks',{localBinding:'local-7',index:0,roots:v2Roots()},op.operationId));
