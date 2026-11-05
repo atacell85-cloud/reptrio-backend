@@ -1,3 +1,12 @@
+## 2026-11-05 — PRODUCTION DEPLOY: Build 51/52 backend `4e59064` (kullanıcı onayı "Deploy et")
+
+- **Worker:** `a2-workout` sürüm `59083b99-7904-4aa1-92e9-0c8dea9f3114`, trafik %100, 2026-11-05T22:29:55Z, wrangler 4.123.0 (`npm run cf:build` + `wrangler deploy`). Önceki canlı sürüm `2d52c211` (Build 48, `0b3e408`).
+- **İçerik (0b3e408..4e59064):** B51-004 taslak set silme + iki telefon eski kopya reddi; B52-002 kişisel hareket kartları senkronu (veri seviyesi 2, kayıp kuralları, staged yol şekil kontrolü) + yedek V3. Değişen yalnız `worker/` (5 dosya); `wrangler.jsonc`, migration ve PWA statik dosyaları **birebir aynı**.
+- **Migration:** yok. Canlı D1'de 0001–0017 zaten uygulanmış (d1_migrations max id 18); dalda yeni migration yok.
+- **Ön kontrol:** backend odak testleri PASS (record-sync, record-transport, data-feature-guard, draft-set-deletion, personal-exercise-sync, personal-restore, personal-restore-v3, personal-staged-card-shape, account-lifecycle, account-deletion, cloudflare); `wrangler deploy --dry-run` bağlamalar değişmedi.
+- **Sonrası (salt okunur):** D1 kullanıcı sayısı 87 ve kullanıcı başına sync_records sayısı/boyutu/tombstone deploy öncesiyle **aynı**; yeni sürüm çağrıları hata 0. HTTP sağlık/yetenek kontrolü bu bulut oturumunun ağ izni olmadığı için yapılamadı (api.reptrio.com) — cihazda / ağ izinli oturumda doğrulanmalı: `/api/sync/capabilities` → `personalExercises: 1`, `personalBackupVersions: [1,2,3]`.
+- **Geri alma:** `wrangler rollback 2d52c211` mümkün; ancak bir hesapta kişisel kart oluşturulduktan sonra geri alma kartlı hesapların senkronunu bozar — yalnız kart oluşmadan önce güvenli.
+
 ## 2026-10-31 — Build 52 B52-002 S3 sunucu: yedek V3 (kişisel hareket kartları) (HIGH; migration yok, DEPLOY YOK)
 
 - Alan: restore protokolü (iç değişiklik; kullanıcıya görünen fark yalnız mobil S3 ile — V3 yedekte kartlar geri yüklenir). Sözleşme: mobil `docs/tasks/B52_002_S3_BACKUP_V3_CONTRACT.md`.
