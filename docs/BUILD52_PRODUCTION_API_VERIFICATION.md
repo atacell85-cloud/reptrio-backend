@@ -1,14 +1,14 @@
 # Build 52 — Production API doğrulaması
 
 **Genel sonuç: BLOCKED — "PRODUCTION API VERIFIED" VERİLMEDİ.**
-Kimliksiz HTTPS kontrolleri ve Cloudflare salt-okunur kontrolleri geçti. Oturum açmayı gerektiren bütün kontroller
-(capability içeriği, kişisel kart uçtan uca, hesap izolasyonu, eski istemci 409, yedek V3 akışı, hesap silme) **BLOCKED**.
-Sebep: kontrolümüzde bir test posta kutusu yok (aşağıda).
+Kimliksiz HTTPS kontrolleri ve Cloudflare salt-okunur kontrolleri geçti. Oturum açmayı gerektiren kontroller
+(capability içeriği, kişisel kart uçtan uca, hesap izolasyonu, eski istemci 409, veri düzeyi 1 uyumluluğu) production'da
+henüz çalıştırılmadı: kalıcı test hesaplarının tek seferlik kurulumu Mac'te kullanıcı adımı bekliyor (§7).
 
 Tarih: 2026-11-06 (UTC). Hedef: API `https://api.reptrio.com`, Worker sürümü `59083b99-7904-4aa1-92e9-0c8dea9f3114`,
-backend commit `4e59064` (deploy kaydı `9377299`). İlk BLOCKED raporu: `4f5c0b0`.
+backend commit `4e59064` (deploy kaydı `9377299`). Önceki rapor sürümleri: `4f5c0b0`, `78e1def`.
 
-Raporda token, parola, oturum çerezi, e-posta adresi veya kişisel veri yoktur. Kullanıcı kimlikleri yalnız 8 karakterlik önekle verilir.
+Raporda token, parola, oturum çerezi veya kişisel veri yoktur. Kullanıcı kimlikleri yalnız 8 karakterlik önekle verilir.
 
 ## Çalışma ortamı ve sınırlar
 - HTTPS istekleri `api.reptrio.com`'a izinli "Reptrio" ortamında açılan ayrı bir oturumdan gönderildi (kullanıcı onayı, 2026-11-06).
@@ -17,12 +17,18 @@ Raporda token, parola, oturum çerezi, e-posta adresi veya kişisel veri yoktur.
 - Hesap açılmadı, giriş yapılmadı, e-posta tetiklenmedi. Deploy, migration, rollback, SQL ile yazma/silme yapılmadı.
   Production'a yazma yapılmadı.
 
-## Neden hesap gerektiren testler BLOCKED
-Normal hesap silme akışı e-posta doğrulaması istiyor: `POST /api/auth/delete/request-link` hesabın adresine 10 dakika geçerli,
-tek kullanımlık bir bağlantı gönderiyor. `POST /api/auth/delete/verify-link` ile `POST /api/auth/delete` yalnız o bağlantıdaki
-token'la ve aynı oturumdan çalışıyor (`worker/account-lifecycle.js`). Kullanıcı kararı (2026-11-06): teslim edilemeyen sentetik
-adres kullanılmaz; ZeptoMail üzerinden doğrulanmamış adrese e-posta gönderilmez; kontrolümüzdeki posta kutusu hazır olana kadar
-hesap açılmaz. Böyle bir posta kutusu şu an yok. Bu yüzden test hesabı açılmadı.
+## Neden hesap gerektiren testler hâlâ BLOCKED
+- Plan değişti (kullanıcı kararı 2026-11-06): her testte hesap açıp silmek yerine **iki kalıcı test hesabı** kullanılır;
+  parolalar yalnız proje Mac'inin **macOS Keychain**'inde tutulur, testleri Mac'teki yerel Claude Code çalıştırır.
+  Hesap silme testi ve Zoho Mail API erişimi bu doğrulamadan ayrı bir iştir.
+- Salt-okunur D1 kontrolü (2026-11-06): `test@reptrio.com` için production'da hesap **zaten var** (`b7cd559b…`,
+  2026-10-08, ACTIVE, parolalı, sağlayıcı bağlantısı yok, senkron verisi yok, açık oturum yok). Parolası bilinmiyor; yeniden
+  oluşturulmadı. `test-delete@reptrio.com` için hesap **yok**.
+- Zoho posta kutularının varlığı bu ortamdan **doğrulanamadı**: DNS sorgusu ve DNS-over-HTTPS ağ politikasıyla kapalı,
+  Cloudflare token'ı DNS kayıtlarını okuma yetkisine sahip değil (`10000 Authentication error`). Teslimat yalnız kullanıcı
+  beyanıyla bilinir (`test-delete@` için 2026-11-06 iç test e-postası). Kurulum adımı ilk gerçek resmî e-postayla bunu kanıtlar.
+- Bu yüzden: A'nın parolası resmî sıfırlama akışıyla, B ise kayıt + aynı sıfırlama akışıyla Mac'te bir kez kurulmalı (§7).
+  Bu kurulum yapılmadan hesap gerektiren hiçbir production testi çalıştırılmadı.
 
 ## 1. Sürüm ve yönlendirme (Cloudflare API, salt-okunur)
 | Kontrol | Beklenen | Gerçek | Zaman (UTC) | Sonuç |
@@ -62,16 +68,27 @@ Kaynak sözleşmesi: `worker/account-api.js`, `worker/account-lifecycle.js`, `wo
 5xx sayısı: **0**. #1–#15'in hepsi `content-type: application/json; charset=utf-8` ve `cache-control: no-store` döndü;
 hiçbirinde `Set-Cookie` yok.
 
-## 3. Oturumlu kontroller — BLOCKED (test hesabı yok)
-| Kontrol | Beklenen (kaynaktan) | Sonuç |
-|---|---|---|
-| Oturumlu `GET /api/sync/capabilities` | 200, `personalExercises: 1`, `personalBackupVersions: [1,2,3]` | BLOCKED |
-| A hesabı: kart oluşturma / okuma / güncelleme / tombstone silme / ikinci istemci senkronu / tekrar görünmeme | push/pull ile alan alan eşit; tombstone geri gelmez | BLOCKED |
-| B hesabı ve oturumsuz istemci A kartını göremez | B pull'unda kart yok; oturumsuz 401 | BLOCKED (oturumsuz 401 kısmı §2'de PASS) |
-| Kartlı hesapta `X-Reptrio-Data-Level: 1` yazma | 409 `SYNC_CLIENT_UPGRADE_REQUIRED`, veri değişmez | BLOCKED |
-| Kartsız hesapta normal senkron | 200, veri kaybı yok | BLOCKED |
-| Yedek V1/V2/V3 başlat/önizle (geri yükleme) | sözleşmeye uygun yanıt | BLOCKED |
-| Hesap silme (request-link → verify-link → delete) ve sonrası D1'de kalan senkron/tombstone kayıtları | PENDING_DELETION/PURGING, oturumlar iptal | BLOCKED |
+## 3. Oturumlu kontroller — BLOCKED (kurulum bekliyor)
+Tekrar çalıştırılabilir betik: `scripts/ops/prod-api-verify.mjs` (çalıştırma kılavuzu `docs/PROD_API_TEST_ACCOUNTS.md`).
+| Kontrol | Beklenen (kaynaktan) | Production | Yerel Worker provası |
+|---|---|---|---|
+| A oturumu (iki istemci) ve B oturumu, sabitlenmiş kimlik | 201, `/api/me` id = sabit id | BLOCKED | PASS |
+| Oturumlu capabilities | 200, `personalExercises: 1`, `[1,2,3]`, `writable` | BLOCKED | PASS |
+| A: kart oluştur / ikinci oturumdan oku / güncelle / oku | 200, alan alan eşit | BLOCKED | PASS |
+| A: eski istemci push (düzey 1 ve başlıksız) | 409 `SYNC_CLIENT_UPGRADE_REQUIRED` | BLOCKED | PASS |
+| A: eski istemci restore başlatma (düzey 1) | 409 `SYNC_CLIENT_UPGRADE_REQUIRED` | BLOCKED | PASS |
+| A: eski istemci pull; reddedilen yazmalar veriyi değiştirmez | 200; aynı syncVersion ve kart | BLOCKED | PASS |
+| B: düzey 1 pull/push (kartsız), A kartı görünmez; oturumsuz okuma | 200 / 200 / 401 | BLOCKED | PASS |
+| Resmî temizlik: tombstone → diziden bırakma → kart geri gelmez | 200 / 200 / yok | BLOCKED | PASS |
+
+Yerel prova: `wrangler dev --local` (yerel D1, tüm migration'lar; Cloudflare token'ı kapalı), 2026-11-06. Guardian
+düzeltmelerinden sonra: önceden bırakılmış test kartıyla başlayan çalıştırma 38/38 PASS (önce kartı resmî yolla temizledi),
+ardından 36/36 PASS; eşzamanlı ikinci istemci (347 push) altında çalıştırma doğru biçimde NOT VERIFIED verdi ve A'da kart
+kalmadı. Önceki üç ardışık çalıştırma 34/34 PASS; çıktıda parola/token/e-posta yok. Yerel D1: A düzey 2, `personalExercises` satırı `[]`; B için düzey
+satırı yok (0). Negatif provalar: yanlış sabit kimlik → A1 FAIL, yazma yok, NOT VERIFIED; mevcut adrese `setup-register`
+→ durur, hesap açmaz; B zaten sabitliyse `setup-register` → durur. Kurulum akışı (kayıt + sıfırlama bağlantısı + oturum
+doğrulama) yerel sahte bağlantıyla geçti. Yerel prova production kanıtı **değildir**; macOS Keychain yolu burada
+çalıştırılamadı (Linux), ilk Mac kurulumunda doğrulanır.
 
 ## 4. D1 salt-okunur karşılaştırma (`a2-workout-pilot`)
 | Ölçüm | Önce (09:57:19Z) | Sonra (10:16:51Z) | Fark |
@@ -88,16 +105,20 @@ Test sırasında canlı kullanıcı değişikliği de test kaynaklı değişikli
 
 ## 5. Rollback ve veri düzeyi notu
 Production'da kart yok; bütün hesaplar veri düzeyi 1'de. Worker geri alımı bugün hiçbir hesabın verisini etkilemez.
-Gelecekteki yazma testinde ilk kart yalnız o test hesabını düzey 2'ye çıkarır. Bu düzey ve tombstone kayıtları hesap
-silinse bile purge tamamlanana kadar kalabilir; bunlar elle SQL ile temizlenmez.
+İlk doğrulama çalıştırması yalnız A'yı kalıcı olarak düzey 2'ye çıkarır (düzey yalnız artar). Kart temizlikten sonra
+A'nın `personalExercises` satırı `[]` olarak kalır. B hiç kart almaz. Bu kayıtlar elle SQL ile temizlenmez.
 
 ## 6. Kalan riskler
 - Kişisel kart, izolasyon, eski istemci 409 ve yedek V3 production'da HTTP ile **kanıtlanmadı**.
 - `app.reptrio.com` bu ortamdan erişilemedi.
 - Analytics yalnız Worker istisnalarını sayıyor; HTTP durum dağılımı §2'deki doğrudan isteklerle sınırlı.
 
-## Engeli kaldırmak için
-1. Kontrolümüzde iki adres (veya `+` takma ad) alabilen bir test posta kutusu ve doğrulama oturumunun silme bağlantısı
-   token'ını okuyabileceği güvenli bir yol (kullanıcı kararı gerekir; token sohbete yapıştırılmaz).
-2. Sonra aynı Reptrio ortamında §3 uçtan uca çalıştırılır; önce/sonra D1 karşılaştırması tekrarlanır.
-3. `app.reptrio.com` kontrolü için Reptrio ortamına bu host eklenir (isteğe bağlı).
+## 7. Kalan tek kullanıcı adımı (Mac, bir kez)
+```bash
+npm run ops:prod-api-setup-reset -- --account A
+npm run ops:prod-api-setup-register -- --account B
+```
+Her komut resmî sıfırlama e-postasını ister; Zoho kutusundaki bağlantı terminale gizli girişle yapıştırılır (sohbete değil).
+Parolalar Keychain'e yazılır. B'nin kimliği `scripts/ops/prod-api-test-accounts.json`'a yazılır ve commit edilir.
+Sonra (ve sonraki her Build'de, istemsiz): `npm run ops:prod-api-verify -- --out prod-api-verify-build52`; sonuç bu rapora
+eklenir, öncesi/sonrası D1 karşılaştırması tekrarlanır. Ancak tüm kontroller geçerse "PRODUCTION API VERIFIED" yazılır.
