@@ -36,7 +36,10 @@
     "test:routine-catalog-link-v2": "node scripts/routine-catalog-link-v2-test.mjs",
     "test:data-feature-guard": "node scripts/data-feature-guard-test.mjs",
     "test:personal-exercise-sync": "node scripts/personal-exercise-sync-test.mjs",
-    "test:draft-set-deletion": "node scripts/draft-set-deletion-test.mjs"
+    "test:draft-set-deletion": "node scripts/draft-set-deletion-test.mjs",
+    "ops:prod-api-verify": "node scripts/ops/prod-api-verify.mjs verify",
+    "ops:prod-api-setup-reset": "node scripts/ops/prod-api-verify.mjs setup-reset",
+    "ops:prod-api-setup-register": "node scripts/ops/prod-api-verify.mjs setup-register"
   },
   "devDependencies": {
     "wrangler": "^4.36.0"

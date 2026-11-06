@@ -1,0 +1,9 @@
+{
+  "comment": "Permanent production API test identities. No secrets here: passwords live only in the macOS Keychain (service below, account = email). userId pins the identity; write tests refuse any session whose /api/me id differs. B's userId is filled by `setup-register`.",
+  "baseUrl": "https://api.reptrio.com",
+  "keychainService": "reptrio-prod-api-test",
+  "accounts": {
+    "A": { "email": "test@reptrio.com", "userId": "b7cd559b-6979-469c-9dd5-270dd0741fc7", "role": "personal cards CRUD, sync, old-client 409" },
+    "B": { "email": "test-delete@reptrio.com", "userId": null, "role": "isolation, data level 1 compatibility (never receives cards)" }
+  }
+}

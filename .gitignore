@@ -22,3 +22,6 @@ coverage/
 .dev.vars.*
 .wrangler/
 .cloudflare-assets/
+
+# production API verification run output (scripts/ops/prod-api-verify.mjs)
+prod-api-verify-*/
