@@ -3,7 +3,15 @@
   "baseUrl": "https://api.reptrio.com",
   "keychainService": "reptrio-prod-api-test",
   "accounts": {
-    "A": { "email": "test@reptrio.com", "userId": "b7cd559b-6979-469c-9dd5-270dd0741fc7", "role": "personal cards CRUD, sync, old-client 409" },
-    "B": { "email": "test-delete@reptrio.com", "userId": null, "role": "isolation, data level 1 compatibility (never receives cards)" }
+    "A": {
+      "email": "test@reptrio.com",
+      "userId": "b7cd559b-6979-469c-9dd5-270dd0741fc7",
+      "role": "personal cards CRUD, sync, old-client 409"
+    },
+    "B": {
+      "email": "test-delete@reptrio.com",
+      "userId": "3d799b8d-1061-46d9-8434-488fc4ee2847",
+      "role": "isolation, data level 1 compatibility (never receives cards)"
+    }
   }
 }

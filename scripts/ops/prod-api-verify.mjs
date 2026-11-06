@@ -4,6 +4,8 @@
 //   node scripts/ops/prod-api-verify.mjs verify                 # every build: no prompts, no account creation
 //   node scripts/ops/prod-api-verify.mjs setup-reset --account A # one time: set a known password via the official reset mail
 //   node scripts/ops/prod-api-verify.mjs setup-register --account B  # one time: create B, then the same reset step
+//   NODE_USE_ENV_PROXY=1 node scripts/ops/prod-api-verify.mjs verify --reset-via-zoho   # no stored password: each run sets one
+//     via the official reset mail read from Zoho Mail (ends any app session on A/B; leaves a Keychain password stale)
 //
 // Secrets: passwords are read from the macOS Keychain (`security`, service from the accounts file, account = email) and the
 // session token stays in memory. Nothing secret is printed or written. The report holds statuses and error codes only.
@@ -27,6 +29,7 @@ if (!PRODUCTION && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE)) die
 const CARD_PREFIX = 'Reptrio API test';
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 let results_block = () => {};
+const runtimePasswords = new Map();   // --reset-via-zoho: set this run through the official reset mail, never stored
 const devStore = new Map();   // loopback dev Worker only: stands in for the Keychain
 
 
@@ -55,6 +58,13 @@ async function verify() {
     ]) { const r = await http(method, path, extra); check(id, 'unauthenticated contract', r, `${exp}${code ? ' ' + code : ''}`, r.status === exp && (!code || r.body?.code === code)); }
 
     // 1. Sign in A (two client sessions) and B; every session is pinned to the expected user id.
+    if (args['reset-via-zoho']) {
+      for (const key of ['A', 'B']) {
+        if (!config.accounts[key].userId) continue;
+        const z = await zohoReset(key);
+        check(`R-${key}`, `password set via official reset mail (${key})`, z.res, '202 forgot, mail found, 200 reset', z.ok, z.note);
+      }
+    }
     a1 = await signIn('A', check, 'A1'); if (!a1) throw stop('A sign-in failed');
     sessions.push(a1);
     const a2 = await signIn('A', check, 'A2'); if (a2) sessions.push(a2);
@@ -186,10 +196,11 @@ async function setup(key, register) {
     const r = await http('POST', '/api/auth/register', { json: { email, password }, headers: { 'X-Reptrio-Client': 'mobile' } });
     if (r.status === 409 && r.body?.code === 'AUTH_EMAIL_IN_USE') die(`${key}: an account already exists for this address; not creating. Pin its id and run setup-reset.`);
     if (r.status !== 201 || !r.body?.user?.id) die(`${key}: register returned ${r.status} ${r.body?.code || ''}`);
-    await keychainStore(email, password);
+    if (!args['no-store']) await keychainStore(email, password);
     acc.userId = r.body.user.id; writeFileSync(ACCOUNTS_FILE, JSON.stringify(config, null, 2) + '\n');
-    log(`${key}: created and pinned ${acc.userId.slice(0, 8)}…; password stored in Keychain. Proving the mailbox with a reset next.`);
+    log(`${key}: created and pinned ${acc.userId.slice(0, 8)}…${args['no-store'] ? '' : '; password stored in Keychain. Proving the mailbox with a reset next.'}`);
     if (r.body.sessionToken) await http('POST', '/api/auth/logout', { token: r.body.sessionToken, json: {} });
+    if (args['no-store']) { log(`${key}: password not stored (--no-store); later runs set it with verify --reset-via-zoho.`); return; }
   }
   if (!acc.userId) die(`${key} has no pinned userId`);
   const f = await http('POST', '/api/auth/password/forgot', { json: { email } });
@@ -208,6 +219,53 @@ async function setup(key, register) {
   log(`${key}: mailbox proven, password reset and stored in Keychain, sign-in pinned to ${acc.userId.slice(0, 8)}… OK.`);
 }
 
+// ---------- official reset mail via Zoho Mail API (--reset-via-zoho) ----------
+// Reads only mail from the Reptrio sender addressed to the account, received after this request. The token is used and
+// discarded; it is never printed or written. The Zoho credential is injected by the session proxy (or ZOHO_ACCESS_TOKEN).
+const ZOHO = process.env.ZOHO_MAIL_BASE || 'https://mail.zoho.eu';
+async function zoho(path) {
+  const headers = { Accept: 'application/json', ...(process.env.ZOHO_ACCESS_TOKEN ? { Authorization: `Zoho-oauthtoken ${process.env.ZOHO_ACCESS_TOKEN}` } : {}) };
+  for (let attempt = 1; ; attempt++) {
+    try { const r = await fetch(ZOHO + path, { headers, signal: AbortSignal.timeout(20000) }); return { status: r.status, body: await r.json().catch(() => null) }; }
+    catch (cause) { if (attempt >= 3) return { status: null, body: { code: `NETWORK:${cause.name}` } }; await new Promise(done => setTimeout(done, 2000)); }
+  }
+}
+// Exact recipient addresses of a Zoho list entry (toAddress may be HTML-escaped: "&lt;a@b&gt;" or "Name <a@b>, c@d").
+function recipients(value) {
+  return String(value || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').split(',')
+    .map(part => (part.match(/<([^>]+)>/) || [null, part])[1].trim().toLowerCase()).filter(Boolean);
+}
+async function zohoReset(key) {
+  if (!PRODUCTION) return { ok: false, note: 'production only', res: null };
+  const email = config.accounts[key].email.toLowerCase();
+  const accounts = await zoho('/api/accounts');
+  const boxes = Array.isArray(accounts.body?.data) ? accounts.body.data : [];
+  const box = boxes.find(a => Array.isArray(a.emailAddress) && a.emailAddress.some(e => String(e.mailId).toLowerCase() === email));
+  if (!box) return { ok: false, note: `zoho ${accounts.status}: address not in the mailbox`, res: null };
+  const since = Date.now() - 5000;
+  const f = await http('POST', '/api/auth/password/forgot', { json: { email } });
+  if (f.status !== 202) return { ok: false, note: 'forgot refused', res: f };
+  let token = null;
+  for (let i = 0; i < 24 && !token; i++) {
+    await new Promise(done => setTimeout(done, 5000));
+    const q = new URLSearchParams({ searchKey: 'sender:no-reply@mail.reptrio.com', limit: '10' });
+    const list = await zoho(`/api/accounts/${box.accountId}/messages/search?${q}`);
+    const found = Array.isArray(list.body?.data) ? list.body.data : [];
+    const mail = found.filter(m => Number(m.receivedTime) >= since && recipients(m.toAddress).length === 1 && recipients(m.toAddress)[0] === email
+      && String(m.fromAddress || '').toLowerCase() === 'no-reply@mail.reptrio.com' && /sıfırlama/i.test(m.subject || ''))
+      .sort((x, y) => Number(y.receivedTime) - Number(x.receivedTime))[0];
+    if (!mail) continue;
+    const content = await zoho(`/api/accounts/${box.accountId}/folders/${mail.folderId}/messages/${mail.messageId}/content`);
+    token = (String(content.body?.data?.content || '').match(/reset-password#token=([A-Za-z0-9_-]{43})/) || [])[1] || null;
+  }
+  if (!token) return { ok: false, note: 'reset mail not found in 2 minutes', res: f };
+  const password = randomBytes(24).toString('base64url');
+  const r = await http('POST', '/api/auth/password/reset', { json: { token, password } });
+  if (r.status !== 200) return { ok: false, note: 'reset refused', res: r };
+  runtimePasswords.set(email, password);
+  return { ok: true, note: 'password held in memory only', res: r };
+}
+
 // ---------- helpers ----------
 async function signIn(key, check, id = `S-${key}`) {
   const acc = config.accounts[key];
@@ -223,6 +281,7 @@ async function signIn(key, check, id = `S-${key}`) {
   return { label: id, key, token };
 }
 function readPassword(key, email) {
+  if (runtimePasswords.has(String(email).toLowerCase())) return runtimePasswords.get(String(email).toLowerCase());
   if (!PRODUCTION && devStore.has(email)) return devStore.get(email);
   if (!PRODUCTION && process.env[`REPTRIO_TEST_PASSWORD_${key}`]) return process.env[`REPTRIO_TEST_PASSWORD_${key}`];   // loopback dev Worker only
   if (!PRODUCTION) return null;   // a loopback run never reads production passwords from the Keychain
@@ -278,4 +337,4 @@ const command = args._[0];
 if (command === 'verify') await verify();
 else if (command === 'setup-reset') await setup(account(args.account), false);
 else if (command === 'setup-register') await setup(account(args.account), true);
-else die('usage: prod-api-verify.mjs verify | setup-reset --account A|B | setup-register --account B  [--base URL] [--out DIR] [--accounts FILE]');
+else die('usage: prod-api-verify.mjs verify [--reset-via-zoho] | setup-reset --account A|B | setup-register --account B [--no-store]  [--base URL] [--out DIR] [--accounts FILE]');

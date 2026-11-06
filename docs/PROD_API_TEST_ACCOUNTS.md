@@ -6,7 +6,7 @@ Permanent test infrastructure for verifying the production API on every build (d
 | Account | Address | Pinned user id | Role |
 |---|---|---|---|
 | A | `test@reptrio.com` | `b7cd559b-…` (in `scripts/ops/prod-api-test-accounts.json`) | Personal card CRUD, sync, old-client 409. Holds data level 2 after the first run (expected, permanent). |
-| B | `test-delete@reptrio.com` | filled in by `setup-register` | Isolation and data-level-1 compatibility. Never receives a card; stays below level 2. |
+| B | `test-delete@reptrio.com` | `3d799b8d-…` (created 2026-11-06) | Isolation and data-level-1 compatibility. Never receives a card; stays below level 2. |
 
 - Both addresses deliver to the same supervised Zoho mailbox. The mailbox is used **only** during the one-time setup below.
 - Passwords live only in the **macOS Keychain** of the project Mac: service `reptrio-prod-api-test`, account = email.
@@ -29,7 +29,16 @@ once to prove the pinned id. macOS may ask once whether `security` may access th
 belonging to the pinned account. If the id check then fails, stop and investigate before any verify run.
 After `setup-register`, commit the updated `scripts/ops/prod-api-test-accounts.json` (B's user id; no secrets).
 
-## Every build (no prompts, no account creation, no mail)
+## Every build — option 1: Zoho reset mode (used for Build 52, 2026-11-06)
+```bash
+NODE_USE_ENV_PROXY=1 node scripts/ops/prod-api-verify.mjs verify --reset-via-zoho --out prod-api-verify-build<N>
+```
+No stored password at all: each run sets a new random password for A and B through the official reset mail, reads the link
+from Zoho Mail (only mail from `no-reply@mail.reptrio.com` to the test address, received after the request), keeps it in memory.
+Needs a valid Zoho Mail access token for `mail.zoho.eu` (Claude environment network secret, or `ZOHO_ACCESS_TOKEN` locally);
+Zoho access tokens expire after about an hour. Uses 1 of the 3 reset mails per hour per account.
+
+## Every build — option 2: Keychain mode (no prompts, no account creation, no mail)
 ```bash
 npm run ops:prod-api-verify -- --out prod-api-verify-build<N>
 ```
