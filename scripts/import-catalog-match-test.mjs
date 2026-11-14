@@ -97,15 +97,18 @@ const index = catalogIndex();
 {
   const silent = (id, name) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, { sameExerciseId: id }));
   for (const [name, id] of [['Incline DB press', 'ex_000095'], ['Neutral grip lat pulldown', 'ex_000166'], ['Sumo deadlift', 'ex_000081'],
-    ['Dumbbell shoulder press', 'ex_000225'], ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
-    ['Z press', 'ex_000189'], ['Önden lat çekiş', 'ex_000166'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
+    ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
+    ['Z press', 'ex_000189'], ['Önden lat çekiş', 'ex_000166'], ['Standing leg curl', 'ex_000170'], ['Calf raise', 'ex_000224'], ['Seated calf raise', 'ex_000059'],
+    ['Seated row machine', 'ex_000229'], ['Floor press', 'ex_000038'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
     const r = silent(id, name);
     assert.equal(r.status, 'suggested', `${name} must not auto-match ${id}`);
     assert.equal(r.suggestions[0], id);
   }
   for (const [name, id] of [['Incline DB press', 'ex_000151'], ['Ters tutuş barfiks', 'ex_000066'], ['Chin up', 'ex_000066'], ['Kablo ile oturarak row', 'ex_000229'],
     ['Yatarak leg curl', 'ex_000176'], ['Geniş tutuş lat pulldown', 'ex_000298'], ['Çekiç curl', 'ex_000131'], ['Kürek makinesi', 'ex_000218'],
-    ['Butterfly makinesi', 'ex_000192'], ['Tek kol dambıl row', 'ex_000188'], ['EZ bar curl', 'ex_000111'], ['Barfiks', 'ex_000203']]) {
+    ['Butterfly makinesi', 'ex_000192'], ['Tek kol dambıl row', 'ex_000188'], ['EZ bar curl', 'ex_000111'], ['Barfiks', 'ex_000203'],
+    ['Seated leg extension', 'ex_000171'], ['Ayakta OHP', 'ex_000189'], ['Lat pulldown makinesi', 'ex_000166'], ['Cable row', 'ex_000229'],
+    ['Ön squat', 'ex_000122'], ['Yüzüstü leg curl', 'ex_000176'], ['Tek kolla dumbbell row', 'ex_000188'], ['Parallel bar dips', 'ex_000088'], ['Yerde mekik', 'ex_000076']]) {
     assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
   }
   // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
@@ -132,6 +135,15 @@ await assert.rejects(matchImportPreview({ preview: previewOf(Array.from({ length
   const worker = readFileSync(new URL('../worker/index.js', import.meta.url), 'utf8');
   assert.ok(!worker.includes('exerciseMatch must always be null'));
   assert.ok(worker.includes('separate validated matching step (B57-007)'));
+}
+
+// ---- Exact step needs exactly one target (an alias shared by two entries is left to the model).
+{
+  const tiny = { revision: 'x', exercises: [{ id: 'ex_a', name: 'Row', equipment: 'Barbell', primary: [], aliases: ['cable row'] }, { id: 'ex_b', name: 'Cable Row', equipment: 'Cable', primary: [], aliases: [] }] };
+  let sent = null;
+  const result = await matchImportPreview({ preview: previewOf([ex('Cable row'), ex('Row')]), model: 'm', requestId: 'r', catalog: tiny, callModel: async body => { sent = JSON.parse(body.input[1].content[0].text).names.map(n => n.name); return reply([row(0)]); } });
+  assert.deepEqual(sent, ['Cable row'], 'ambiguous exact name goes to the model');
+  assert.deepEqual(result.results.map(r => [r.sourceName, r.method, r.exerciseId]), [['Cable row', 'ai', null], ['Row', 'exact', 'ex_a']]);
 }
 
 // ---- Same normalization as the app (src/exercises.ts normalizeExerciseQuery).
@@ -247,6 +259,17 @@ assert.equal(net.calls, 1);
   assert.equal((await match(carol, 'job-c')).status, 200);
   assert.equal(stored(carol, 'job-c').catalogMatching.results.length, 2);
   delete env.AI_IMPORT_LIMITER;
+}
+
+// An incomplete model answer is a 502 technical failure; the stored preview stays untouched.
+{
+  const erin = await account('erin');
+  seed(erin, 'job-e', 'done', previewOf([ex('Foo move'), ex('Bar move')]));
+  net.next = () => new Response(JSON.stringify(reply([row(0)]).payload), { headers: { 'Content-Type': 'application/json' } });
+  const incomplete = await match(erin, 'job-e');
+  assert.deepEqual([incomplete.status, (await incomplete.json()).code], [502, 'IMPORT_MATCH_INCOMPLETE']);
+  assert.equal(stored(erin, 'job-e').catalogMatching, undefined);
+  net.next = null;
 }
 
 console.log('import catalog match test: PASS');

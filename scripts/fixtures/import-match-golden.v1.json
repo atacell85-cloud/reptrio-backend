@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap).",
+ "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap). Round-2 Guardian probe names (Turkish inflections, implicit positions, machine-named cable stations) were added to `same` after review.",
  "same": [
   [
    "Dumbell Bench",
@@ -521,6 +521,122 @@
   [
    "Eğimli dambıl curl",
    "ex_000150"
+  ],
+  [
+   "Seated leg extension",
+   "ex_000171"
+  ],
+  [
+   "Oturarak leg extension",
+   "ex_000171"
+  ],
+  [
+   "Seated chest press machine",
+   "ex_000178"
+  ],
+  [
+   "Oturarak göğüs press makinesi",
+   "ex_000178"
+  ],
+  [
+   "Seated machine shoulder press",
+   "ex_000182"
+  ],
+  [
+   "Seated leg press",
+   "ex_000172"
+  ],
+  [
+   "Standing overhead press",
+   "ex_000189"
+  ],
+  [
+   "Ayakta OHP",
+   "ex_000189"
+  ],
+  [
+   "Standing military press",
+   "ex_000189"
+  ],
+  [
+   "Ayakta lateral raise",
+   "ex_000168"
+  ],
+  [
+   "Standing lateral raise",
+   "ex_000168"
+  ],
+  [
+   "Ön squat",
+   "ex_000122"
+  ],
+  [
+   "Ön kaldırış",
+   "ex_000121"
+  ],
+  [
+   "Dumbbell ön omuz kaldırma",
+   "ex_000121"
+  ],
+  [
+   "Plaka ile ön kaldırış",
+   "ex_000199"
+  ],
+  [
+   "Yüzüstü leg curl",
+   "ex_000176"
+  ],
+  [
+   "Yüzüstü T raise",
+   "ex_000201"
+  ],
+  [
+   "Tek kolla dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Tek el dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Parallel bar dips",
+   "ex_000088"
+  ],
+  [
+   "Paralel tutuş barfiks",
+   "ex_000186"
+  ],
+  [
+   "Yerde mekik",
+   "ex_000076"
+  ],
+  [
+   "Floor crunch",
+   "ex_000076"
+  ],
+  [
+   "Yerde bacak kaldırma",
+   "ex_000177"
+  ],
+  [
+   "Lat pulldown machine",
+   "ex_000166"
+  ],
+  [
+   "Lat pulldown makinesi",
+   "ex_000166"
+  ],
+  [
+   "Cable row",
+   "ex_000229"
+  ],
+  [
+   "Kablo row",
+   "ex_000229"
+  ],
+  [
+   "Low row",
+   "ex_000229"
   ]
  ],
  "variant": [
@@ -545,7 +661,7 @@
     "ex_000225",
     "ex_000263"
    ],
-   "ex_000225"
+   null
   ],
   [
    "Shrug",
@@ -766,6 +882,27 @@
     "ex_000229"
    ],
    null
+  ],
+  [
+   "Seated calf raise machine",
+   [
+    "ex_000224"
+   ],
+   "ex_000059"
+  ],
+  [
+   "Seated row machine",
+   [
+    "ex_000181"
+   ],
+   "ex_000229"
+  ],
+  [
+   "Seated leg curl machine",
+   [
+    "ex_000228"
+   ],
+   "ex_000176"
   ]
  ],
  "nonsense": [

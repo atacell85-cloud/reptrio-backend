@@ -51,22 +51,22 @@ export function catalogEquipment(entry) {
 const QUALIFIER_WORDS = [
   ['decline', /\b(decline|ters egimli|asagi egimli|negatif egimli)\b/],
   ['incline', /\b(incline|egimli|egik|yukari egimli)\b/],
-  ['single_arm', /\b(single|one|tek)[ -]?(arm|kol|kollu)\b|\bunilateral\b/],
-  ['single_leg', /\b(single|one|tek)[ -]?(leg|bacak|bacakli)\b/],
+  ['single_arm', /\b(single|one)[ -]?arm\b|\btek (kol|kolla|kollu|el|elle)\b|\bunilateral\b/],
+  ['single_leg', /\b(single|one)[ -]?leg\b|\btek (bacak|bacakla|bacakli|ayak|ayakla|ayakli)\b/],
   ['wide_grip', /\b(wide|genis)\b/],
   ['close_grip', /\b(close|narrow|dar)( grip| tutus| tutuslu)?\b/],
-  ['neutral_grip', /\b(neutral|notr|parallel)( grip| tutus| tutuslu)?\b/],
+  ['neutral_grip', /\b(neutral|notr)( grip| tutus| tutuslu)?\b|\b(parallel|paralel) (grip|tutus|tutuslu)\b/],
   ['reverse_grip', /\b(reverse grip|underhand|supinated|ters tutus|ters tutuslu|ters el)\b/],
   ['sumo', /\bsumo\b/],
-  ['front', /\b(front|onden)\b/],
+  ['front', /\b(front|onden|on)\b/],
   ['seated', /\b(seated|sitting|oturarak|oturmus|oturur)\b/],
   ['standing', /\b(standing|ayakta)\b/],
-  ['lying', /\b(lying|yatarak|yatar|prone)\b/],
+  ['lying', /\b(lying|yatarak|yatar|prone|supine|yuzustu|yuz ustu|sirt ustu)\b/],
 ];
 const EQUIPMENT_WORDS = [
   ['ez_bar', /\bez ?bar\b/], ['trap_bar', /\b(trap|hex) ?bar\b/], ['smith_machine', /\bsmith\b/],
   ['kettlebell', /\b(kettlebell|kettle bell|kb)\b/], ['dumbbell', /\b(dumbbell|dumbell|dumbel|dambil|dambel|db)\b/],
-  ['barbell', /\b(barbell|halter|bb)\b/], ['cable', /\b(cable|kablo|kablolu|makara)\b/], ['resistance_band', /\b(band|banded|lastik|bant)\b/],
+  ['barbell', /\b(barbell|halter|bb)\b/], ['plate', /\b(plate|plaka|disk)\b/], ['cable', /\b(cable|kablo|kablolu|makara)\b/], ['resistance_band', /\b(band|banded|lastik|bant)\b/],
   ['machine', /\b(machine|makine|makinesi|makinede|makinada)\b/],
 ];
 function wordsIn(name, table) {
@@ -80,7 +80,7 @@ function wordsIn(name, table) {
 }
 // Named variants: a source naming one of these (that the catalog entry's own name does not carry) is a different exercise.
 const VARIANT_WORDS = [
-  ['pendulum', /\bpendulum\b/], ['zercher', /\bzercher\b/], ['jefferson', /\bjefferson\b/], ['floor', /\b(floor|yerde)\b/],
+  ['pendulum', /\bpendulum\b/], ['zercher', /\bzercher\b/], ['jefferson', /\bjefferson\b/], ['floor_press', /\b(floor|yerde) press\b/],
   ['pullover', /\bpull ?over\b/], ['behind_neck', /\b(behind (the )?neck|ense arkasi|enseden)\b/], ['z_press', /\bz press\b/],
   ['box', /\b(box|kutu)\b/], ['pause', /\b(pause|paused|duraklamali|beklemeli)\b/], ['deficit', /\bdeficit\b/], ['pin', /\bpin\b/],
   ['spoto', /\bspoto\b/], ['larsen', /\blarsen\b/], ['cambered', /\bcambered\b/], ['safety_bar', /\b(safety (squat )?bar|ssb)\b/],
@@ -109,17 +109,65 @@ function impliedQualifiers(entry) {
  * fit the entry; a qualifier written in the source must exist in the entry; a qualifier in the catalog name must be written in the
  * source (a generic name never takes a specific variant).
  */
-export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceText = '') {
+export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceText = '', catalog = IMPORT_MATCH_CATALOG) {
   const equipment = new Set([...(sourceEquipment && sourceEquipment !== 'unspecified' ? [sourceEquipment] : []), ...nameEquipment(sourceText)]);
   const allowed = catalogEquipment(entry);
-  for (const e of equipment) if (!allowed.has(e)) return 'equipment';
+  for (const e of equipment) {
+    if (allowed.has(e)) continue;
+    // A cable station is commonly called a machine ("lat pulldown makinesi"), unless a real machine entry of that movement exists.
+    if (e === 'machine' && entry.equipment === 'Cable' && !siblings(entry, catalog).some(other => other.equipment === 'Machine')) continue;
+    return 'equipment';
+  }
   const source = new Set([...(sourceQualifiers || []).filter(q => SOURCE_QUALIFIERS.includes(q)), ...nameQualifiers(sourceText)]);
+  const target = catalogQualifiers(entry);
   const implied = impliedQualifiers(entry);
-  for (const q of source) if (!implied.has(q)) return 'variant';
-  for (const q of catalogQualifiers(entry)) if (!source.has(q)) return 'variant';
+  // Angle, one side, grip, sumo, front: a different exercise whenever the two sides disagree.
+  for (const q of STRICT_QUALIFIERS) {
+    if (source.has(q) && !implied.has(q)) return 'variant';
+    if (target.has(q) && !source.has(q)) return 'variant';
+  }
+  // Seated / standing / lying: opposite positions never match; a missing position on one side only matters when the catalog
+  // separates the movement by exactly that position (another entry of the same movement and equipment differs only by it).
+  const sourcePos = POSITIONS.filter(q => source.has(q)), targetPos = POSITIONS.filter(q => implied.has(q));
+  if (sourcePos.length && targetPos.length && !sourcePos.some(q => targetPos.includes(q))) return 'variant';
+  const quals = other => [...catalogQualifiers(other)].sort().join(',');
+  const withPos = (set, p) => [...[...set].filter(x => !POSITIONS.includes(x)), ...(p ? [p] : [])].sort().join(',');
+  const fits = (other, kinds) => [...catalogEquipment(other)].some(e => kinds.has(e));
+  // Source names a position the entry lacks: refused when the catalog splits this movement by position (any equipment the
+  // source could mean: "Seated calf raise" ≠ the bodyweight Calf Raise because a Seated Calf Raise exists).
+  if (sourcePos.length && !targetPos.length) {
+    const pool = siblings(entry, catalog).filter(other => !equipment.size || fits(other, equipment));
+    if (pool.some(other => POSITIONS.some(p => quals(other) === withPos(target, p)))) return 'variant';
+  }
+  // Entry carries a position the source does not name: refused when the same movement on the same equipment also exists
+  // without it or with another position ("Calf raise" ≠ Standing Calf Raise; "Cable row" = the only two-arm Seated Cable Row).
+  if (targetPos.length && !sourcePos.length) {
+    const kinds = equipment.size ? equipment : catalogEquipment(entry);
+    const pool = siblings(entry, catalog).filter(other => fits(other, kinds));
+    if (pool.some(other => [null, ...POSITIONS].some(p => !targetPos.includes(p) && quals(other) === withPos(target, p)))) return 'variant';
+  }
   const targetVariants = nameVariants(entry.name);
   for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
   return null;
+}
+const STRICT_QUALIFIERS = ['incline', 'decline', 'single_arm', 'single_leg', 'wide_grip', 'close_grip', 'neutral_grip', 'reverse_grip', 'sumo', 'front'];
+const POSITIONS = ['seated', 'standing', 'lying'];
+// The movement of a catalog name without equipment, qualifier and named-variant words ("Seated Cable Row" and "Machine Row" → "row").
+const STRIP = [...QUALIFIER_WORDS, ...EQUIPMENT_WORDS].map(([, pattern]) => new RegExp(pattern.source, 'g'));
+export function movementKey(name) {
+  let text = ` ${exactKey(name)} `;
+  for (const pattern of STRIP) text = text.replace(pattern, ' ');
+  return text.replace(/\b(cable|machine|barbell|dumbbell|banded|smith)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+const siblingMemo = new WeakMap();
+function siblings(entry, catalog) {
+  let byKey = siblingMemo.get(catalog);
+  if (!byKey) {
+    byKey = new Map();
+    for (const other of catalog.exercises) { const key = movementKey(other.name); if (!byKey.has(key)) byKey.set(key, []); byKey.get(key).push(other); }
+    siblingMemo.set(catalog, byKey);
+  }
+  return (byKey.get(movementKey(entry.name)) || []).filter(other => other.id !== entry.id);
 }
 
 export function catalogIndex(catalog = IMPORT_MATCH_CATALOG) {
