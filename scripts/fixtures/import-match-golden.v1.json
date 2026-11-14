@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card.",
+ "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap).",
  "same": [
   [
    "Dumbell Bench",
@@ -526,171 +526,246 @@
  "variant": [
   [
    "Incline dumbbell fly",
-   []
+   [],
+   "ex_000098"
   ],
   [
    "Decline dumbbell fly",
-   []
+   [],
+   "ex_000098"
   ],
   [
    "Barbell curl",
-   []
+   [],
+   "ex_000040"
   ],
   [
    "Dumbbell shoulder press",
    [
     "ex_000225",
     "ex_000263"
-   ]
+   ],
+   "ex_000225"
   ],
   [
    "Shrug",
    [
     "ex_000104",
     "ex_000231"
-   ]
+   ],
+   null
   ],
   [
    "Incline smith press",
-   []
+   [],
+   "ex_000248"
   ],
   [
    "Pendulum squat",
-   []
+   [],
+   "ex_000128"
   ],
   [
    "Sissy squat machine",
-   []
+   [],
+   "ex_000243"
   ],
   [
    "Wide grip pull up",
-   []
+   [],
+   "ex_000203"
   ],
   [
    "Close grip push up",
-   []
+   [],
+   "ex_000205"
   ],
   [
    "Single arm lat pulldown",
-   []
+   [],
+   "ex_000166"
   ],
   [
    "Single leg leg press",
-   []
+   [],
+   "ex_000172"
   ],
   [
    "Incline hammer curl",
-   []
+   [],
+   "ex_000131"
   ],
   [
    "Seated dumbbell curl",
    [
     "ex_000040"
-   ]
+   ],
+   null
   ],
   [
    "Machine hip thrust",
-   []
+   [],
+   "ex_000144"
   ],
   [
    "Dumbbell squat",
-   []
+   [],
+   "ex_000258"
   ],
   [
    "Barbell lunge",
-   []
+   [],
+   "ex_000118"
   ],
   [
    "Dumbbell front squat",
-   []
+   [],
+   "ex_000122"
   ],
   [
    "Kettlebell goblet squat",
-   []
+   [],
+   "ex_000126"
   ],
   [
    "Cable chest press",
-   []
+   [],
+   "ex_000178"
   ],
   [
    "Machine fly",
    [
     "ex_000192"
-   ]
+   ],
+   null
   ],
   [
    "Reverse grip bench press",
-   []
+   [],
+   "ex_000038"
   ],
   [
    "Floor press",
-   []
+   [],
+   "ex_000038"
   ],
   [
    "Zercher squat",
-   []
+   [],
+   "ex_000258"
   ],
   [
    "Jefferson curl",
-   []
+   [],
+   "ex_000081"
   ],
   [
    "Dumbbell pullover",
-   []
+   [],
+   "ex_000098"
   ],
   [
    "Behind the neck press",
-   []
+   [],
+   "ex_000189"
   ],
   [
    "Z press",
-   []
+   [],
+   "ex_000189"
   ],
   [
    "Decline crunch",
-   []
+   [],
+   "ex_000076"
   ],
   [
    "Standing leg curl",
-   []
+   [],
+   "ex_000170"
   ],
   [
    "Tek kol kablo lateral raise",
-   []
+   [],
+   "ex_000052"
   ],
   [
    "Smith makinesinde eğimli press",
-   []
+   [],
+   "ex_000248"
   ],
   [
    "Makinede hip thrust",
-   []
+   [],
+   "ex_000144"
   ],
   [
    "Halter ile lunge",
-   []
+   [],
+   "ex_000118"
   ],
   [
    "Kablo göğüs press",
-   []
+   [],
+   "ex_000178"
   ],
   [
    "Tek bacak leg press",
-   []
+   [],
+   "ex_000172"
   ],
   [
    "Dambıl ile squat",
-   []
+   [],
+   "ex_000258"
   ],
   [
    "Barbell incline row",
-   []
+   [],
+   "ex_000032"
   ],
   [
    "Seated chest fly machine",
    [
     "ex_000192"
-   ]
+   ],
+   null
+  ],
+  [
+   "Neutral grip lat pulldown",
+   [],
+   "ex_000166"
+  ],
+  [
+   "Sumo squat",
+   [
+    "ex_000108"
+   ],
+   "ex_000258"
+  ],
+  [
+   "Önden lat çekiş",
+   [],
+   "ex_000166"
+  ],
+  [
+   "Seated dumbbell shoulder press",
+   [
+    "ex_000225"
+   ],
+   null
+  ],
+  [
+   "Ters eğimli bench",
+   [],
+   "ex_000148"
+  ],
+  [
+   "Oturarak cable row",
+   [
+    "ex_000229"
+   ],
+   null
   ]
  ],
  "nonsense": [

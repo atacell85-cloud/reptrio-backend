@@ -93,6 +93,27 @@ const index = catalogIndex();
   assert.deepEqual([ok.status, ok.exerciseId], ['matched', 'ex_000151']);
 }
 
+// ---- The source text itself is parsed (TR/EN), so a model that under-reports attributes cannot auto-match a variant.
+{
+  const silent = (id, name) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, { sameExerciseId: id }));
+  for (const [name, id] of [['Incline DB press', 'ex_000095'], ['Neutral grip lat pulldown', 'ex_000166'], ['Sumo deadlift', 'ex_000081'],
+    ['Dumbbell shoulder press', 'ex_000225'], ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
+    ['Z press', 'ex_000189'], ['Önden lat çekiş', 'ex_000166'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
+    const r = silent(id, name);
+    assert.equal(r.status, 'suggested', `${name} must not auto-match ${id}`);
+    assert.equal(r.suggestions[0], id);
+  }
+  for (const [name, id] of [['Incline DB press', 'ex_000151'], ['Ters tutuş barfiks', 'ex_000066'], ['Chin up', 'ex_000066'], ['Kablo ile oturarak row', 'ex_000229'],
+    ['Yatarak leg curl', 'ex_000176'], ['Geniş tutuş lat pulldown', 'ex_000298'], ['Çekiç curl', 'ex_000131'], ['Kürek makinesi', 'ex_000218'],
+    ['Butterfly makinesi', 'ex_000192'], ['Tek kol dambıl row', 'ex_000188'], ['EZ bar curl', 'ex_000111'], ['Barfiks', 'ex_000203']]) {
+    assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
+  }
+  // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
+  const golden = JSON.parse(readFileSync(new URL('./fixtures/import-match-golden.v1.json', import.meta.url), 'utf8'));
+  for (const [name, id] of golden.same) assert.equal(silent(id, name).status, 'matched', `guard false refusal: ${name} → ${id}`);
+  for (const [name, , trap] of golden.variant) if (trap) assert.notEqual(silent(trap, name).status, 'matched', `trap not caught: ${name} → ${trap}`);
+}
+
 // ---- Technical failures are errors, never "not understood".
 await assert.rejects(matchImportPreview({ preview: previewOf([ex('Foo move'), ex('Bar move')]), model: 'm', requestId: 'r', callModel: async () => reply([row(0)]) }), { code: 'IMPORT_MATCH_INCOMPLETE' });
 await assert.rejects(matchImportPreview({ preview: previewOf([ex('Foo move')]), model: 'm', requestId: 'r', callModel: async () => ({ payload: { output_text: '{not json' } }) }), { code: 'IMPORT_MATCH_INVALID_RESPONSE' });
@@ -123,6 +144,7 @@ globalThis.fetch = async (url, init = {}) => {
   url = String(url);
   if (url === 'https://api.openai.com/v1/responses' && init.method === 'POST') {
     net.calls++; const body = JSON.parse(init.body); net.bodies.push(body);
+    if (net.during) await net.during();
     if (net.next) return net.next(body);
     const names = JSON.parse(body.input[1].content[0].text).names;
     return new Response(JSON.stringify(reply(names.map(n => row(n.index, n.name === 'Dumbell Bench' ? { sameExerciseId: 'ex_000095', sourceEquipment: 'dumbbell' } : { understood: false }))).payload), { headers: { 'Content-Type': 'application/json' } });
@@ -185,5 +207,46 @@ assert.equal((await call('/api/privacy/ai-import/consent', alice.sessionToken, {
 seed(alice, 'job-b', 'done', previewOf([ex('Dumbell Bench')]));
 assert.equal((await match(alice, 'job-b')).status, 403);
 assert.equal(net.calls, 1);
+
+// Rate limit (B12) and consent order (B8): consent is checked before the limiter; a refused limiter costs no model call.
+{
+  const limiter = { calls: 0, ok: true, limit: async () => { limiter.calls++; return { success: limiter.ok }; } };
+  env.AI_IMPORT_LIMITER = limiter;
+  const carol = await account('carol');
+  const dave = await account('dave', false);
+  seed(carol, 'job-c', 'done', previewOf([ex('Dumbell Bench')]));
+  seed(dave, 'job-d', 'done', previewOf([ex('Dumbell Bench')]));
+  const before = net.calls;
+  assert.equal((await match(dave, 'job-d')).status, 403);
+  assert.equal(limiter.calls, 0, 'no consent: refused before the limiter');
+  limiter.ok = false;
+  const limited2 = await match(carol, 'job-c');
+  assert.deepEqual([limited2.status, (await limited2.json()).code], [429, 'AI_IMPORT_RATE_LIMITED']);
+  assert.equal(net.calls, before, 'limited: no model call');
+  limiter.ok = true;
+
+  // B9: consent revoked while the model runs → refused, nothing saved.
+  net.during = async () => { net.during = null; await call('/api/privacy/ai-import/consent', carol.sessionToken, { action: 'revoke', policyVersion: POLICY }); };
+  assert.equal((await match(carol, 'job-c')).status, 403);
+  assert.equal(stored(carol, 'job-c').catalogMatching, undefined, 'revoked during the call: not saved');
+  assert.equal((await call('/api/privacy/ai-import/consent', carol.sessionToken, { action: 'grant', policyVersion: POLICY })).status, 200);
+
+  // B10 / race: the job is retried (queued) during the call → conflict, not saved over the new state.
+  net.during = async () => { net.during = null; db.raw.prepare("UPDATE import_jobs SET status = 'queued', updated_at = '2026-11-14T00:00:01.000Z' WHERE id = 'job-c'").run(); };
+  const raced = await match(carol, 'job-c');
+  assert.deepEqual([raced.status, (await raced.json()).code], [409, 'IMPORT_CHANGED']);
+  assert.equal(db.rows("SELECT status FROM import_jobs WHERE id = 'job-c'")[0].status, 'queued');
+  // A re-extraction that already finished again (done, new preview) during the call is not overwritten either.
+  db.raw.prepare("UPDATE import_jobs SET status = 'done' WHERE id = 'job-c'").run();
+  const fresh = previewOf([ex('Squat'), ex('Şınav')]);
+  net.during = async () => { net.during = null; db.raw.prepare("UPDATE import_jobs SET preview_json = ?, updated_at = '2026-11-14T00:00:02.000Z' WHERE id = 'job-c'").run(JSON.stringify(fresh)); };
+  const raced2 = await match(carol, 'job-c');
+  assert.equal(raced2.status, 409);
+  assert.deepEqual(stored(carol, 'job-c'), fresh, 'the newer preview stays');
+  // Then a normal match of the new preview succeeds.
+  assert.equal((await match(carol, 'job-c')).status, 200);
+  assert.equal(stored(carol, 'job-c').catalogMatching.results.length, 2);
+  delete env.AI_IMPORT_LIMITER;
+}
 
 console.log('import catalog match test: PASS');

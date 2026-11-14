@@ -22,7 +22,8 @@ const NAME_MAX = 160;
 export const SOURCE_EQUIPMENT = Object.freeze(['unspecified', 'barbell', 'dumbbell', 'cable', 'machine', 'smith_machine', 'kettlebell',
   'resistance_band', 'bodyweight', 'ez_bar', 'trap_bar', 'plate', 'pull_up_bar', 'bench', 'box', 'stability_ball', 'towel', 'wall',
   'doorway', 'chair', 'cardio_machine']);
-export const SOURCE_QUALIFIERS = Object.freeze(['incline', 'decline', 'single_arm', 'single_leg']);
+export const SOURCE_QUALIFIERS = Object.freeze(['incline', 'decline', 'single_arm', 'single_leg', 'wide_grip', 'close_grip', 'neutral_grip',
+  'reverse_grip', 'sumo', 'front', 'seated', 'standing', 'lying']);
 
 // Same normalization as the app's normalizeExerciseQuery (src/exercises.ts): exact keys only, never fuzzy.
 export const exactKey = value => String(value ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('tr-TR')
@@ -45,22 +46,79 @@ export function catalogEquipment(entry) {
   if (/\bmachine\b/.test(name)) set.add('machine');
   return set;
 }
-export function catalogQualifiers(entry) {
-  const name = String(entry.name || '').toLowerCase();
+// Qualifier words on an exactKey-normalized name (lower case, Turkish letters folded: ğ→g, ş→s, ı→i, ö→o, ü→u, ç→c).
+// Order matters: "ters egimli" is decline (removed before incline is looked for); "ez bar" / "trap bar" before plain barbell.
+const QUALIFIER_WORDS = [
+  ['decline', /\b(decline|ters egimli|asagi egimli|negatif egimli)\b/],
+  ['incline', /\b(incline|egimli|egik|yukari egimli)\b/],
+  ['single_arm', /\b(single|one|tek)[ -]?(arm|kol|kollu)\b|\bunilateral\b/],
+  ['single_leg', /\b(single|one|tek)[ -]?(leg|bacak|bacakli)\b/],
+  ['wide_grip', /\b(wide|genis)\b/],
+  ['close_grip', /\b(close|narrow|dar)( grip| tutus| tutuslu)?\b/],
+  ['neutral_grip', /\b(neutral|notr|parallel)( grip| tutus| tutuslu)?\b/],
+  ['reverse_grip', /\b(reverse grip|underhand|supinated|ters tutus|ters tutuslu|ters el)\b/],
+  ['sumo', /\bsumo\b/],
+  ['front', /\b(front|onden)\b/],
+  ['seated', /\b(seated|sitting|oturarak|oturmus|oturur)\b/],
+  ['standing', /\b(standing|ayakta)\b/],
+  ['lying', /\b(lying|yatarak|yatar|prone)\b/],
+];
+const EQUIPMENT_WORDS = [
+  ['ez_bar', /\bez ?bar\b/], ['trap_bar', /\b(trap|hex) ?bar\b/], ['smith_machine', /\bsmith\b/],
+  ['kettlebell', /\b(kettlebell|kettle bell|kb)\b/], ['dumbbell', /\b(dumbbell|dumbell|dumbel|dambil|dambel|db)\b/],
+  ['barbell', /\b(barbell|halter|bb)\b/], ['cable', /\b(cable|kablo|kablolu|makara)\b/], ['resistance_band', /\b(band|banded|lastik|bant)\b/],
+  ['machine', /\b(machine|makine|makinesi|makinede|makinada)\b/],
+];
+function wordsIn(name, table) {
+  let text = ` ${exactKey(name)} `;
   const out = new Set();
-  if (/\bincline\b/.test(name)) out.add('incline');
-  if (/\bdecline\b/.test(name)) out.add('decline');
-  if (/\b(single|one)[- ]arm\b/.test(name)) out.add('single_arm');
-  if (/\b(single|one)[- ]leg\b/.test(name)) out.add('single_leg');
+  for (const [value, pattern] of table) {
+    const global = new RegExp(pattern.source, 'g');
+    if (global.test(text)) { out.add(value); text = text.replace(new RegExp(pattern.source, 'g'), ' '); }
+  }
+  return out;
+}
+// Named variants: a source naming one of these (that the catalog entry's own name does not carry) is a different exercise.
+const VARIANT_WORDS = [
+  ['pendulum', /\bpendulum\b/], ['zercher', /\bzercher\b/], ['jefferson', /\bjefferson\b/], ['floor', /\b(floor|yerde)\b/],
+  ['pullover', /\bpull ?over\b/], ['behind_neck', /\b(behind (the )?neck|ense arkasi|enseden)\b/], ['z_press', /\bz press\b/],
+  ['box', /\b(box|kutu)\b/], ['pause', /\b(pause|paused|duraklamali|beklemeli)\b/], ['deficit', /\bdeficit\b/], ['pin', /\bpin\b/],
+  ['spoto', /\bspoto\b/], ['larsen', /\blarsen\b/], ['cambered', /\bcambered\b/], ['safety_bar', /\b(safety (squat )?bar|ssb)\b/],
+  ['guillotine', /\bguillotine\b/], ['svend', /\bsvend\b/], ['landmine', /\blandmine\b/], ['meadows', /\bmeadows\b/],
+  ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
+  ['cuban', /\bcuban\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
+];
+const nameVariants = name => wordsIn(name, VARIANT_WORDS);
+/** Qualifiers spelled out in a name (source text or catalog name), parsed without the model. */
+export const nameQualifiers = name => wordsIn(name, QUALIFIER_WORDS);
+/** Equipment spelled out in a source name, parsed without the model. */
+export const nameEquipment = name => wordsIn(name, EQUIPMENT_WORDS);
+export function catalogQualifiers(entry) { return nameQualifiers(entry.name); }
+// What a catalog name implies for a source that spells it out (a chin-up is underhand, a hammer curl neutral, a preacher curl seated).
+const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated']];
+function impliedQualifiers(entry) {
+  const out = catalogQualifiers(entry);
+  const name = exactKey(entry.name);
+  for (const [pattern, q] of IMPLIED) if (pattern.test(name)) out.add(q);
   return out;
 }
 
-/** Why an automatic match is refused (null = the deterministic checks agree with the model). */
-export function guardRefusal(entry, sourceEquipment, sourceQualifiers) {
-  if (sourceEquipment && sourceEquipment !== 'unspecified' && !catalogEquipment(entry).has(sourceEquipment)) return 'equipment';
-  const target = catalogQualifiers(entry);
-  const source = new Set((sourceQualifiers || []).filter(q => SOURCE_QUALIFIERS.includes(q)));
-  for (const q of SOURCE_QUALIFIERS) if (target.has(q) !== source.has(q)) return 'variant';
+/**
+ * Why an automatic match is refused (null = the deterministic checks agree). Source equipment/qualifiers are the union of what the
+ * model reported AND what the source text itself spells out (parsed here, independent of the model). Written source equipment must
+ * fit the entry; a qualifier written in the source must exist in the entry; a qualifier in the catalog name must be written in the
+ * source (a generic name never takes a specific variant).
+ */
+export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceText = '') {
+  const equipment = new Set([...(sourceEquipment && sourceEquipment !== 'unspecified' ? [sourceEquipment] : []), ...nameEquipment(sourceText)]);
+  const allowed = catalogEquipment(entry);
+  for (const e of equipment) if (!allowed.has(e)) return 'equipment';
+  const source = new Set([...(sourceQualifiers || []).filter(q => SOURCE_QUALIFIERS.includes(q)), ...nameQualifiers(sourceText)]);
+  const implied = impliedQualifiers(entry);
+  for (const q of source) if (!implied.has(q)) return 'variant';
+  for (const q of catalogQualifiers(entry)) if (!source.has(q)) return 'variant';
+  const targetVariants = nameVariants(entry.name);
+  for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
   return null;
 }
 
@@ -166,7 +224,7 @@ export function validateModelRow(index, entry, row) {
   const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId : null;
   let guard = null;
   if (proposed) {
-    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers);
+    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, [entry.sourceName, entry.normalizedName].filter(Boolean).join(' '));
     if (!guard) return { key: entry.key, sourceName: entry.sourceName, status: 'matched', method: 'ai', exerciseId: proposed, suggestions: [], understood: true, guard: null };
     suggestions = [proposed, ...suggestions.filter(id => id !== proposed)];
   } else if (row?.sameExerciseId != null) guard = 'unknownId';

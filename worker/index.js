@@ -305,7 +305,7 @@ async function matchImportJob(request, env, importId) {
     let body;
     try { body = await readJson(request, 4096); } catch { throw coded('INVALID_JSON'); }
     if (body?.catalogRevision !== IMPORT_MATCH_CATALOG.revision) throw coded('IMPORT_MATCH_CATALOG_MISMATCH');
-    const row = await env.DB.prepare('SELECT status, preview_json FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
+    const row = await env.DB.prepare('SELECT status, preview_json, updated_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
     if (!row) throw coded('IMPORT_JOB_NOT_FOUND');
     const preview = parseJson(row.preview_json);
     if (row.status !== 'done' || !preview?.program?.days) throw coded('IMPORT_NOT_READY');
@@ -321,9 +321,11 @@ async function matchImportJob(request, env, importId) {
       callModel: body => requestOpenAIBody({ apiKey: env.OPENAI_API_KEY, config: matchConfig, body, requestId, beforeAttempt: () => assertAiImportConsent(env, user.id) }),
     });
     await assertAiImportConsent(env, user.id);
-    // Persist only onto the still-finished job (a concurrent re-upload resets it to queued and wins).
-    await env.DB.prepare("UPDATE import_jobs SET preview_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'done'")
-      .bind(JSON.stringify({ ...preview, catalogMatching }), new Date().toISOString(), user.id, importId).run();
+    // Persist only onto the SAME finished preview that was matched: a re-upload, retry or re-extraction (or another match) that
+    // changed the job meanwhile wins, and this result is answered as a technical conflict (the app retries on the new preview).
+    const saved = await env.DB.prepare("UPDATE import_jobs SET preview_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'done' AND updated_at = ? AND preview_json = ?")
+      .bind(JSON.stringify({ ...preview, catalogMatching }), new Date().toISOString(), user.id, importId, row.updated_at, row.preview_json).run();
+    if (saved.meta?.changes !== 1) throw coded('IMPORT_CHANGED');
     console.log(JSON.stringify({ event: 'import_match', requestId, status: 'ok', durationMs: Date.now() - started, summary: catalogMatching.summary, usage: catalogMatching.usage, model: catalogMatching.model }));
     return json({ importId, catalogMatching, cached: false }, 200, { 'X-Import-Request-Id': requestId });
   } catch (error) {
@@ -334,7 +336,7 @@ async function matchImportJob(request, env, importId) {
 }
 function matchStatusFor(code) {
   if (code === 'IMPORT_JOB_NOT_FOUND') return 404;
-  if (code === 'IMPORT_MATCH_CATALOG_MISMATCH' || code === 'IMPORT_NOT_READY') return 409;
+  if (code === 'IMPORT_MATCH_CATALOG_MISMATCH' || code === 'IMPORT_NOT_READY' || code === 'IMPORT_CHANGED') return 409;
   if (code === 'IMPORT_MATCH_INVALID_RESPONSE' || code === 'IMPORT_MATCH_INCOMPLETE' || code === 'OPENAI_REQUEST_FAILED' || code === 'OPENAI_NETWORK_ERROR' || code === 'OPENAI_INVALID_RESPONSE') return 502;
   return statusFor(code);
 }
