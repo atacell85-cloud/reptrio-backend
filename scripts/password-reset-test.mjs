@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import worker from '../worker/index.js';
 import { tokenDigest } from '../worker/account-api.js';
 import { sendTransactionalEmail } from '../worker/transactional-email.js';
@@ -32,6 +33,23 @@ globalThis.fetch = async (url, init = {}) => {
 };
 
 const db = createD1();
+// Migration 0018 classifies only known provenance. UNKNOWN stays NULL regardless of provider links or timestamps.
+{
+  const legacyDb = createD1({ migrationsUpTo: '0017_places_autocomplete_quota.sql' });
+  const now = new Date().toISOString();
+  for (const [id, origin, created] of [
+    ['migration-password', 'PASSWORD', '2000-01-01'],
+    ['migration-google', 'GOOGLE', '2030-01-01'],
+    ['migration-apple', 'APPLE', '2001-01-01'],
+    ['migration-unknown-unlinked', 'UNKNOWN', '2000-01-01'],
+    ['migration-unknown-linked', 'UNKNOWN', '2030-01-01'],
+  ]) legacyDb.raw.prepare('INSERT INTO users(id,email,password_hash,password_salt,created_at,credential_origin) VALUES(?,?,?,?,?,?)').run(id, `${id}@example.test`, 'hash', 'salt', created, origin);
+  legacyDb.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at) VALUES('google','unknown-sub','migration-unknown-linked','migration-unknown-linked@example.test',?,?)").run(now, now);
+  legacyDb.exec(readFileSync(new URL('../migrations/0018_password_enabled.sql', import.meta.url), 'utf8'));
+  assert.equal(legacyDb.rows('SELECT password_enabled FROM users WHERE id=?', 'migration-password')[0].password_enabled, 1);
+  for (const id of ['migration-google', 'migration-apple']) assert.equal(legacyDb.rows('SELECT password_enabled FROM users WHERE id=?', id)[0].password_enabled, 0);
+  for (const id of ['migration-unknown-unlinked', 'migration-unknown-linked']) assert.equal(legacyDb.rows('SELECT password_enabled FROM users WHERE id=?', id)[0].password_enabled, null, `${id}: UNKNOWN remains unclassified`);
+}
 const limiter = { allow: true, keys: [] };
 const env = {
   DB: db,
@@ -57,13 +75,14 @@ async function register(email, password = 'password123') {
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.equal(body.user.onboardingEligible, true, 'migrated auth fixture: new registration eligibility');
+  assert.equal(db.rows('SELECT password_enabled FROM users WHERE id=?', body.user.id)[0].password_enabled, 1, 'new password account is locally enabled');
   return { id: body.user.id, email, token: body.sessionToken };
 }
 // The shape `upsertOAuthUser` writes: the user and its first provider link share created_at (generated password).
 async function oauthUser(provider, email) {
   const id = crypto.randomUUID();
   const now = new Date(Date.now() - 1000).toISOString();
-  db.raw.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)').run(id, email, 'generated', 'c2FsdA', now);
+  db.raw.prepare('INSERT INTO users (id, email, password_hash, password_salt, created_at, credential_origin, password_enabled) VALUES (?, ?, ?, ?, ?, ?, 0)').run(id, email, 'generated', 'c2FsdA', now, provider.toUpperCase());
   db.raw.prepare('INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, email_trusted, created_at, last_login_at) VALUES (?, ?, ?, ?, 1, ?, ?)').run(provider, `${provider}-${id}`, id, email, now, now);
   return { id, email, token: await session(id) };
 }
@@ -91,6 +110,24 @@ const mixed = await register('mixed@example.test');
 db.raw.prepare("INSERT INTO oauth_accounts (provider, provider_subject, user_id, email, email_trusted, created_at, last_login_at) VALUES ('google', 'g-mixed', ?, ?, 1, ?, ?)").run(mixed.id, mixed.email, new Date(Date.now() + 5000).toISOString(), new Date().toISOString());
 const deleted = await register('deleted@example.test');
 db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().toISOString(), deleted.id);
+
+// A password-disabled OAuth user and a missing account both perform the same password-hash work for a valid-length
+// password, so the explicit capability flag does not create an easy login timing oracle.
+{
+  const deriveBits = crypto.subtle.deriveBits.bind(crypto.subtle);
+  let derivations = 0;
+  crypto.subtle.deriveBits = (...args) => { derivations++; return deriveBits(...args); };
+  try {
+    assert.equal(await login(google.email, 'not-the-password'), 401);
+    const oauthDerivations = derivations;
+    derivations = 0;
+    assert.equal(await login('login-missing@example.test', 'not-the-password'), 401);
+    assert.ok(oauthDerivations > 0);
+    assert.equal(derivations, oauthDerivations, 'missing and OAuth-only login execute equivalent PBKDF2 work');
+  } finally {
+    crypto.subtle.deriveBits = deriveBits;
+  }
+}
 
 // ---- 1. Enumeration safety: identical status, body and headers for every account state; the response never waits
 // for the account lookup or the mail send.
@@ -326,16 +363,26 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
   assert.equal(mail.sent.length, 0);
   limiter.allow = true;
   assert.ok(limiter.keys.includes('forgot:203.0.113.9') && limiter.keys.some(key => key.startsWith('reset:')));
+  for (const broken of [undefined, { limit: async () => { throw new Error('limiter down'); } }, { limit: async () => undefined }, { limit: async () => ({}) }]) {
+    const throttledEnv = { ...env, PASSWORD_RESET_LIMITER: broken };
+    for (const email of [bob.email, 'nobody@example.test']) {
+      const response = await call('/api/auth/password/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }, throttledEnv);
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { code: 'PASSWORD_RESET_UNAVAILABLE' });
+    }
+    const blockedReset = await worker.fetch(new Request(`${ORIGIN}/api/auth/password/reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'A'.repeat(43), password: 'valid-password' }) }), throttledEnv, ctx);
+    assert.equal(blockedReset.status, 503, 'reset requests fail closed without the limiter');
+  }
 }
 
-// ---- 9. Deleted / nonexistent / OAuth-only accounts: no link, no mail. A mixed account (own password + later link)
-// is eligible. Eligibility agrees with account deletion's requiresPassword.
+// ---- 9. Deleted / nonexistent / non-active accounts are excluded. Google, Apple relay, linked UNKNOWN and existing
+// OAuth accounts can establish local password access without changing identity provenance or provider links.
 {
   mail.sent = [];
-  for (const email of ['nobody@example.test', deleted.email, google.email, apple.email]) assert.equal((await forgot(email)).status, 202);
+  for (const email of ['nobody@example.test', deleted.email]) assert.equal((await forgot(email)).status, 202);
   await settle();
   assert.equal(mail.sent.length, 0);
-  for (const user of [deleted, google, apple]) assert.equal(tokenRows(user.id).length, 0, `no link for ${user.email}`);
+  for (const user of [deleted]) assert.equal(tokenRows(user.id).length, 0, `no link for ${user.email}`);
   clearThrottle(mixed);
   const mixedToken = await requestLink(mixed);
   assert.equal(mail.sent[0].body.to[0].email_address.address, mixed.email);
@@ -344,23 +391,30 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
   db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().toISOString(), mixed.id);
   assert.deepEqual(await (await reset(mixedToken, 'mixed-new-pass')).json(), { code: 'PASSWORD_RESET_INVALID' });
   db.raw.prepare('UPDATE users SET deleted_at = NULL WHERE id = ?').run(mixed.id);
-  const forged = 'B'.repeat(43);
-  db.raw.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run('forged', google.id, await tokenDigest(forged), new Date().toISOString(), new Date(Date.now() + 600_000).toISOString());
-  assert.deepEqual(await (await reset(forged, 'oauth-new-pass')).json(), { code: 'PASSWORD_RESET_INVALID' }, 'an OAuth-only account never gets a local password');
-  assert.equal(db.rows('SELECT password_hash FROM users WHERE id = ?', google.id)[0].password_hash, 'generated');
+  for (const user of [google, apple]) {
+    clearThrottle(user);
+    assert.equal(db.rows('SELECT password_enabled FROM users WHERE id=?', user.id)[0].password_enabled, 0, 'new OAuth user has no local password capability');
+    const origin = db.rows('SELECT credential_origin FROM users WHERE id=?', user.id)[0].credential_origin;
+    const token = await requestLink(user);
+    assert.equal((await reset(token, 'oauth-new-pass')).status, 200);
+    assert.equal(db.rows('SELECT password_enabled,credential_origin FROM users WHERE id=?', user.id)[0].password_enabled, 1);
+    assert.equal(db.rows('SELECT credential_origin FROM users WHERE id=?', user.id)[0].credential_origin, origin);
+    assert.equal(db.rows('SELECT COUNT(*) AS n FROM oauth_accounts WHERE user_id=?', user.id)[0].n, 1);
+    assert.equal(await login(user.email, 'oauth-new-pass'), 201);
+  }
 
   for(const u of [bob,mixed,google,apple])assert.equal((await(await call('/api/auth/delete',{headers:{Authorization:`Bearer ${await session(u.id)}`}})).json()).requiresPassword,false,'deletion never asks for a password');
 }
 
-// B44 lifecycle/provenance compatibility: no timestamp inference, preserve ordinary migrated email reset.
+// Credential provenance remains unchanged, including UNKNOWN accounts linked to OAuth identities.
 {
  const legacy=await register('legacy-reset@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(legacy.id);
- const link=await requestLink(legacy);assert.equal((await reset(link,'legacy-new-password')).status,200);assert.equal(db.rows('SELECT credential_origin FROM users WHERE id=?',legacy.id)[0].credential_origin,'PASSWORD');
- for(const origin of ['GOOGLE','APPLE']){const u=await register('orphan-'+origin.toLowerCase()+'@example.test');db.raw.prepare('UPDATE users SET credential_origin=? WHERE id=?').run(origin,u.id);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0,'known provider orphan never gets password');}
- for(const skew of [false,true]){const u=await register('unknown-linked-'+skew+'@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(u.id);const created=db.rows('SELECT created_at FROM users WHERE id=?',u.id)[0].created_at;db.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at)VALUES('google',?,?,?,?,?)").run('unknown-reset-'+skew,u.id,u.email,skew?'2000-01-01':created,created);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0,'UNKNOWN linked neither collision nor skew grants reset');}
+ db.raw.prepare('UPDATE users SET password_enabled=NULL WHERE id=?').run(legacy.id);assert.equal(await login(legacy.email,'password123'),201,'legacy UNKNOWN with NULL capability retains login');
+ const link=await requestLink(legacy);assert.equal((await reset(link,'legacy-new-password')).status,200);assert.equal(db.rows('SELECT credential_origin,password_enabled FROM users WHERE id=?',legacy.id)[0].credential_origin,'UNKNOWN');assert.equal(db.rows('SELECT password_enabled FROM users WHERE id=?',legacy.id)[0].password_enabled,1);
+ for(const skew of [false,true]){const u=await register('unknown-linked-'+skew+'@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN',password_enabled=NULL WHERE id=?").run(u.id);assert.equal(await login(u.email,'password123'),201,'linked UNKNOWN NULL remains legacy-compatible independent of timestamps');const created=db.rows('SELECT created_at FROM users WHERE id=?',u.id)[0].created_at;db.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at)VALUES('google',?,?,?,?,?)").run('unknown-reset-'+skew,u.id,u.email,skew?'2000-01-01':created,created);const t=await requestLink(u);assert.equal((await reset(t,'unknown-new-password')).status,200);assert.equal(db.rows('SELECT credential_origin FROM users WHERE id=?',u.id)[0].credential_origin,'UNKNOWN');}
  const race=await register('unknown-reset-race@example.test');db.raw.prepare("UPDATE users SET credential_origin='UNKNOWN' WHERE id=?").run(race.id);const raceLink=await requestLink(race),before=db.rows('SELECT password_hash FROM users WHERE id=?',race.id)[0].password_hash;
  db.setBeforeBatch(statements=>{if(statements[0].sql.startsWith('UPDATE users SET password_hash')){db.setBeforeBatch(null);db.raw.prepare("INSERT INTO oauth_accounts(provider,provider_subject,user_id,email,created_at,last_login_at)VALUES('apple','race-unknown',?,?,?,?)").run(race.id,race.email,'2000-01-01','2000-01-01');}});
- assert.equal((await reset(raceLink,'should-never-change')).status,400);assert.equal(db.rows('SELECT password_hash FROM users WHERE id=?',race.id)[0].password_hash,before);assert.equal(tokenRows(race.id)[0].used_at,null);
+ assert.equal((await reset(raceLink,'should-never-change')).status,200);assert.notEqual(db.rows('SELECT password_hash FROM users WHERE id=?',race.id)[0].password_hash,before);assert.equal(db.rows('SELECT credential_origin FROM users WHERE id=?',race.id)[0].credential_origin,'UNKNOWN');
  for(const status of ['PENDING_DELETION','PURGING']){const u=await register('reset-'+status.toLowerCase()+'@example.test'),t=await requestLink(u);db.raw.prepare('UPDATE users SET account_status=? WHERE id=?').run(status,u.id);assert.equal((await reset(t,'pending-password-change')).status,400);mail.sent=[];await forgot(u.email);await settle();assert.equal(mail.sent.length,0);assert.equal(tokenRows(u.id)[0].used_at,null);}
 }
 
@@ -397,9 +451,9 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
   assert.equal(db.rows("SELECT used_at FROM mobile_oauth_codes WHERE id = 'race-code'")[0].used_at, null, 'pending code unchanged');
   assert.equal(tokenRows(mixed.id).filter(row => row.used_at && row.revoked_at).length, 0);
 
-  // Same, when the ACCOUNT changes state between the read and the batch (deleted, or turns out provider-created):
+  // Same, when the ACCOUNT is deleted between the read and the batch:
   // nothing is committed — not even the session delete or the token consume.
-  for (const change of ['deleted', 'provider-created']) {
+  for (const change of ['deleted']) {
     clearThrottle(mixed);
     const raceToken = await requestLink(mixed);
     const raceSession = await session(mixed.id);
@@ -451,6 +505,31 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
   assert.ok(logs.some(line => line.includes('password_reset_mail_failed') && line.includes('not_configured')));
 }
 
+// Provider HTTP failures and missing configuration preserve the previous usable link, consume throttle capacity, and
+// mark the newly issued but unsent token unusable. A 2xx means provider accepted the request, not delivered it.
+{
+  const recipient = await register('mail-failure@example.test');
+  for (const status of [401, 403, 429, 500, 503]) {
+    clearThrottle(recipient);
+    mail.status = 200;
+    const prior = await requestLink(recipient);
+    clearThrottle(recipient);
+    mail.status = status;
+    mail.sent = [];
+    assert.equal((await forgot(recipient.email)).status, 202);
+    await settle();
+    assert.equal(mail.sent.length, 1);
+    const rows = tokenRows(recipient.id);
+    mail.sent = [];
+    assert.equal((await forgot(recipient.email)).status, 202);
+    await settle();
+    assert.equal(mail.sent.length, 0, `failed attempt still consumes per-account throttle for ${status}`);
+    assert.equal((await reset(prior, `prior-still-works-${status}`)).status, 200, `prior link survives ${status}`);
+    assert.ok(rows.some(row => row.revoked_at), `unsent token is revoked after ${status}`);
+  }
+  mail.status = 200;
+}
+
 // ---- 12. Without ctx.waitUntil the work is awaited inline (no lost mail).
 {
   clearThrottle(bob);
@@ -494,4 +573,4 @@ db.raw.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(new Date().to
 
 globalThis.fetch = realFetch;
 Object.assign(console, original);
-console.log('Password reset: enumeration-safe 202 (body, headers, timing; work after the response), token only as SHA-256 digest (never in DB/logs), 30 min single use incl. concurrent submit, expiry boundary, wrong/malformed tokens generic, password policy checked before consuming, atomic password change + session / mobile code / other-link invalidation with rollback, prior-link revocation and silent per-account throttle, IP rate limit, deleted / nonexistent / OAuth-only accounts get nothing (parity with account deletion), ZeptoMail EU adapter (no tracking, key never logged), fixed link origin, strict reset page.');
+console.log('Password reset: stable enumeration response, token digest only, 30 minute single use, atomic reset and session invalidation, OAuth/relay/UNKNOWN password establishment with provenance preserved, active-account guards, limiter fail-closed, mail failure preserves prior link and consumes throttle, fixed origin, safe provider-acceptance logging, strict reset page.');

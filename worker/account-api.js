@@ -5,6 +5,7 @@ import { PURGE_UPSTREAM_DELETES, PURGE_UPSTREAM_TIME_MS, PURGE_DAILY_ROWS_WRITTE
 import { recordPage, recordMutation } from './record-sync-transport.js';
 import { recordPull, recordPush, recordCapabilities, storageCleanupMode, PERSONAL_RESTORE_TABLES, STORAGE_STATE_SQL } from './record-sync-storage.js';
 const encoder = new TextEncoder();
+const DUMMY_PASSWORD_SALT = 'cmVwdHJpby1sb2dpbi1kdW1teS1zYWx0';
 const SESSION_DAYS = 30;
 const OAUTH_STATE_COOKIE = 'aks_oauth_state';
 const OAUTH_NONCE_COOKIE = 'aks_oauth_nonce';
@@ -251,7 +252,11 @@ async function login(request, env) {
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
   const { email, password } = await body(request); const normalizedEmail = normalizeEmail(email);
   const user = normalizedEmail && await env.DB.prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL').bind(normalizedEmail).first();
-  if (!user || !validPassword(password) || !constantEqual(await passwordDigest(password, user.password_salt), user.password_hash)) return error('AUTH_INVALID_CREDENTIALS', 401);
+  if (!validPassword(password)) return error('AUTH_INVALID_CREDENTIALS', 401);
+  // Keep the same PBKDF2 work for absent users and OAuth-only accounts. Otherwise the local-password flag
+  // creates an account-capability timing signal even though every failure shares the same response.
+  const candidate = await passwordDigest(password, user?.password_salt || DUMMY_PASSWORD_SALT);
+  if (!user || user.password_enabled === 0 || !constantEqual(candidate, user.password_hash)) return error('AUTH_INVALID_CREDENTIALS', 401);
   if(user.account_status&&user.account_status!=='ACTIVE')return issueRecovery(env,user.id);
   return issueSession(env, user.id, user.email, 201, mobileClient(request) ? { 'X-Reptrio-Client': 'mobile' } : {});
 }
@@ -571,6 +576,7 @@ async function hasOnboardingEligibility(env) {
 
 async function newUserInsert(env, id, email, passwordHash, salt, now,origin='PASSWORD') {
   const cols=(await env.DB.prepare('PRAGMA table_info(users)').all()).results;
+  if(cols.some(c=>c.name==='password_enabled'))return env.DB.prepare(`INSERT INTO users(id,email,password_hash,password_salt,created_at,credential_origin,onboarding_eligible,email_verified_at,password_enabled)VALUES(?,?,?,?,?,?,1,?,?)`).bind(id,email,passwordHash,salt,now,origin,origin==='PASSWORD'?null:now,origin==='PASSWORD'?1:0);
   if(cols.some(c=>c.name==='credential_origin'))return env.DB.prepare(`INSERT INTO users(id,email,password_hash,password_salt,created_at,credential_origin,onboarding_eligible,email_verified_at)VALUES(?,?,?,?,?,?,1,?)`).bind(id,email,passwordHash,salt,now,origin,origin==='PASSWORD'?null:now);
   const eligible = await hasOnboardingEligibility(env);
   return env.DB.prepare(eligible

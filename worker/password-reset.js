@@ -5,14 +5,12 @@ import { sendTransactionalEmail } from './transactional-email.js';
 // ---- Password reset (Build 43 G).
 // Request: always the same 202 for any syntactically valid email; the account lookup, token issue and mail run after
 // the response (ctx.waitUntil), so neither the body nor the timing depends on whether the account exists.
-// Token: 256-bit CSPRNG value, only its SHA-256 digest is stored, 30 minutes, single use; a new request revokes the
-// user's earlier active links. Completion: one D1 batch (a transaction) changes the password, deletes every session,
+// Token: 256-bit CSPRNG value, only its SHA-256 digest is stored, 30 minutes, single use; earlier links are revoked
+// only after the mail provider accepts a new send. Completion: one D1 batch (a transaction) changes the password, deletes every session,
 // voids pending mobile OAuth codes and the user's other links, and consumes the token — every statement guarded by
 // the same "token still valid" predicate, the consume last, so a concurrent or stale submit changes nothing.
-// Eligibility: only accounts with a user-chosen password. An account created by Google / Apple sign-in has a generated
-// password nobody knows; explicit provenance excludes it. UNKNOWN with no linked provider retains legacy reset
-// compatibility; UNKNOWN with linked providers remains ambiguous and fail-closed. A reset would create a new password
-// login surface for it, so it gets no link and no mail (the response is unchanged).
+// Eligibility: any active account can establish a local password after proving control of its stored email. Password
+// capability is explicit and independent from credential_origin, which remains creation provenance.
 const RESET_TTL_MINUTES = 30;
 const THROTTLE_MIN_INTERVAL_MS = 60_000;
 const THROTTLE_MAX_PER_HOUR = 3;
@@ -20,7 +18,7 @@ const RETAIN_ROWS_MS = 24 * 3_600_000;
 // Fixed link origin: never derived from the request Host header or configuration.
 const RESET_LINK_ORIGIN = 'https://api.reptrio.com';
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const HAS_OWN_PASSWORD = "(users.credential_origin='PASSWORD' OR (users.credential_origin='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id=users.id)))";
+const ACTIVE_ACCOUNT = "users.account_status='ACTIVE'";
 
 export async function handlePasswordResetRequest(request, env, ctx, pathname) {
   if (pathname === '/api/auth/password/forgot') return forgotPassword(request, env, ctx);
@@ -32,7 +30,9 @@ export async function handlePasswordResetRequest(request, env, ctx, pathname) {
 async function forgotPassword(request, env, ctx) {
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
-  if (!(await withinRateLimit(request, env, 'forgot'))) return error('PASSWORD_RESET_RATE_LIMITED', 429);
+  const limited = await withinRateLimit(request, env, 'forgot');
+  if (limited === null) return error('PASSWORD_RESET_UNAVAILABLE', 503);
+  if (!limited) return error('PASSWORD_RESET_RATE_LIMITED', 429);
   const { email } = await body(request);
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return error('AUTH_INVALID_EMAIL', 400);
@@ -42,7 +42,7 @@ async function forgotPassword(request, env, ctx) {
 
 async function issueReset(env, email) {
   env={...env,DB:await activeAccountDB(env.DB)};
-  const user = await env.DB.prepare(`SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL AND ${HAS_OWN_PASSWORD}`).bind(email).first();
+  const user = await env.DB.prepare(`SELECT id, email FROM users WHERE email = ? AND deleted_at IS NULL AND ${ACTIVE_ACCOUNT}`).bind(email).first();
   if (!user) return;
   const now = new Date();
   const token = randomToken(32);
@@ -53,12 +53,11 @@ async function issueReset(env, email) {
   const results = await env.DB.batch([
     env.DB.prepare(`INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at)
       SELECT ?, ?, ?, ?, ?
-      WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL AND ${HAS_OWN_PASSWORD}) AND (SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ? AND created_at > ?) < ?
+      WHERE EXISTS(SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL AND ${ACTIVE_ACCOUNT}) AND (SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ? AND created_at > ?) < ?
         AND NOT EXISTS (SELECT 1 FROM password_reset_tokens WHERE user_id = ? AND created_at > ?)`)
       .bind(id, user.id, await tokenDigest(token), issuedAt, new Date(now.getTime() + RESET_TTL_MINUTES * 60_000).toISOString(),
         user.id,user.id, new Date(now.getTime() - 3_600_000).toISOString(), THROTTLE_MAX_PER_HOUR,
         user.id, new Date(now.getTime() - THROTTLE_MIN_INTERVAL_MS).toISOString()),
-    env.DB.prepare('UPDATE password_reset_tokens SET revoked_at = ? WHERE user_id = ? AND id <> ? AND used_at IS NULL AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM password_reset_tokens AS issued WHERE issued.id = ?)').bind(issuedAt, user.id, id, id),
     env.DB.prepare('DELETE FROM password_reset_tokens WHERE user_id = ? AND created_at < ?').bind(user.id, new Date(now.getTime() - RETAIN_ROWS_MS).toISOString()),
   ]);
   if (results[0]?.meta?.changes !== 1) {
@@ -67,14 +66,24 @@ async function issueReset(env, email) {
   }
   const link = `${RESET_LINK_ORIGIN}/reset-password#token=${token}`;
   const result = await sendTransactionalEmail(env, { to: user.email, reference: id, ...resetMail(link) });
-  logEvent(result.ok ? 'password_reset_mail_sent' : 'password_reset_mail_failed', result.ok ? {} : { status: result.status });
+  if (result.ok) {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE password_reset_tokens SET revoked_at=? WHERE user_id=? AND id<>? AND used_at IS NULL AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM password_reset_tokens WHERE id=? AND revoked_at IS NULL)').bind(new Date().toISOString(), user.id, id, id),
+    ]);
+    logEvent('password_reset_provider_accepted');
+  } else {
+    await env.DB.prepare('UPDATE password_reset_tokens SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL').bind(new Date().toISOString(), id).run();
+    logEvent('password_reset_mail_failed', { status: result.status });
+  }
 }
 
 async function resetPassword(request, env, ctx) {
   env={...env,DB:await activeAccountDB(env.DB)};
   if (!isJsonPost(request)) return methodOrTypeError(request);
   if (!sameOrigin(request)) return error('AUTH_ORIGIN_INVALID', 403);
-  if (!(await withinRateLimit(request, env, 'reset'))) return error('PASSWORD_RESET_RATE_LIMITED', 429);
+  const limited = await withinRateLimit(request, env, 'reset');
+  if (limited === null) return error('PASSWORD_RESET_UNAVAILABLE', 503);
+  if (!limited) return error('PASSWORD_RESET_RATE_LIMITED', 429);
   const { token, password } = await body(request);
   // The password is checked before the token, so a rejected password never consumes the link.
   if (!validPassword(password)) return error('AUTH_PASSWORD_TOO_SHORT', 400);
@@ -89,22 +98,21 @@ async function resetPassword(request, env, ctx) {
       AND password_reset_tokens.revoked_at IS NULL
       AND password_reset_tokens.expires_at > ?
       AND users.deleted_at IS NULL
-      AND ${HAS_OWN_PASSWORD}`).bind(tokenHash, now).first();
+      AND ${ACTIVE_ACCOUNT}`).bind(tokenHash, now).first();
   if (!row) return error('PASSWORD_RESET_INVALID', 400);
 
   const salt = randomToken(16);
   const passwordHash = await passwordDigest(password, salt);
-  // One predicate guards every statement: the link is still valid AND its account still exists and still has its own
-  // password. If it stops holding between the read above and this batch, every statement is a no-op.
+  // One predicate guards every statement: the link is still valid AND its account is active. If it stops holding
+  // between the read above and this batch, every statement is a no-op.
   const valid = `EXISTS (SELECT 1 FROM password_reset_tokens AS current JOIN users AS owner ON owner.id = current.user_id
     WHERE current.id = ? AND current.user_id = ? AND current.used_at IS NULL AND current.revoked_at IS NULL AND current.expires_at > ?
-      AND owner.deleted_at IS NULL
-      AND (owner.credential_origin='PASSWORD' OR (owner.credential_origin='UNKNOWN' AND NOT EXISTS(SELECT 1 FROM oauth_accounts WHERE oauth_accounts.user_id=owner.id))))`;
+      AND owner.deleted_at IS NULL AND owner.account_status='ACTIVE')`;
   const guard = [row.id, row.user_id, now];
   let results;
   try {
     results = await env.DB.batch([
-      env.DB.prepare(`UPDATE users SET password_hash = ?, password_salt = ?,credential_origin='PASSWORD' WHERE id = ? AND ${valid}`).bind(passwordHash, salt, row.user_id, ...guard),
+      env.DB.prepare(`UPDATE users SET password_hash = ?, password_salt = ?, password_enabled=1 WHERE id = ? AND ${valid}`).bind(passwordHash, salt, row.user_id, ...guard),
       env.DB.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${valid}`).bind(row.user_id, ...guard),
       env.DB.prepare(`UPDATE mobile_oauth_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL AND ${valid}`).bind(now, row.user_id, ...guard),
       env.DB.prepare(`UPDATE password_reset_tokens SET revoked_at = ? WHERE user_id = ? AND id <> ? AND used_at IS NULL AND revoked_at IS NULL AND ${valid}`).bind(now, row.user_id, row.id, ...guard),
@@ -122,12 +130,14 @@ async function resetPassword(request, env, ctx) {
 }
 
 async function withinRateLimit(request, env, action) {
-  if (!env.PASSWORD_RESET_LIMITER) return true;
+  if (!env.PASSWORD_RESET_LIMITER || typeof env.PASSWORD_RESET_LIMITER.limit !== 'function') return null;
   try {
     const result = await env.PASSWORD_RESET_LIMITER.limit({ key: `${action}:${request.headers.get('cf-connecting-ip') || 'unknown'}` });
-    return result?.success !== false;
+    if (result?.success === true) return true;
+    if (result?.success === false) return false;
+    return null;
   } catch {
-    return true;
+    return null;
   }
 }
 

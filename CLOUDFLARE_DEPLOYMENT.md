@@ -88,13 +88,13 @@ Not deployed by the change itself. This branch (`build43/password-reset`) stacks
 3. **Configuration in `wrangler.jsonc` (deployed with the Worker):**
    - rate-limit binding `PASSWORD_RESET_LIMITER` (namespace `1002`, 5 requests / 60 s per client IP and action);
    - `/reset-password` added to `assets.run_worker_first`, so the Worker serves the reset page.
-   - If the limiter binding is missing, the endpoints fail open; the per-account throttle still applies.
+   - On the historical Build 43 Worker, a missing limiter binding failed open. The proposed B56 AUTH RESET Worker fails closed with 503 when the binding is missing, throws, or returns an invalid decision.
 4. **Mail endpoint:** `https://cpaas.zoho.eu/v1.1/email` (EU data center) in `worker/transactional-email.js`. Before the first deploy, confirm it against the mail agent's "Setup info → API" page. Sender `Reptrio <no-reply@mail.reptrio.com>`; click and open tracking are off (tracking would route the reset link, and its token, through the provider).
 5. **Endpoints:**
    - `POST /api/auth/password/forgot {email}` → always `202 {ok:true}` for a valid email, `400 AUTH_INVALID_EMAIL` for a malformed one, `429 PASSWORD_RESET_RATE_LIMITED`.
      - The lookup, the link and the mail happen after the response.
      - Per account: at most one link per 60 s and three per hour, silently.
-     - Google / Apple-created accounts (generated password) and deleted or unknown accounts get nothing.
+     - Before the B56 AUTH RESET change, Google / Apple-created accounts were excluded. In the proposed change, any active account whose registered mailbox is proven by the link may establish a local password; deleted/inactive accounts remain excluded.
    - `POST /api/auth/password/reset {token, password}` → `200 {ok:true}`. Errors:
      - `400 AUTH_PASSWORD_TOO_SHORT` (8–200; checked before the link);
      - `400 PASSWORD_RESET_INVALID` (wrong, malformed, expired, used, revoked, deleted or ineligible);
@@ -109,4 +109,17 @@ Not deployed by the change itself. This branch (`build43/password-reset`) stacks
    - the old password and old sessions are rejected;
    - the same link again → invalid.
    - Logs contain only event names and status codes.
-7. **Apple Private Relay:** mail to `@privaterelay.appleid.com` addresses is delivered only if `mail.reptrio.com` / the sender is registered in Apple's Private Email Relay settings. Apple-created accounts never receive reset mail, so this matters only for password accounts using a relay address.
+7. **Apple Private Relay:** delivery to Apple relay aliases depends on Apple source-domain registration, aligned SPF/DKIM and recipient relay state. Verify with a controlled relay test account; do not infer delivery from API acceptance.
+
+## B56 AUTH RESET 001 — proposed password capability change (not deployed)
+
+The `fix/b56-password-reset-delivery` branch adds migration `0018_password_enabled.sql` and updates password login/reset behavior. Production is still on the older Worker and schema until a separately approved rollout; do not infer this proposal is live.
+
+1. Before rollout, verify the exact current `a2-workout` version, D1 binding, migration ledger, ZeptoMail Agent/API region, account validation/quota, sender authorization and current provider error status. Never print secret values. Provider acceptance is not recipient delivery.
+2. After explicit production approval, perform additive migration 0018 against the verified D1. It marks known `PASSWORD` origins enabled, known `GOOGLE`/`APPLE` origins disabled, and leaves `UNKNOWN` NULL. NULL preserves legacy login behavior and avoids guessing.
+3. Deploy the reviewed Worker only after migration success. Missing, throwing or malformed `PASSWORD_RESET_LIMITER` decisions return 503; explicit deny returns 429. Per-account spacing/hour limits remain in D1. Requests retain the enumeration-safe 202 response.
+4. Password reset permits only active, undeleted accounts whose registered email mailbox is verified by the single-use link. It sets `password_enabled=1` without changing `credential_origin` or OAuth links, invalidates sessions and pending OAuth codes, and leaves workout/user records untouched. Failed mail attempts consume throttle but revoke only the unsent new token; an older accepted link remains usable. A provider 2xx means accepted for processing, not delivered.
+5. Validate with one designated QA account only after approval: confirm provider message/event status and recipient inbox, complete the link, check same user ID and preserved data, old session/password rejection, new password login, social login, and token replay rejection. Do not test real customer accounts.
+6. Rollback before any user reset: return Worker traffic to the recorded prior version; leave the additive column in place. After users have set local passwords, an old Worker may still authenticate via its stored hash but will not enforce the new capability flag; review that compatibility before rollback and never drop or reverse the migration automatically.
+
+Still unverified and blocking acceptance: current ZeptoMail account/quota/token validity, current API 429 cause, sender-domain DKIM/bounce records, Apple relay registration and real inbox delivery. A `ZEPTOMAIL_API_KEY` secret name alone does not prove it works.
