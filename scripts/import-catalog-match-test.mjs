@@ -99,7 +99,9 @@ const index = catalogIndex();
   for (const [name, id] of [['Incline DB press', 'ex_000095'], ['Neutral grip lat pulldown', 'ex_000166'], ['Sumo deadlift', 'ex_000081'],
     ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
     ['Z press', 'ex_000189'], ['Önden lat çekiş', 'ex_000166'], ['Standing leg curl', 'ex_000170'], ['Calf raise', 'ex_000224'], ['Seated calf raise', 'ex_000059'],
-    ['Seated row machine', 'ex_000229'], ['Floor press', 'ex_000038'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
+    ['Seated row machine', 'ex_000229'], ['Floor press', 'ex_000038'],
+    ['Ring dip', 'ex_000088'], ['TRX row', 'ex_000153'], ['Snatch grip deadlift', 'ex_000081'], ['Push jerk', 'ex_000204'], ['Zottman curl', 'ex_000040'],
+    ['Yates row', 'ex_000032'], ['Low to high cable fly', 'ex_000049'], ['Feet elevated push up', 'ex_000205'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
     const r = silent(id, name);
     assert.equal(r.status, 'suggested', `${name} must not auto-match ${id}`);
     assert.equal(r.suggestions[0], id);
@@ -175,6 +177,7 @@ async function account(tag, consent = true) {
 const seed = (u, id, status, preview) => db.raw.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, preview_json, attempts, created_at, updated_at)
   VALUES (?, ?, ?, '{}', '{}', ?, 1, '2026-11-14T00:00:00.000Z', '2026-11-14T00:00:00.000Z')`).run(id, u.user.id, status, preview ? JSON.stringify(preview) : null);
 const stored = (u, id) => JSON.parse(db.rows('SELECT preview_json FROM import_jobs WHERE user_id=? AND id=?', u.user.id, id)[0].preview_json);
+const matchCol = (u, id) => JSON.parse(db.rows('SELECT catalog_match_json FROM import_jobs WHERE user_id=? AND id=?', u.user.id, id)[0].catalog_match_json || 'null');
 const match = (u, id, revision = IMPORT_MATCH_CATALOG.revision, headers) => call(`/api/import/jobs/${id}/match`, u?.sessionToken, { catalogRevision: revision }, headers);
 
 const alice = await account('alice');
@@ -205,20 +208,34 @@ assert.equal(okBody.cached, false);
 assert.equal(net.calls, 1);
 assert.equal(net.bodies.at(-1).store, false, 'synchronous call, not stored upstream');
 assert.deepEqual(okBody.catalogMatching.results.map(r => [r.sourceName, r.status, r.exerciseId]), [['Bench Press', 'matched', 'ex_000038'], ['Dumbell Bench', 'matched', 'ex_000095'], ['asf@@ 2!!', 'personal', null]]);
-assert.deepEqual(stored(alice, 'job-a').catalogMatching, okBody.catalogMatching, 'persisted on the job');
-assert.deepEqual(stored(alice, 'job-a').program, preview.program, 'source names and prescriptions unchanged');
+assert.deepEqual(matchCol(alice, 'job-a').catalogMatching, okBody.catalogMatching, 'persisted beside the preview');
+assert.match(matchCol(alice, 'job-a').previewSha, /^[0-9a-f]{64}$/);
+assert.deepEqual(stored(alice, 'job-a'), preview, 'the preview itself is byte-identical (never carries the match result)');
 // Double submit / reopen: cached, no second model call; the GET poll serves the stored matching too.
 const again = await match(alice, 'job-a');
 assert.equal((await again.json()).cached, true);
 assert.equal(net.calls, 1);
+// Cross-client safety (Guardian r3 BLOCKER-1): the job poll that every client (mobile <= 1.2.0 (56), web app) copies into its
+// synced importPreviews never carries the match result.
 const polled = await (await call('/api/import/jobs/job-a', alice.sessionToken)).json();
-assert.equal(polled.preview.catalogMatching.status, 'done');
+assert.deepEqual(polled.preview, preview, 'poll returns the extraction preview only');
+assert.ok(!JSON.stringify(polled).includes('catalogMatching') && !JSON.stringify(polled).includes('catalog_match'), 'no match data anywhere in the poll');
+// The cache is bound to the exact preview: a re-extracted preview is matched again, not served the old result.
+db.raw.prepare("UPDATE import_jobs SET preview_json = ? WHERE id = 'job-a'").run(JSON.stringify(previewOf([ex('Squat')])));
+const rematched = await (await match(alice, 'job-a')).json();
+assert.equal(rematched.cached, false);
+assert.deepEqual(rematched.catalogMatching.results.map(r => r.sourceName), ['Squat']);
+db.raw.prepare("UPDATE import_jobs SET preview_json = ? WHERE id = 'job-a'").run(JSON.stringify(preview));
+// A catalog revision change invalidates the cached entry too.
+db.raw.prepare("UPDATE import_jobs SET catalog_match_json = json_set(catalog_match_json, '$.catalogMatching.catalogRevision', 'wg-0.0.0+old') WHERE id = 'job-a'").run();
+assert.equal((await (await match(alice, 'job-a')).json()).cached, false, 'old-catalog result is not served');
 
 // Consent withdrawn: refused before any model call.
 assert.equal((await call('/api/privacy/ai-import/consent', alice.sessionToken, { action: 'revoke', policyVersion: POLICY })).status, 200);
 seed(alice, 'job-b', 'done', previewOf([ex('Dumbell Bench')]));
+const callsBeforeRevoked = net.calls;
 assert.equal((await match(alice, 'job-b')).status, 403);
-assert.equal(net.calls, 1);
+assert.equal(net.calls, callsBeforeRevoked);
 
 // Rate limit (B12) and consent order (B8): consent is checked before the limiter; a refused limiter costs no model call.
 {
@@ -240,7 +257,7 @@ assert.equal(net.calls, 1);
   // B9: consent revoked while the model runs → refused, nothing saved.
   net.during = async () => { net.during = null; await call('/api/privacy/ai-import/consent', carol.sessionToken, { action: 'revoke', policyVersion: POLICY }); };
   assert.equal((await match(carol, 'job-c')).status, 403);
-  assert.equal(stored(carol, 'job-c').catalogMatching, undefined, 'revoked during the call: not saved');
+  assert.equal(matchCol(carol, 'job-c'), null, 'revoked during the call: not saved');
   assert.equal((await call('/api/privacy/ai-import/consent', carol.sessionToken, { action: 'grant', policyVersion: POLICY })).status, 200);
 
   // B10 / race: the job is retried (queued) during the call → conflict, not saved over the new state.
@@ -257,7 +274,8 @@ assert.equal(net.calls, 1);
   assert.deepEqual(stored(carol, 'job-c'), fresh, 'the newer preview stays');
   // Then a normal match of the new preview succeeds.
   assert.equal((await match(carol, 'job-c')).status, 200);
-  assert.equal(stored(carol, 'job-c').catalogMatching.results.length, 2);
+  assert.equal(matchCol(carol, 'job-c').catalogMatching.results.length, 2);
+  assert.equal(stored(carol, 'job-c').catalogMatching, undefined);
   delete env.AI_IMPORT_LIMITER;
 }
 
@@ -268,8 +286,21 @@ assert.equal(net.calls, 1);
   net.next = () => new Response(JSON.stringify(reply([row(0)]).payload), { headers: { 'Content-Type': 'application/json' } });
   const incomplete = await match(erin, 'job-e');
   assert.deepEqual([incomplete.status, (await incomplete.json()).code], [502, 'IMPORT_MATCH_INCOMPLETE']);
-  assert.equal(stored(erin, 'job-e').catalogMatching, undefined);
+  assert.equal(matchCol(erin, 'job-e'), null);
   net.next = null;
+}
+
+// Before migration 0019 the endpoint fails closed (503), and nothing is written into the preview.
+{
+  const oldDb = createD1({ migrationsUpTo: '0018_password_enabled.sql' });
+  const oldEnv = { ...env, DB: oldDb };
+  const r = await worker.fetch(new Request('https://api.reptrio.com/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ email: 'old@example.test', password: 'fixture-password' }) }), oldEnv, { waitUntil() {} });
+  const u = await r.json();
+  await worker.fetch(new Request('https://api.reptrio.com/api/privacy/ai-import/consent', { method: 'POST', headers: { Authorization: 'Bearer ' + u.sessionToken, 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ action: 'grant', policyVersion: POLICY }) }), oldEnv, { waitUntil() {} });
+  oldDb.raw.prepare(`INSERT INTO import_jobs (id, user_id, status, source_json, normalized_document_json, preview_json, attempts, created_at, updated_at) VALUES ('j', ?, 'done', '{}', '{}', ?, 1, 'x', 'x')`).run(u.user.id, JSON.stringify(previewOf([ex('Dumbell Bench')])));
+  const res = await worker.fetch(new Request('https://api.reptrio.com/api/import/jobs/j/match', { method: 'POST', headers: { Authorization: 'Bearer ' + u.sessionToken, 'Content-Type': 'application/json', 'X-Reptrio-Client': 'mobile' }, body: JSON.stringify({ catalogRevision: IMPORT_MATCH_CATALOG.revision }) }), oldEnv, { waitUntil() {} });
+  assert.deepEqual([res.status, (await res.json()).code], [503, 'IMPORT_MATCH_UNAVAILABLE']);
+  assert.ok(!oldDb.rows("SELECT preview_json FROM import_jobs WHERE id='j'")[0].preview_json.includes('catalogMatching'));
 }
 
 console.log('import catalog match test: PASS');

@@ -305,12 +305,19 @@ async function matchImportJob(request, env, importId) {
     let body;
     try { body = await readJson(request, 4096); } catch { throw coded('INVALID_JSON'); }
     if (body?.catalogRevision !== IMPORT_MATCH_CATALOG.revision) throw coded('IMPORT_MATCH_CATALOG_MISMATCH');
-    const row = await env.DB.prepare('SELECT status, preview_json, updated_at FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first();
+    let row;
+    // Missing column (migration 0019 not applied) → technical failure, never a write into the synced preview.
+    try { row = await env.DB.prepare('SELECT status, preview_json, updated_at, catalog_match_json FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first(); }
+    catch { throw coded('IMPORT_MATCH_UNAVAILABLE'); }
     if (!row) throw coded('IMPORT_JOB_NOT_FOUND');
     const preview = parseJson(row.preview_json);
     if (row.status !== 'done' || !preview?.program?.days) throw coded('IMPORT_NOT_READY');
-    if (preview.catalogMatching?.status === 'done' && preview.catalogMatching.catalogRevision === IMPORT_MATCH_CATALOG.revision) {
-      return json({ importId, catalogMatching: preview.catalogMatching, cached: true });
+    // The stored result is valid only for this exact preview and catalog revision (a retry / re-upload / re-extraction or a
+    // catalog update invalidates it without touching any other code path).
+    const previewSha = await sha256Hex(row.preview_json);
+    const cachedEntry = parseJson(row.catalog_match_json);
+    if (cachedEntry?.previewSha === previewSha && cachedEntry.catalogMatching?.status === 'done' && cachedEntry.catalogMatching.catalogRevision === IMPORT_MATCH_CATALOG.revision) {
+      return json({ importId, catalogMatching: cachedEntry.catalogMatching, cached: true });
     }
     const rate = await env.AI_IMPORT_LIMITER?.limit({ key: request.headers.get('cf-connecting-ip') || 'unknown' });
     if (rate && !rate.success) throw coded('AI_IMPORT_RATE_LIMITED');
@@ -321,10 +328,10 @@ async function matchImportJob(request, env, importId) {
       callModel: body => requestOpenAIBody({ apiKey: env.OPENAI_API_KEY, config: matchConfig, body, requestId, beforeAttempt: () => assertAiImportConsent(env, user.id) }),
     });
     await assertAiImportConsent(env, user.id);
-    // Persist only onto the SAME finished preview that was matched: a re-upload, retry or re-extraction (or another match) that
-    // changed the job meanwhile wins, and this result is answered as a technical conflict (the app retries on the new preview).
-    const saved = await env.DB.prepare("UPDATE import_jobs SET preview_json = ?, updated_at = ? WHERE user_id = ? AND id = ? AND status = 'done' AND updated_at = ? AND preview_json = ?")
-      .bind(JSON.stringify({ ...preview, catalogMatching }), new Date().toISOString(), user.id, importId, row.updated_at, row.preview_json).run();
+    // Stored beside (never inside) the preview, and only while the job still holds the SAME finished preview: a re-upload,
+    // retry or re-extraction meanwhile wins and this result is answered as a technical conflict (the app re-polls and rematches).
+    const saved = await env.DB.prepare("UPDATE import_jobs SET catalog_match_json = ? WHERE user_id = ? AND id = ? AND status = 'done' AND updated_at = ? AND preview_json = ?")
+      .bind(JSON.stringify({ previewSha, catalogMatching }), user.id, importId, row.updated_at, row.preview_json).run();
     if (saved.meta?.changes !== 1) throw coded('IMPORT_CHANGED');
     console.log(JSON.stringify({ event: 'import_match', requestId, status: 'ok', durationMs: Date.now() - started, summary: catalogMatching.summary, usage: catalogMatching.usage, model: catalogMatching.model }));
     return json({ importId, catalogMatching, cached: false }, 200, { 'X-Import-Request-Id': requestId });
@@ -334,7 +341,12 @@ async function matchImportJob(request, env, importId) {
     return apiError(code, matchStatusFor(code), { 'X-Import-Request-Id': requestId });
   }
 }
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text ?? '')));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 function matchStatusFor(code) {
+  if (code === 'IMPORT_MATCH_UNAVAILABLE') return 503;
   if (code === 'IMPORT_JOB_NOT_FOUND') return 404;
   if (code === 'IMPORT_MATCH_CATALOG_MISMATCH' || code === 'IMPORT_NOT_READY' || code === 'IMPORT_CHANGED') return 409;
   if (code === 'IMPORT_MATCH_INVALID_RESPONSE' || code === 'IMPORT_MATCH_INCOMPLETE' || code === 'OPENAI_REQUEST_FAILED' || code === 'OPENAI_NETWORK_ERROR' || code === 'OPENAI_INVALID_RESPONSE') return 502;

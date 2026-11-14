@@ -68,6 +68,7 @@ const EQUIPMENT_WORDS = [
   ['kettlebell', /\b(kettlebell|kettle bell|kb)\b/], ['dumbbell', /\b(dumbbell|dumbell|dumbel|dambil|dambel|db)\b/],
   ['barbell', /\b(barbell|halter|bb)\b/], ['plate', /\b(plate|plaka|disk)\b/], ['cable', /\b(cable|kablo|kablolu|makara)\b/], ['resistance_band', /\b(band|banded|lastik|bant)\b/],
   ['machine', /\b(machine|makine|makinesi|makinede|makinada)\b/],
+  ['rings', /\b(ring|rings|halka|halkada|jimnastik halkasi)\b/], ['suspension', /\b(trx|suspension|suspansiyon)\b/],
 ];
 function wordsIn(name, table) {
   let text = ` ${exactKey(name)} `;
@@ -86,7 +87,8 @@ const VARIANT_WORDS = [
   ['spoto', /\bspoto\b/], ['larsen', /\blarsen\b/], ['cambered', /\bcambered\b/], ['safety_bar', /\b(safety (squat )?bar|ssb)\b/],
   ['guillotine', /\bguillotine\b/], ['svend', /\bsvend\b/], ['landmine', /\blandmine\b/], ['meadows', /\bmeadows\b/],
   ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
-  ['cuban', /\bcuban\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
+  ['cuban', /\bcuban\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
+  ['low_to_high', /\b(low to high|alttan yukari)\b/], ['high_to_low', /\b(high to low|ustten asagi)\b/], ['feet_elevated', /\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
 ];
 const nameVariants = name => wordsIn(name, VARIANT_WORDS);
 /** Qualifiers spelled out in a name (source text or catalog name), parsed without the model. */

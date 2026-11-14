@@ -637,6 +637,10 @@
   [
    "Low row",
    "ex_000229"
+  ],
+  [
+   "Feet elevated pike push up",
+   "ex_000115"
   ]
  ],
  "variant": [
@@ -903,6 +907,46 @@
     "ex_000228"
    ],
    "ex_000176"
+  ],
+  [
+   "Ring dip",
+   [],
+   "ex_000088"
+  ],
+  [
+   "TRX row",
+   [],
+   "ex_000153"
+  ],
+  [
+   "Snatch grip deadlift",
+   [],
+   "ex_000081"
+  ],
+  [
+   "Push jerk",
+   [],
+   "ex_000204"
+  ],
+  [
+   "Zottman curl",
+   [],
+   "ex_000040"
+  ],
+  [
+   "Yates row",
+   [],
+   "ex_000032"
+  ],
+  [
+   "Low to high cable fly",
+   [],
+   "ex_000049"
+  ],
+  [
+   "Feet elevated push up",
+   [],
+   "ex_000205"
   ]
  ],
  "nonsense": [
