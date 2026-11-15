@@ -24,7 +24,10 @@ import { requestOpenAIBody } from '../worker/index.js';
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : fallback; };
 const has = name => process.argv.includes(name);
 const exactOnly = has('--exact-only'), oracle = has('--oracle'), trapReported = has('--trap-reported'), trap = has('--trap') || trapReported;
-const offline = exactOnly || oracle || trap;
+// --replay <result.json>: re-run the CURRENT pipeline on the raw model answers recorded by an earlier real run (no key, no network).
+const replayFile = arg('--replay', null);
+const replay = replayFile ? new Map(JSON.parse(readFileSync(replayFile, 'utf8')).results.filter(r => r.model).map(r => [r.name, r.model])) : null;
+const offline = exactOnly || oracle || trap || Boolean(replay);
 const setName = arg('--set', 'heldout');
 const batchSize = Number(arg('--batch', 30));
 const model = arg('--model', 'gpt-4.1-mini');
@@ -65,6 +68,7 @@ if (!offline) apiKey = process.env.OPENAI_API_KEY || await hiddenInput('OpenAI A
 const config = { model, timeoutMs: 30000, maxRetries: 1, retryBaseMs: 750 };
 const byName = new Map(cases.map(c => [c.name, c]));
 const fakeRow = n => {
+  if (replay) { const m = replay.get(n.name); return m ? { index: n.index, ...m } : { index: n.index, understood: false, interpretation: '', sourceEquipment: 'unspecified', sourceQualifiers: [], sameExerciseId: null, suggestionIds: [] }; }
   const c = byName.get(n.name);
   const base = { index: n.index, understood: true, interpretation: '', sourceEquipment: 'unspecified', sourceQualifiers: [], sameExerciseId: null, suggestionIds: [] };
   if (exactOnly) return base;
@@ -130,7 +134,7 @@ const tokens = calls.reduce((t, c) => ({ input: t.input + (c.usage?.inputTokens 
 const cost = ((tokens.input - tokens.cached) * PRICE.input + tokens.cached * PRICE.cachedInput + tokens.output * PRICE.output) / 1e6;
 const modelCalls = calls.filter(c => c.modelCalls);
 const summary = {
-  mode: exactOnly ? 'exact-only' : oracle ? 'oracle (perfect model)' : trapReported ? 'trap-reported (over-eager model reporting its pick\'s attributes)' : trap ? 'trap (over-eager model, no reported attributes)' : `model:${model}`,
+  mode: replay ? `replay of ${replayFile.split('/').pop()}` : exactOnly ? 'exact-only' : oracle ? 'oracle (perfect model)' : trapReported ? 'trap-reported (over-eager model reporting its pick\'s attributes)' : trap ? 'trap (over-eager model, no reported attributes)' : `model:${model}`,
   set: setName, batchSize, overall: metrics(results), byClass: Object.fromEntries(classes.map(c => [c, metrics(results.filter(r => r.class === c))])),
   trapsOffered: results.filter(r => r.trap).length, modelCalls: modelCalls.length, tokens, estimatedCostUsd: +cost.toFixed(5),
   perCallAvg: modelCalls.length ? { names: +(modelCalls.reduce((s, c) => s + c.names, 0) / modelCalls.length).toFixed(1), wallMs: Math.round(modelCalls.reduce((s, c) => s + c.wallMs, 0) / modelCalls.length), costUsd: +(cost / modelCalls.length).toFixed(5) } : null,

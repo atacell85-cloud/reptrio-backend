@@ -197,17 +197,7 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   // Movement words, derived from the catalog (the last word of every catalog name: squat, row, crunch, press, curl, jack…): a
   // source that names a movement absent from the pick's whole name means another exercise ("Sumo squat" is not Sumo Deadlift,
   // "Seal row" is not Seal Jack). Plurals fold ("crushers" = crusher).
-  {
-    // Only for a pick named by a shared movement word (one at least three catalog names end with: deadlift, jack, row, up…) that
-    // the source does not contain; uniquely named entries (Pec Deck, Farmer Carry) are left to the model.
-    const fold = t => (t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t);
-    const targetWords = new Set(exactKey(entry.name).split(' ').map(fold));
-    const sourceWords = new Set(exactKey(sourceText).split(' ').map(fold));
-    const targetMovement = fold(exactKey(entry.name).split(' ').at(-1));
-    if (movementCount(catalog).get(targetMovement) >= 3 && !sourceWords.has(targetMovement)) {
-      for (const word of sourceWords) if (movementWords(catalog).has(word) && !targetWords.has(word)) return 'variant';
-    }
-  }
+  { const conflict = movementConflict(entry, sourceText, catalog); if (conflict) return conflict; }
   // A rope attachment matters only where the catalog holds a rope version of the picked movement ("Rope pushdown" ≠ Tricep
   // Pushdown because Rope Tricep Pushdown exists; "Rope crunch" = Cable Crunch).
   if (/\b(rope|halat\w*)\b/.test(exactKey(sourceText)) && !/\brope\b/.test(exactKey(entry.name))) {
@@ -224,6 +214,18 @@ export function movementKey(name) {
   let text = ` ${exactKey(name)} `;
   for (const pattern of STRIP) text = text.replace(pattern, ' ');
   return text.replace(/\b(cable|machine|barbell|dumbbell|banded|smith|bench)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+/** A text naming a movement the entry does not carry, for an entry named by a shared movement word (deadlift, jack, row, up…).
+ * Uniquely named entries (Pec Deck, Farmer Carry) are left to the model. Plurals fold ("crushers" = crusher). */
+export function movementConflict(entry, text, catalog = IMPORT_MATCH_CATALOG) {
+  if (!entry || !text) return null;
+  const fold = t => (t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t);
+  const targetWords = new Set(exactKey(entry.name).split(' ').map(fold));
+  const words = new Set(exactKey(text).split(' ').map(fold));
+  const targetMovement = fold(exactKey(entry.name).split(' ').at(-1));
+  if (!(movementCount(catalog).get(targetMovement) >= 3) || words.has(targetMovement)) return null;
+  for (const word of words) if (movementWords(catalog).has(word) && !targetWords.has(word)) return 'variant';
+  return null;
 }
 const countMemo = new WeakMap();
 function movementCount(catalog) {
@@ -387,11 +389,19 @@ export function validateModelRow(index, entry, row) {
   const equipment = SOURCE_EQUIPMENT.includes(row?.sourceEquipment) ? row.sourceEquipment : 'unspecified';
   const qualifiers = Array.isArray(row?.sourceQualifiers) ? row.sourceQualifiers.filter(q => SOURCE_QUALIFIERS.includes(q)) : [];
   let suggestions = Array.from(new Set((Array.isArray(row?.suggestionIds) ? row.suggestionIds : []).filter(valid)));
-  const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId : null;
+  // The model's own interpretation (its standard English name for the exercise) is a semantic signal, used two ways:
+  // - it left the id empty but named the exercise exactly as a catalog entry ("Lat Pulldown", "Hip Thrust"): that entry is the
+  //   pick (the guards on the source text still apply). Real eval 3: 4 such needless confirmations.
+  // - its pick does not carry the movement it named ("Barbell Lateral Raise" → Upright Row): refused like a source movement word.
+  const interpretation = typeof row?.interpretation === 'string' ? row.interpretation : '';
+  const named = interpretation ? index.exact.get(exactKey(interpretation)) : null;
+  const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId
+    : row?.sameExerciseId == null && understood && named?.size === 1 ? [...named][0] : null;
   let guard = null;
   if (proposed) {
     // Only the name as written in the file: the extraction model's cleaned spelling cannot vouch for the pick.
-    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, entry.sourceName);
+    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, entry.sourceName)
+      || movementConflict(index.byId.get(proposed), interpretation, IMPORT_MATCH_CATALOG);
     if (!guard) return { key: entry.key, sourceName: entry.sourceName, status: 'matched', method: 'ai', exerciseId: proposed, suggestions: [], understood: true, guard: null };
     suggestions = [proposed, ...suggestions.filter(id => id !== proposed)];
   } else if (row?.sameExerciseId != null) guard = 'unknownId';
