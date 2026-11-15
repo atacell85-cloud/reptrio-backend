@@ -136,6 +136,21 @@ const index = catalogIndex();
     ['Crossover', 'ex_000049'], ['EZ curl', 'ex_000111'], ['Dumbbell Russian twist', 'ex_000297'], ['Dambılla Russian twist', 'ex_000297'], ['Plate crunch', 'ex_000293'],
     ['Chest press', 'ex_000178'], ['Pull through', 'ex_000054'], ['Pull aparts', 'ex_000012'], ['Battle ropes', 'ex_000033'], ['Jump rope', 'ex_000154'],
     ['Koşu bandı', 'ex_000219'], ['Incline bench press', 'ex_000148']]) assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
+  // Round 7: bant / tek taraflı / sağlık topu / halka words, position pools from the source text only, catalog distinguishing
+  // words (walking, diamond, bench dip, nordic, kneeling, assisted, towel, handstand, archer, rope where a rope version exists…).
+  const r7 = (name, id, eq = 'unspecified', q = []) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, { sameExerciseId: id, sourceEquipment: eq, sourceQualifiers: q }));
+  for (const [name, id, eq, q] of [['Bant ile squat','ex_000258'],['Bant squat','ex_000258'],['Tek taraflı dumbbell row','ex_000096'],['Tek taraflı cable row','ex_000229'],['Tek taraflı leg press','ex_000172'],
+['Oturarak calf raise','ex_000059','bodyweight'],['Seated calf raises','ex_000059','bodyweight'],['Seated calf','ex_000059','bodyweight'],
+['Walking lunges','ex_000212'],['Yürüyen lunge','ex_000212'],['Diamond pushups','ex_000205'],['Bench dips','ex_000088'],['Nordic curl','ex_000170'],['Kneeling pallof press','ex_000191'],['Rope pushdown','ex_000281'],
+['Barfiks','ex_000010'],['Barfiks','ex_000276'],['Push-ups','ex_000133'],['Push-ups','ex_000003'],['Leg curl','ex_000176','unspecified',['lying']],['Sağlık topu crunch','ex_000076'],['Halkada dips','ex_000088'],
+['Yana açış','ex_000052']]) assert.equal(r7(name, id, eq, q).status, 'suggested', `r7 leak: ${name} → ${id}`);
+  for (const [name, id, eq, q] of [['Bant ile squat','ex_000028'],['Lastikli squat','ex_000028'],['Tek taraflı dumbbell row','ex_000188'],['Tek taraflı cable row','ex_000236'],['Halat sallama','ex_000033'],['Rope jumping','ex_000154'],['Skipping rope','ex_000154'],['Rope crunch','ex_000047'],['Rope pushdown','ex_000217'],
+['Elmas şınav','ex_000087'],['Diamond push up','ex_000087'],['Walking lunge','ex_000286'],['Yürüyerek lunge','ex_000286'],['Bench dip','ex_000037'],['Nordic hamstring curl','ex_000187'],['Half kneeling pallof press','ex_000130'],['Destekli barfiks','ex_000010'],['Negatif barfiks','ex_000185'],['Amuda kalkarak şınav','ex_000133'],['Pistol squat','ex_000195'],['Bulgar squat','ex_000044'],['Goblet squat','ex_000126'],['Hack squat','ex_000128'],['Ters tutuşlu curl','ex_000210'],['Hammer curl','ex_000131'],['Çekiç curl','ex_000131'],['Pike push up','ex_000194'],['Archer push up','ex_000003'],['Donkey calf raise','ex_000089'],['Belt squat','ex_000036'],['Seated calf raise','ex_000224']]) assert.equal(r7(name, id, eq, q).status, 'matched', `r7 accept: ${name} → ${id}`);
+  // A suffixed Turkish grip word still counts ("ters tutuşlu" lat pulldown is not the plain Lat Pulldown).
+  assert.equal(r7('Ters tutuşlu lat pulldown', 'ex_000166').status, 'suggested');
+  assert.equal(r7('Ters tutuşla barfiks', 'ex_000066').status, 'matched');
+  // The extraction model's cleaned name cannot vouch for a pick.
+  assert.equal(validateModelRow(index, { key: 'k', sourceName: 'Yana açış', normalizedName: 'Cable Lateral Raise' }, row(0, { sameExerciseId: 'ex_000052' })).status, 'suggested');
   // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
   const golden = JSON.parse(readFileSync(new URL('./fixtures/import-match-golden.v1.json', import.meta.url), 'utf8'));
   // Names the exact step resolves never reach the guards in production.

@@ -709,6 +709,30 @@
   [
    "Ağırlıklı barfiks",
    "ex_000295"
+  ],
+  [
+   "Destekli barfiks",
+   "ex_000010"
+  ],
+  [
+   "Negatif barfiks",
+   "ex_000185"
+  ],
+  [
+   "Halat sallama",
+   "ex_000033"
+  ],
+  [
+   "Skipping rope",
+   "ex_000154"
+  ],
+  [
+   "Tek taraflı dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Bant ile squat",
+   "ex_000028"
   ]
  ],
  "variant": [
@@ -1086,6 +1110,74 @@
     "ex_000044"
    ],
    "ex_000249"
+  ],
+  [
+   "Tek taraflı leg press",
+   [],
+   "ex_000172"
+  ],
+  [
+   "Seated calf",
+   [
+    "ex_000224"
+   ],
+   "ex_000059"
+  ],
+  [
+   "Walking lunges",
+   [
+    "ex_000286"
+   ],
+   "ex_000212"
+  ],
+  [
+   "Diamond pushups",
+   [
+    "ex_000087"
+   ],
+   "ex_000205"
+  ],
+  [
+   "Bench dips",
+   [
+    "ex_000037"
+   ],
+   "ex_000088"
+  ],
+  [
+   "Nordic curl",
+   [
+    "ex_000187"
+   ],
+   "ex_000170"
+  ],
+  [
+   "Kneeling pallof press",
+   [
+    "ex_000130"
+   ],
+   "ex_000191"
+  ],
+  [
+   "Halatla pushdown",
+   [
+    "ex_000217"
+   ],
+   "ex_000281"
+  ],
+  [
+   "Push-ups",
+   [
+    "ex_000205"
+   ],
+   "ex_000133"
+  ],
+  [
+   "Leg curl machine lying",
+   [
+    "ex_000176"
+   ],
+   "ex_000228"
   ]
  ],
  "nonsense": [

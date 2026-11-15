@@ -22,7 +22,7 @@ const NAME_MAX = 160;
 export const SOURCE_EQUIPMENT = Object.freeze(['unspecified', 'barbell', 'dumbbell', 'cable', 'machine', 'smith_machine', 'kettlebell',
   'resistance_band', 'bodyweight', 'ez_bar', 'trap_bar', 'plate', 'pull_up_bar', 'bench', 'box', 'stability_ball', 'towel', 'wall',
   'doorway', 'chair', 'cardio_machine']);
-export const SOURCE_QUALIFIERS = Object.freeze(['incline', 'decline', 'single_arm', 'single_leg', 'wide_grip', 'close_grip', 'neutral_grip',
+export const SOURCE_QUALIFIERS = Object.freeze(['incline', 'decline', 'single_arm', 'single_leg', 'single_side', 'wide_grip', 'close_grip', 'neutral_grip',
   'reverse_grip', 'sumo', 'front', 'seated', 'standing', 'lying']);
 
 // Same normalization as the app's normalizeExerciseQuery (src/exercises.ts): exact keys only, never fuzzy.
@@ -52,7 +52,8 @@ const QUALIFIER_WORDS = [
   // Feet elevated = a decline (push-ups); the named variant word below keeps it apart from the flat movement too.
   ['decline', /\b(decline|ters egimli|asagi egimli|negatif egimli)\b|\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/],
   ['incline', /\b(incline|egimli|egik|yukari egimli)\b/],
-  ['single_arm', /\b(single|one)[ -]?arm\b|\btek (kol|kolla|kollu|el|elle)\b|\bunilateral\b/],
+  ['single_arm', /\b(single|one)[ -]?arm\b|\btek (kol|kolla|kollu|el|elle)\b/],
+  ['single_side', /\b(tek tarafli|tek taraf|unilateral|single side)\b/],
   ['single_leg', /\b(single|one)[ -]?leg\b|\btek (bacak|bacakla|bacakli|ayak|ayakla|ayakli)\b/],
   ['wide_grip', /\b(wide|genis)\b/],
   ['close_grip', /\b(close|narrow|dar)( grip| tutus| tutuslu)?\b|\b(cg|cgbp)\b/],
@@ -69,9 +70,9 @@ const EQUIPMENT_WORDS = [
   ['ez_bar', /\bez( ?bar\w*)?\b/], ['trap_bar', /\b(trap|hex) ?bar\w*\b/], ['smith_machine', /\bsmith\w*\b/],
   ['kettlebell', /\b(kettlebell\w*|kettle bell|kb)\b/], ['dumbbell', /\b(dumbbell\w*|dumbell\w*|dumbel\w*|dambil\w*|dambel\w*|db)\b/],
   ['barbell', /\b(barbell\w*|halter\w*|bb)\b/], ['plate', /\b(plate|plates|plaka\w*|disk\w*)\b/],
-  ['cable', /\b(cable\w*|kablo\w*|makara\w*|halat\w*|crossover)\b|(?<!battle |jump )\brope\b/], ['resistance_band', /\b(band|bands|banded|lastik\w*|bantli|bantla)\b/],
+  ['cable', /\b(cable\w*|kablo\w*|makara\w*|crossover)\b|\bhalat\w*\b(?! salla)|(?<!battle |jump |skipping )\brope\b(?! jump)/], ['resistance_band', /\b(band|bands|banded|lastik\w*|bant\w*)\b/],
   ['machine', /\b(machine\w*|makine\w*|makina\w*)\b/],
-  ['rings', /\b(ring|rings|halka\w*)\b/], ['suspension', /\b(trx|suspension|suspansiyon\w*)\b/], ['medicine_ball', /\b(med ball|medicine ball|sagilik topu)\b/],
+  ['rings', /\b(ring|rings|halka\w*)\b/], ['suspension', /\b(trx|suspension|suspansiyon\w*)\b/], ['medicine_ball', /\b(med ball|medicine ball|saglik topu\w*)\b/],
 ];
 function wordsIn(name, table) {
   let text = ` ${exactKey(name)} `;
@@ -90,7 +91,14 @@ const VARIANT_WORDS = [
   ['spoto', /\bspoto\b/], ['larsen', /\blarsen\b/], ['cambered', /\bcambered\b/], ['safety_bar', /\b(safety (squat )?bar|ssb)\b/],
   ['guillotine', /\bguillotine\b/], ['svend', /\bsvend\b/], ['landmine', /\blandmine\b/], ['meadows', /\bmeadows\b/],
   ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
-  ['cuban', /\bcuban\b/], ['weighted', /\b(weighted|agirlikli|yuklu)\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
+  ['cuban', /\bcuban\b/], ['weighted', /\b(weighted|agirlikli|yuklu)\b/],
+  // Distinguishing words of catalog entries that also exist in a plainer form (with Turkish equivalents).
+  ['walking', /\b(walking|yuruyen|yuruyerek|yurume)\b/], ['diamond', /\b(diamond|elmas)\b/], ['bench_dip', /\bbench dips?\b|\bsehpa\w* dips?\b/],
+  ['nordic', /\bnordic\b/], ['kneeling', /\b(kneeling|half kneeling|diz ustu|dizustu|diz cokerek|dizler uzerinde)\b/], ['handstand', /\b(handstand|amut\w*|amuda)\b/],
+  ['archer', /\b(archer|okcu)\b/], ['assisted', /\b(assisted|destekli|yardimli)\b/], ['towel', /\b(towel|havlu\w*)\b/], ['negative', /\b(negative|negatif|eccentric|eksantrik)\b/],
+  ['pistol', /\bpistol\b/], ['pike', /\bpike\b/], ['sissy', /\bsissy\b/], ['shrimp', /\bshrimp\b/], ['cossack', /\b(cossack|kazak)\b/], ['copenhagen', /\bcopenhagen\b/],
+  ['typewriter', /\b(typewriter|daktilo)\b/], ['commando', /\bcommando\b/], ['hindu', /\bhindu\b/], ['explosive', /\b(explosive|patlayici|clap)\b/], ['scapular', /\b(scapular|skapular)\b/],
+  ['skater', /\bskater\b/], ['goblet', /\bgoblet\b/], ['hack', /\bhack\b/], ['belt', /\bbelt\b/], ['donkey', /\b(donkey|esek)\b/], ['bulgarian', /\b(bulgarian|bulgar)\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
   ['low_to_high', /\b(low to high|alttan yukari)\b/], ['high_to_low', /\bhigh to low\b/], ['feet_elevated', /\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
 ];
 const nameVariants = name => wordsIn(name, VARIANT_WORDS);
@@ -135,9 +143,12 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   const target = catalogQualifiers(entry);
   const implied = impliedQualifiers(entry);
   // Angle, one side, grip, sumo, front: a different exercise whenever the two sides disagree.
+  // "Tek taraflı" / unilateral names a one-sided exercise without saying arm or leg: it needs a one-sided entry and satisfies it.
+  const oneSidedTarget = implied.has('single_arm') || implied.has('single_leg');
+  if (source.has('single_side') && !oneSidedTarget) return 'variant';
   for (const q of STRICT_QUALIFIERS) {
     if (source.has(q) && !implied.has(q)) return 'variant';
-    if (target.has(q) && !parsed.has(q)) return 'variant';
+    if (target.has(q) && !parsed.has(q) && !((q === 'single_arm' || q === 'single_leg') && parsed.has('single_side'))) return 'variant';
   }
   // Seated / standing / lying: opposite positions never match; a missing position on one side only matters when the catalog
   // separates the movement by exactly that position (another entry of the same movement differs only by it).
@@ -148,7 +159,7 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   const withPos = (set, p) => [...[...set].filter(x => !POSITIONS.includes(x)), ...(p ? [p] : [])].sort().join(',');
   const fits = (other, kinds) => [...catalogEquipment(other)].some(e => kinds.has(e));
   if (sourcePos.length && !targetPos.length) {
-    const pool = siblings(entry, catalog).filter(other => !equipment.size || fits(other, equipment));
+    const pool = siblings(entry, catalog).filter(other => !parsedEquipment.size || fits(other, parsedEquipment));
     if (pool.some(other => POSITIONS.some(p => quals(other) === withPos(target, p)))) return 'variant';
   }
   if (targetPos.length && !parsedPos.length) {
@@ -172,6 +183,12 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   const targetVariants = new Set(explicitTarget);
   for (const [pattern, v] of IMPLIED_VARIANTS) if (pattern.test(exactKey(entry.name))) targetVariants.add(v);
   for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
+  // A rope attachment matters only where the catalog holds a rope version of the picked movement ("Rope pushdown" ≠ Tricep
+  // Pushdown because Rope Tricep Pushdown exists; "Rope crunch" = Cable Crunch).
+  if (/\b(rope|halat\w*)\b/.test(exactKey(sourceText)) && !/\brope\b/.test(exactKey(entry.name))) {
+    const tokens = exactKey(entry.name).split(' ');
+    if (catalog.exercises.some(other => other.id !== entry.id && /\brope\b/.test(exactKey(other.name)) && tokens.every(t => exactKey(other.name).split(' ').includes(t)))) return 'variant';
+  }
   return null;
 }
 const STRICT_QUALIFIERS = ['incline', 'decline', 'single_arm', 'single_leg', 'wide_grip', 'close_grip', 'neutral_grip', 'reverse_grip', 'sumo', 'front'];
@@ -297,7 +314,8 @@ export function validateModelRow(index, entry, row) {
   const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId : null;
   let guard = null;
   if (proposed) {
-    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, [entry.sourceName, entry.normalizedName].filter(Boolean).join(' '));
+    // Only the name as written in the file: the extraction model's cleaned spelling cannot vouch for the pick.
+    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, entry.sourceName);
     if (!guard) return { key: entry.key, sourceName: entry.sourceName, status: 'matched', method: 'ai', exerciseId: proposed, suggestions: [], understood: true, guard: null };
     suggestions = [proposed, ...suggestions.filter(id => id !== proposed)];
   } else if (row?.sameExerciseId != null) guard = 'unknownId';
