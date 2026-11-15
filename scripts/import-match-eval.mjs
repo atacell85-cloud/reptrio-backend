@@ -5,19 +5,21 @@
 //   node scripts/import-match-eval.mjs --oracle                a perfect model (expected ids): measures guard false refusals
 //   node scripts/import-match-eval.mjs --trap                  an over-eager model that picks each variant's trap id and reports
 //                                                              no equipment/qualifiers: measures what the guards alone catch
+//   node scripts/import-match-eval.mjs --trap-reported         same, but the model reports the attributes of its wrong pick
 //   node scripts/import-match-eval.mjs [--batch 30] [--model gpt-4.1-mini] [--out result.json]
 //     real model calls; the API key comes from OPENAI_API_KEY or, when unset, hidden terminal input (never echoed,
 //     never written, never passed as an argument). Output holds names, ids, statuses, tokens and timings only.
 // Metrics: automatic-correct rate on names whose exercise IS in the catalog, false automatic matches (wrong id, or any id
 // on a variant/nonsense name outside its acceptable list), suggestion coverage, tokens, latency and estimated cost.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { matchImportPreview } from '../worker/import-catalog-match.js';
+import { IMPORT_MATCH_CATALOG, catalogEquipment, catalogQualifiers, matchImportPreview } from '../worker/import-catalog-match.js';
 import { requestOpenAIBody } from '../worker/index.js';
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : fallback; };
 const exactOnly = process.argv.includes('--exact-only');
 const oracle = process.argv.includes('--oracle');
-const trap = process.argv.includes('--trap');
+const trapReported = process.argv.includes('--trap-reported');
+const trap = process.argv.includes('--trap') || trapReported;
 const offline = exactOnly || oracle || trap;
 const batchSize = Number(arg('--batch', 30));
 const model = arg('--model', 'gpt-4.1-mini');
@@ -54,6 +56,10 @@ const fakeRow = n => {
   if (exactOnly) return base;
   if (c.kind === 'nonsense') return { ...base, understood: false };
   if (c.kind === 'same') return { ...base, sameExerciseId: c.expected };
+  if (trapReported && c.trapId) {
+    const entry = IMPORT_MATCH_CATALOG.exercises.find(e => e.id === c.trapId);
+    return { ...base, sameExerciseId: c.trapId, sourceEquipment: [...catalogEquipment(entry)][0] || 'unspecified', sourceQualifiers: [...catalogQualifiers(entry)] };
+  }
   return { ...base, sameExerciseId: trap ? c.trapId : null };
 };
 const callModel = offline
@@ -85,7 +91,7 @@ const tokens = calls.reduce((t, c) => ({ input: t.input + (c.usage?.inputTokens 
 const cost = ((tokens.input - tokens.cached) * PRICE.input + tokens.cached * PRICE.cachedInput + tokens.output * PRICE.output) / 1e6;
 const modelCalls = calls.filter(c => c.modelCalls);
 const summary = {
-  mode: exactOnly ? 'exact-only' : oracle ? 'oracle (perfect model)' : trap ? 'trap (over-eager model, no reported attributes)' : `model:${model}`, batchSize, cases: results.length,
+  mode: exactOnly ? 'exact-only' : oracle ? 'oracle (perfect model)' : trapReported ? 'trap-reported (over-eager model reporting its pick\'s attributes)' : trap ? 'trap (over-eager model, no reported attributes)' : `model:${model}`, batchSize, cases: results.length,
   same: { total: same.length, autoCorrect: autoCorrect.length, autoCorrectRate: +(autoCorrect.length / same.length).toFixed(3), exactStep: same.filter(r => r.method === 'exact' && r.exerciseId === r.expected).length,
     wrongId: same.filter(r => r.exerciseId && r.exerciseId !== r.expected).length, missedButSuggested: sameMissedWithSuggestion.length, missedNoSuggestion: same.filter(r => !r.exerciseId && !r.suggestions.includes(r.expected)).length },
   variant: { total: results.filter(r => r.kind === 'variant').length, auto: variantAuto.filter(r => r.kind === 'variant').length, autoAcceptable: variantAuto.filter(r => r.kind === 'variant' && r.acceptable.includes(r.exerciseId)).length,

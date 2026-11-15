@@ -31,6 +31,7 @@ const index = catalogIndex();
 {
   const names = previewNames(previewOf([ex('Bench Press'), ex('  bench   press ')], [ex('BENCH PRESS'), ex(''), ex('Squat')]));
   assert.deepEqual(names.map(n => n.sourceName), ['Bench Press', 'Squat']);
+  assert.equal(exactMatch(index, { sourceName: 'Dumbell Bench', normalizedName: 'Bench Press' }), null, 'the extraction model\'s cleaned name is not an exact match');
 }
 
 // ---- Exact step: unique id / English name / curated alias, no model call.
@@ -83,13 +84,15 @@ const index = catalogIndex();
   assert.equal(singleArm.guard, 'variant');
   const machineHip = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000144', sourceEquipment: 'machine' }));
   assert.equal(machineHip.guard, 'equipment');
-  assert.equal(guardRefusal(index.byId.get('ex_000254'), 'smith_machine', []), null, 'smith machine squat accepts smith');
-  assert.equal(guardRefusal(index.byId.get('ex_000278'), 'trap_bar', []), null);
+  assert.equal(guardRefusal(index.byId.get('ex_000254'), 'smith_machine', [], 'Smith squat'), null, 'smith machine squat accepts smith');
+  assert.equal(guardRefusal(index.byId.get('ex_000278'), 'trap_bar', [], 'Trap bar deadlift'), null);
   assert.equal(guardRefusal(index.byId.get('ex_000111'), 'barbell', []), 'equipment', 'EZ-bar curl is not a straight barbell curl');
-  assert.equal(guardRefusal(index.byId.get('ex_000188'), 'dumbbell', ['single_arm']), null);
+  assert.equal(guardRefusal(index.byId.get('ex_000188'), 'dumbbell', ['single_arm'], 'One arm DB row'), null);
   assert.equal(guardRefusal(index.byId.get('ex_000218'), 'machine', []), null, 'rowing machine = Rowing (cardio)');
   assert.deepEqual([...catalogEquipment(index.byId.get('ex_000203'))].sort(), ['bodyweight', 'pull_up_bar']);
-  const ok = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] }));
+  // Model-reported attributes alone no longer satisfy the reverse checks: the source text must say incline.
+  assert.equal(validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] })).status, 'suggested');
+  const ok = validateModelRow(index, { key: 'k', sourceName: 'Incline DB press' }, row(0, { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] }));
   assert.deepEqual([ok.status, ok.exerciseId], ['matched', 'ex_000151']);
 }
 
@@ -119,6 +122,20 @@ const index = catalogIndex();
     ['Ön squat', 'ex_000122'], ['Yüzüstü leg curl', 'ex_000176'], ['Tek kolla dumbbell row', 'ex_000188'], ['Parallel bar dips', 'ex_000088'], ['Yerde mekik', 'ex_000076']]) {
     assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
   }
+  // Round 6: Turkish suffixes on equipment words; every named-variant word of the entry; and the model can NOT vouch for the
+  // attributes of its own pick (reverse checks use only the source text).
+  for (const [name, id] of [['Lastikli squat', 'ex_000258'], ['Dambılla bench press', 'ex_000038'], ['Kabloyla curl', 'ex_000040'], ['Halterle curl', 'ex_000040'],
+    ['Kablodan yana açış', 'ex_000168'], ['Halterli lunge', 'ex_000212'], ['Plakayla ön kaldırış', 'ex_000121'], ['Lastikli lat pulldown', 'ex_000166'],
+    ['Row', 'ex_000183'], ['Curl', 'ex_000255'], ['Lunge', 'ex_000086'], ['Tek bacak squat', 'ex_000239'], ['Shoulder press', 'ex_000163'], ['RDLs', 'ex_000164'],
+    ['Jumping jacks', 'ex_000223'], ['Incline bench', 'ex_000151'], ['Decline press', 'ex_000083']]) assert.equal(silent(id, name).status, 'suggested', `${name} must not auto-match ${id}`);
+  const reported = (id, name, sourceEquipment, sourceQualifiers = []) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, { sameExerciseId: id, sourceEquipment, sourceQualifiers }));
+  for (const [name, id, eq, q] of [['Yana açış', 'ex_000052', 'cable'], ['Yana açış', 'ex_000180', 'machine'], ['Çömelme', 'ex_000254', 'smith_machine'],
+    ['Lat çekiş', 'ex_000022', 'resistance_band'], ['Lat çekiş', 'ex_000298', 'unspecified', ['wide_grip']], ['Barfiks', 'ex_000186', 'unspecified', ['neutral_grip']],
+    ['Squats', 'ex_000122', 'unspecified', ['front']]]) assert.equal(reported(id, name, eq, q).status, 'suggested', `model-vouched ${name} → ${id} refused`);
+  for (const [name, id] of [['Lastikli hip thrust', 'ex_000020'], ['Ters tutuşla curl', 'ex_000210'], ['Rope crunch', 'ex_000047'], ['Halat crunch', 'ex_000047'],
+    ['Crossover', 'ex_000049'], ['EZ curl', 'ex_000111'], ['Dumbbell Russian twist', 'ex_000297'], ['Dambılla Russian twist', 'ex_000297'], ['Plate crunch', 'ex_000293'],
+    ['Chest press', 'ex_000178'], ['Pull through', 'ex_000054'], ['Pull aparts', 'ex_000012'], ['Battle ropes', 'ex_000033'], ['Jump rope', 'ex_000154'],
+    ['Koşu bandı', 'ex_000219'], ['Incline bench press', 'ex_000148']]) assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
   // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
   const golden = JSON.parse(readFileSync(new URL('./fixtures/import-match-golden.v1.json', import.meta.url), 'utf8'));
   // Names the exact step resolves never reach the guards in production.
