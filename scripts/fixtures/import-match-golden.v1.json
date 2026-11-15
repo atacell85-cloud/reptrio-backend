@@ -635,10 +635,6 @@
    "ex_000229"
   ],
   [
-   "Low row",
-   "ex_000229"
-  ],
-  [
    "Feet elevated pike push up",
    "ex_000115"
   ],
@@ -685,6 +681,34 @@
   [
    "Feet elevated push-up",
    "ex_000084"
+  ],
+  [
+   "Reverse grip curl",
+   "ex_000210"
+  ],
+  [
+   "Ters tutuşlu curl",
+   "ex_000210"
+  ],
+  [
+   "Front plank",
+   "ex_000196"
+  ],
+  [
+   "Front lunge",
+   "ex_000118"
+  ],
+  [
+   "CGBP",
+   "ex_000068"
+  ],
+  [
+   "Hammer grip pull-up",
+   "ex_000186"
+  ],
+  [
+   "Ağırlıklı barfiks",
+   "ex_000295"
   ]
  ],
  "variant": [
@@ -986,6 +1010,82 @@
    "Feet elevated push up",
    [],
    "ex_000205"
+  ],
+  [
+   "Low row",
+   [
+    "ex_000229",
+    "ex_000181"
+   ],
+   null
+  ],
+  [
+   "Pazı curl",
+   [
+    "ex_000040"
+   ],
+   "ex_000048"
+  ],
+  [
+   "Çömelme",
+   [
+    "ex_000258"
+   ],
+   "ex_000254"
+  ],
+  [
+   "Lat çekişi",
+   [
+    "ex_000166"
+   ],
+   "ex_000022"
+  ],
+  [
+   "Glute bridges",
+   [
+    "ex_000123"
+   ],
+   "ex_000031"
+  ],
+  [
+   "Weighted plank",
+   [],
+   "ex_000196"
+  ],
+  [
+   "Barfiks çekişi",
+   [
+    "ex_000203"
+   ],
+   "ex_000295"
+  ],
+  [
+   "Paralel dips",
+   [
+    "ex_000088"
+   ],
+   "ex_000294"
+  ],
+  [
+   "Yana açış hareketi",
+   [
+    "ex_000168"
+   ],
+   "ex_000052"
+  ],
+  [
+   "Kalça itişi",
+   [
+    "ex_000144"
+   ],
+   "ex_000250"
+  ],
+  [
+   "Bulgarian squat",
+   [
+    "ex_000044"
+   ],
+   "ex_000249"
   ]
  ],
  "nonsense": [

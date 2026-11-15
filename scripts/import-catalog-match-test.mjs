@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import worker from '../worker/index.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
 import {
-  IMPORT_MATCH_CATALOG, catalogEquipment, catalogIndex, exactKey, guardRefusal, matchImportPreview, matchPrompt, matchRequestBody,
+  IMPORT_MATCH_CATALOG, catalogEquipment, catalogIndex, exactKey, exactMatch, guardRefusal, matchImportPreview, matchPrompt, matchRequestBody,
   previewNames, validateModelRow,
 } from '../worker/import-catalog-match.js';
 
@@ -100,6 +100,8 @@ const index = catalogIndex();
     ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
     ['Z press', 'ex_000189'], ['Standing leg curl', 'ex_000170'], ['Calf raise', 'ex_000224'], ['Seated calf raise', 'ex_000059'],
     ['Seated row machine', 'ex_000229'], ['Floor press', 'ex_000038'],
+    ['Yana açış', 'ex_000052'], ['Yana açış', 'ex_000180'], ['Pazı curl', 'ex_000048'], ['Çömelme', 'ex_000254'], ['Lat çekiş', 'ex_000022'],
+    ['Glute bridges', 'ex_000031'], ['Barfiks', 'ex_000295'], ['Dips', 'ex_000294'], ['Şınav', 'ex_000296'], ['Weighted plank', 'ex_000196'],
     ['Ring dip', 'ex_000088'], ['TRX row', 'ex_000153'], ['Snatch grip deadlift', 'ex_000081'], ['Push jerk', 'ex_000204'], ['Zottman curl', 'ex_000040'],
     ['Yates row', 'ex_000032'], ['Low to high cable fly', 'ex_000049'], ['Feet elevated push up', 'ex_000205'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
     const r = silent(id, name);
@@ -110,6 +112,8 @@ const index = catalogIndex();
     ['Yatarak leg curl', 'ex_000176'], ['Geniş tutuş lat pulldown', 'ex_000298'], ['Çekiç curl', 'ex_000131'], ['Kürek makinesi', 'ex_000218'],
     ['Butterfly makinesi', 'ex_000192'], ['Tek kol dambıl row', 'ex_000188'], ['EZ bar curl', 'ex_000111'], ['Barfiks', 'ex_000203'],
     ['Seated leg extension', 'ex_000171'], ['Ayakta OHP', 'ex_000189'], ['Lat pulldown makinesi', 'ex_000166'], ['Cable row', 'ex_000229'],
+    ['Reverse grip curl', 'ex_000210'], ['Front plank', 'ex_000196'], ['Front lunge', 'ex_000118'], ['CGBP', 'ex_000068'], ['Hammer grip pull-up', 'ex_000186'],
+    ['Ağırlıklı barfiks', 'ex_000295'], ['Smith squat', 'ex_000254'], ['Banded lat pulldown', 'ex_000022'],
     ['Önden lat çekiş', 'ex_000166'], ['Üstten aşağı çekiş', 'ex_000166'], ['Calf raise on leg press', 'ex_000173'], ['Push-up on knees', 'ex_000159'],
     ['Ön kol curl', 'ex_000301'], ['Box step-up', 'ex_000266'], ['Feet elevated push-up', 'ex_000084'], ['Plank on elbows', 'ex_000196'],
     ['Ön squat', 'ex_000122'], ['Yüzüstü leg curl', 'ex_000176'], ['Tek kolla dumbbell row', 'ex_000188'], ['Parallel bar dips', 'ex_000088'], ['Yerde mekik', 'ex_000076']]) {
@@ -117,7 +121,8 @@ const index = catalogIndex();
   }
   // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
   const golden = JSON.parse(readFileSync(new URL('./fixtures/import-match-golden.v1.json', import.meta.url), 'utf8'));
-  for (const [name, id] of golden.same) assert.equal(silent(id, name).status, 'matched', `guard false refusal: ${name} → ${id}`);
+  // Names the exact step resolves never reach the guards in production.
+  for (const [name, id] of golden.same) if (!exactMatch(index, { sourceName: name })) assert.equal(silent(id, name).status, 'matched', `guard false refusal: ${name} → ${id}`);
   for (const [name, , trap] of golden.variant) if (trap) assert.notEqual(silent(trap, name).status, 'matched', `trap not caught: ${name} → ${trap}`);
 }
 
@@ -213,7 +218,7 @@ assert.deepEqual(okBody.catalogMatching.results.map(r => [r.sourceName, r.status
 assert.deepEqual(matchCol(alice, 'job-a').catalogMatching, okBody.catalogMatching, 'persisted beside the preview');
 assert.match(matchCol(alice, 'job-a').previewSha, /^[0-9a-f]{64}$/);
 assert.deepEqual(stored(alice, 'job-a'), preview, 'the preview itself is byte-identical (never carries the match result)');
-// Double submit / reopen: cached, no second model call; the GET poll serves the stored matching too.
+// Double submit / reopen: cached, no second model call (the GET poll never serves it; see below).
 const again = await match(alice, 'job-a');
 assert.equal((await again.json()).cached, true);
 assert.equal(net.calls, 1);

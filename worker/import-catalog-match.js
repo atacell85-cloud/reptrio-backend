@@ -55,8 +55,8 @@ const QUALIFIER_WORDS = [
   ['single_arm', /\b(single|one)[ -]?arm\b|\btek (kol|kolla|kollu|el|elle)\b|\bunilateral\b/],
   ['single_leg', /\b(single|one)[ -]?leg\b|\btek (bacak|bacakla|bacakli|ayak|ayakla|ayakli)\b/],
   ['wide_grip', /\b(wide|genis)\b/],
-  ['close_grip', /\b(close|narrow|dar)( grip| tutus| tutuslu)?\b/],
-  ['neutral_grip', /\b(neutral|notr)( grip| tutus| tutuslu)?\b|\b(parallel|paralel) (grip|tutus|tutuslu)\b/],
+  ['close_grip', /\b(close|narrow|dar)( grip| tutus| tutuslu)?\b|\b(cg|cgbp)\b/],
+  ['neutral_grip', /\b(neutral|notr|hammer)( grip| tutus| tutuslu)\b|\b(neutral|notr)\b|\b(parallel|paralel) (grip|tutus|tutuslu)\b/],
   ['reverse_grip', /\b(reverse grip|underhand|supinated|ters tutus|ters tutuslu|ters el)\b/],
   ['sumo', /\bsumo\b/],
   ['front', /\b(front|onden)\b|\bon (squat|kaldiris|kaldirma|omuz|raise)\b/],
@@ -88,7 +88,7 @@ const VARIANT_WORDS = [
   ['spoto', /\bspoto\b/], ['larsen', /\blarsen\b/], ['cambered', /\bcambered\b/], ['safety_bar', /\b(safety (squat )?bar|ssb)\b/],
   ['guillotine', /\bguillotine\b/], ['svend', /\bsvend\b/], ['landmine', /\blandmine\b/], ['meadows', /\bmeadows\b/],
   ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
-  ['cuban', /\bcuban\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
+  ['cuban', /\bcuban\b/], ['weighted', /\b(weighted|agirlikli|yuklu)\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
   ['low_to_high', /\b(low to high|alttan yukari)\b/], ['high_to_low', /\bhigh to low\b/], ['feet_elevated', /\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
 ];
 const nameVariants = name => wordsIn(name, VARIANT_WORDS);
@@ -98,7 +98,8 @@ export const nameQualifiers = name => wordsIn(name, QUALIFIER_WORDS);
 export const nameEquipment = name => wordsIn(name, EQUIPMENT_WORDS);
 export function catalogQualifiers(entry) { return nameQualifiers(entry.name); }
 // What a catalog name implies for a source that spells it out (a chin-up is underhand, a hammer curl neutral, a preacher curl seated).
-const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated'], [/\bpulldown\b/, 'front'], [/\bfeet elevated\b/, 'decline']];
+const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated'], [/\bpulldown\b/, 'front'], [/\bfeet elevated\b/, 'decline'], [/\breverse curl\b/, 'reverse_grip'],
+  [/^plank$/, 'front'], [/\bforward lunge\b/, 'front']];
 // Named variants a catalog name implies (a decline push-up is done feet elevated; step-ups / step-downs use a box).
 const IMPLIED_VARIANTS = [[/\bdecline push ?up\b/, 'feet_elevated'], [/\bstep (up|down)\b/, 'box']];
 function impliedQualifiers(entry) {
@@ -151,7 +152,16 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
     const pool = siblings(entry, catalog).filter(other => fits(other, kinds));
     if (pool.some(other => [null, ...POSITIONS].some(p => !targetPos.includes(p) && quals(other) === withPos(target, p)))) return 'variant';
   }
+  // Equipment written in the catalog name must be written in the source when the catalog also holds the same movement with
+  // other or no equipment ("Yana açış" is not the Cable/Machine Lateral Raise; "Lat çekiş" is not the Banded Lat Pulldown).
+  const nameKinds = nameEquipment(entry.name);
+  for (const e of nameKinds) {
+    if (equipment.has(e) || (e === 'machine' && equipment.has('smith_machine'))) continue;
+    if (siblings(entry, catalog).some(other => !nameEquipment(other.name).has(e))) return 'equipment';
+  }
   const targetVariants = nameVariants(entry.name);
+  // A weighted entry needs the source to say weighted (a plain pull-up / dip / push-up is not the weighted one).
+  if (targetVariants.has('weighted') && !nameVariants(sourceText).has('weighted')) return 'variant';
   for (const [pattern, v] of IMPLIED_VARIANTS) if (pattern.test(exactKey(entry.name))) targetVariants.add(v);
   for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
   return null;
