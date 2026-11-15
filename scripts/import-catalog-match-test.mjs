@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import worker from '../worker/index.js';
 import { createD1 } from './lib/d1-sqlite.mjs';
 import {
-  IMPORT_MATCH_CATALOG, catalogEquipment, catalogIndex, exactKey, exactMatch, guardRefusal, matchImportPreview, matchPrompt, matchRequestBody,
+  IMPORT_MATCH_CATALOG, catalogEquipment, catalogIndex, exactKey, exactMatch, matchSchema, guardRefusal, matchImportPreview, matchPrompt, matchRequestBody,
   previewNames, validateModelRow,
 } from '../worker/import-catalog-match.js';
 
@@ -91,14 +91,22 @@ const index = catalogIndex();
   const lat = named('Önden lat çekiş', { sameExerciseId: null, interpretation: 'Lat Pulldown', suggestionIds: ['ex_000166'] });
   assert.deepEqual([lat.status, lat.exerciseId, lat.suggestions], ['suggested', null, ['ex_000166']]);
   assert.equal(named('Kettlebell bench press', { sameExerciseId: null, interpretation: 'Bench Press' }).exerciseId, null);
-  assert.equal(named('Bench press', { sameExerciseId: 'ex_000038', understood: false }).status, 'suggested', 'not understood → never automatic');
+  const nu = named('Bench press', { sameExerciseId: 'ex_000038', understood: false });
+  assert.deepEqual([nu.status, nu.understood], ['suggested', false], 'not understood → never automatic, and reported as not understood');
   assert.ok(matchPrompt().includes('If your interpretation is exactly the name of a catalog entry'));
   assert.equal(named('Halter ile yana kaldırış', { sameExerciseId: 'ex_000283', interpretation: 'Barbell Lateral Raise' }).status, 'suggested', 'pick lacks the named movement');
   assert.equal(named('Dik çekiş', { sameExerciseId: 'ex_000283', interpretation: 'Upright Row' }).status, 'matched');
-  // Plurals fold and "up"/"down" are not movement triggers (Guardian r9 M13 / M18).
-  assert.equal(named('Box squats', { sameExerciseId: 'ex_000081' }).status, 'suggested', 'plural movement word still conflicts');
-  assert.equal(named('Push up on knees', { sameExerciseId: 'ex_000159' }).status, 'matched', '"up" alone does not refuse');
+  // Plural folding: "Squats" names the squat movement, so it never auto-matches Deadlift (only the folded word conflicts).
+  assert.equal(named('Squats', { sameExerciseId: 'ex_000081' }).status, 'suggested', 'plural movement word still conflicts');
+  assert.equal(named('Push up on knees', { sameExerciseId: 'ex_000159' }).status, 'matched');
   assert.equal(named('Step down', { sameExerciseId: 'ex_000265' }).status, 'matched');
+  // OpenAI strict-schema limits (≤ 1000 enum values in total, ≤ 15000 characters per enum): room for the catalog to grow.
+  {
+    const p = matchSchema.properties.results.items.properties;
+    const values = p.sameExerciseId.enum.length + p.suggestionIds.items.enum.length + p.sourceEquipment.enum.length + p.sourceQualifiers.items.enum.length;
+    assert.ok(values <= 1000, `enum values ${values}`);
+    assert.ok(p.suggestionIds.items.enum.join('').length <= 15000);
+  }
   // Movement words from the catalog: another movement is never auto-matched ("Sumo squat" is not Sumo Deadlift).
   for (const [name, id] of [['Sumo squat', 'ex_000268'], ['Seal row', 'ex_000223'], ['Decline crunch', 'ex_000085']]) assert.equal(named(name, { sameExerciseId: id }).status, 'suggested', `${name} → ${id}`);
   for (const [name, id] of [['Pec fly machine', 'ex_000192'], ['Skull crushers', 'ex_000247'], ['Calf press on leg press', 'ex_000173'], ['Hip thrust on bench', 'ex_000144']]) assert.equal(named(name, { sameExerciseId: id }).status, 'matched', `${name} → ${id}`);

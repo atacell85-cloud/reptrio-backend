@@ -6,9 +6,10 @@
 //   3. One strict-JSON model call for the remaining names with the compact catalog in the (cacheable) developer prefix.
 //      The model resolves spelling, Turkish/English, abbreviations and gym slang; it returns a catalog id only for the SAME
 //      exercise, otherwise up to three close catalog alternatives.
-//   4. Server validation (the model is never trusted on its own): ids must be in the active allowlist; explicit source
-//      equipment must fit the catalog entry; incline/decline and single-arm/single-leg must agree on both sides. A failed
-//      check turns an automatic match into a suggestion (never into "not understood").
+//   4. Server validation (the model is never trusted on its own): ids are enum-constrained to the catalog and re-checked; a
+//      not-understood row never matches; deterministic checks on the SOURCE TEXT only (the model's reported attributes are
+//      ignored) — equipment, angle, side, grip, position, named variants, catalog-derived movement / more-specific words. A
+//      failed check turns an automatic match into a suggestion (never into "not understood").
 // Result per distinct name: matched (auto) | suggested (user picks catalog / personal) | personal (no usable alternative:
 // the app creates a personal card at routine creation). Technical failures throw coded errors; they are never mapped to
 // "not understood".
@@ -120,8 +121,8 @@ function impliedQualifiers(entry) {
 }
 
 /**
- * Why an automatic match is refused (null = the deterministic checks agree). Source equipment/qualifiers are the union of what the
- * model reported AND what the source text itself spells out (parsed here, independent of the model). Written source equipment must
+ * Why an automatic match is refused (null = the deterministic checks agree). Only the source text is read; `sourceEquipment` /
+ * `sourceQualifiers` (the model's report) are accepted for the call shape and ignored. Written source equipment must
  * fit the entry; a qualifier written in the source must exist in the entry; a qualifier in the catalog name must be written in the
  * source (a generic name never takes a specific variant).
  */
@@ -409,7 +410,7 @@ export function validateModelRow(index, entry, row) {
   suggestions = suggestions.slice(0, IMPORT_MATCH_MAX_SUGGESTIONS);
   return {
     key: entry.key, sourceName: entry.sourceName, status: suggestions.length ? 'suggested' : 'personal', method: 'ai', exerciseId: null,
-    suggestions, understood: understood || Boolean(proposed), guard,
+    suggestions, understood, guard,
   };
 }
 

@@ -129,6 +129,9 @@ function metrics(rows) {
       wrong: rows.filter(r => isWrong(r, r.exerciseId)).length,
     },
     guardsSaved: rows.filter(r => isWrong(r, r.modelPick) && !r.exerciseId).length,
+    // Names NOT in the catalog (variant / absent): did the person get catalog suggestions (requirement B), or an automatic
+    // personal card because the model gave none (it marks many of these "not understood")?
+    notInCatalog: (() => { const v = rows.filter(r => r.kind === 'variant'); return { total: v.length, suggested: v.filter(r => !r.exerciseId && r.status === 'suggested').length, personalNoSuggestion: v.filter(r => !r.exerciseId && r.status === 'personal').length, personalModelNotUnderstood: v.filter(r => !r.exerciseId && r.status === 'personal' && r.model?.understood === false).length }; })(),
   };
 }
 const classes = [...new Set(results.map(r => r.class))];
