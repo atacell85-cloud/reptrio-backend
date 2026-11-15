@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap). Round-2 Guardian probe names (Turkish inflections, implicit positions, machine-named cable stations) were added to `same` after review.",
+ "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap). Round-2 Guardian probe names (Turkish inflections, implicit positions, machine-named cable stations) were added to `same` after review. 2026-11-15: label fix after the real-model run — 'Ters eğimli bench' is the Decline Bench Press (acceptable), not a trap.",
  "same": [
   [
    "Dumbell Bench",
@@ -964,8 +964,10 @@
   ],
   [
    "Ters eğimli bench",
-   [],
-   "ex_000148"
+   [
+    "ex_000082"
+   ],
+   null
   ],
   [
    "Oturarak cable row",

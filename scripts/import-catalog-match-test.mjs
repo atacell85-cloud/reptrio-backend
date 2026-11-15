@@ -73,26 +73,29 @@ const index = catalogIndex();
 
 // ---- Deterministic guards turn a wrong automatic match into a suggestion (never "not understood").
 {
-  const entry = { key: 'k', sourceName: 'x' };
-  const barbellCurl = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000040', sourceEquipment: 'barbell' }));
+  // The guards read the SOURCE TEXT only; the model's reported attributes are ignored (the real run showed them noisy).
+  const named = (name, patch) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, patch));
+  const barbellCurl = named('Barbell curl', { sameExerciseId: 'ex_000040' });
   assert.deepEqual([barbellCurl.status, barbellCurl.guard, barbellCurl.suggestions[0], barbellCurl.understood], ['suggested', 'equipment', 'ex_000040', true]);
-  const inclineFly = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000098', sourceQualifiers: ['incline'] }));
-  assert.deepEqual([inclineFly.status, inclineFly.guard], ['suggested', 'variant'], 'incline in the source, flat target');
-  const flatToIncline = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000151' }));
-  assert.deepEqual([flatToIncline.status, flatToIncline.guard], ['suggested', 'variant'], 'incline target, no incline in the source');
-  const singleArm = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000166', sourceQualifiers: ['single_arm'] }));
-  assert.equal(singleArm.guard, 'variant');
-  const machineHip = validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000144', sourceEquipment: 'machine' }));
-  assert.equal(machineHip.guard, 'equipment');
+  assert.deepEqual([named('Incline dumbbell fly', { sameExerciseId: 'ex_000098' }).status, named('Incline dumbbell fly', { sameExerciseId: 'ex_000098' }).guard], ['suggested', 'variant'], 'incline in the source, flat target');
+  assert.deepEqual([named('Dumbbell press', { sameExerciseId: 'ex_000151' }).status, named('Dumbbell press', { sameExerciseId: 'ex_000151' }).guard], ['suggested', 'variant'], 'incline target, no incline in the source');
+  assert.equal(named('Single arm lat pulldown', { sameExerciseId: 'ex_000166' }).guard, 'variant');
+  assert.equal(named('Hip thrust machine', { sameExerciseId: 'ex_000144' }).guard, 'equipment');
+  // Noisy model attributes never refuse a correct pick, and never let a wrong one through.
+  assert.equal(named('Dumbell Bench', { sameExerciseId: 'ex_000095', sourceEquipment: 'barbell', sourceQualifiers: ['lying', 'incline'] }).status, 'matched');
+  assert.equal(named('EZ bar ile curl', { sameExerciseId: 'ex_000111', sourceEquipment: 'barbell' }).status, 'matched');
+  assert.equal(named('Dizüstü şınav', { sameExerciseId: 'ex_000159', sourceQualifiers: ['single_arm'] }).status, 'matched');
+  assert.equal(named('Dumbbell press', { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] }).status, 'suggested');
+  // Movement words from the catalog: another movement is never auto-matched ("Sumo squat" is not Sumo Deadlift).
+  for (const [name, id] of [['Sumo squat', 'ex_000268'], ['Seal row', 'ex_000223'], ['Decline crunch', 'ex_000085']]) assert.equal(named(name, { sameExerciseId: id }).status, 'suggested', `${name} → ${id}`);
+  for (const [name, id] of [['Pec fly machine', 'ex_000192'], ['Skull crushers', 'ex_000247'], ['Calf press on leg press', 'ex_000173'], ['Hip thrust on bench', 'ex_000144']]) assert.equal(named(name, { sameExerciseId: id }).status, 'matched', `${name} → ${id}`);
   assert.equal(guardRefusal(index.byId.get('ex_000254'), 'smith_machine', [], 'Smith squat'), null, 'smith machine squat accepts smith');
   assert.equal(guardRefusal(index.byId.get('ex_000278'), 'trap_bar', [], 'Trap bar deadlift'), null);
-  assert.equal(guardRefusal(index.byId.get('ex_000111'), 'barbell', []), 'equipment', 'EZ-bar curl is not a straight barbell curl');
+  assert.equal(guardRefusal(index.byId.get('ex_000111'), 'unspecified', [], 'Barbell curl'), 'equipment', 'EZ-bar curl is not a straight barbell curl');
   assert.equal(guardRefusal(index.byId.get('ex_000188'), 'dumbbell', ['single_arm'], 'One arm DB row'), null);
-  assert.equal(guardRefusal(index.byId.get('ex_000218'), 'machine', []), null, 'rowing machine = Rowing (cardio)');
+  assert.equal(guardRefusal(index.byId.get('ex_000218'), 'unspecified', [], 'Rowing machine'), null, 'rowing machine = Rowing (cardio)');
   assert.deepEqual([...catalogEquipment(index.byId.get('ex_000203'))].sort(), ['bodyweight', 'pull_up_bar']);
-  // Model-reported attributes alone no longer satisfy the reverse checks: the source text must say incline.
-  assert.equal(validateModelRow(index, entry, row(0, { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] })).status, 'suggested');
-  const ok = validateModelRow(index, { key: 'k', sourceName: 'Incline DB press' }, row(0, { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] }));
+  const ok = named('Incline DB press', { sameExerciseId: 'ex_000151' });
   assert.deepEqual([ok.status, ok.exerciseId], ['matched', 'ex_000151']);
 }
 

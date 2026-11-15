@@ -130,7 +130,10 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   // allow X") also use what the model reports; reverse checks ("the entry's name says X, so the source must say X") use ONLY
   // the parsed text — the model cannot vouch for the attributes of its own pick.
   const parsedEquipment = nameEquipment(sourceText);
-  const equipment = new Set([...(sourceEquipment && sourceEquipment !== 'unspecified' ? [sourceEquipment] : []), ...parsedEquipment]);
+  // The model's reported equipment / qualifiers are NOT used for refusals: the real-model eval showed them noisy ("lying" for a
+  // bench press, "single_arm" for knee push-ups, "barbell" for an EZ bar) and the guards caught the same traps without them.
+  void sourceEquipment; void sourceQualifiers;
+  const equipment = new Set(parsedEquipment);
   const allowed = catalogEquipment(entry);
   for (const e of equipment) {
     if (allowed.has(e)) continue;
@@ -139,7 +142,7 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
     return 'equipment';
   }
   const parsed = nameQualifiers(sourceText);
-  const source = new Set([...(sourceQualifiers || []).filter(q => SOURCE_QUALIFIERS.includes(q)), ...parsed]);
+  const source = new Set(parsed);
   const target = catalogQualifiers(entry);
   const implied = impliedQualifiers(entry);
   // Angle, one side, grip, sumo, front: a different exercise whenever the two sides disagree.
@@ -191,6 +194,20 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
     const sourceTokens = new Set(exactKey(sourceText).split(' ').filter(t => t.length > 2));
     for (const word of specificWords(entry, catalog)) if (!targetTokens.has(word) && sourceTokens.has(word)) return 'variant';
   }
+  // Movement words, derived from the catalog (the last word of every catalog name: squat, row, crunch, press, curl, jack…): a
+  // source that names a movement absent from the pick's whole name means another exercise ("Sumo squat" is not Sumo Deadlift,
+  // "Seal row" is not Seal Jack). Plurals fold ("crushers" = crusher).
+  {
+    // Only for a pick named by a shared movement word (one at least three catalog names end with: deadlift, jack, row, up…) that
+    // the source does not contain; uniquely named entries (Pec Deck, Farmer Carry) are left to the model.
+    const fold = t => (t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t);
+    const targetWords = new Set(exactKey(entry.name).split(' ').map(fold));
+    const sourceWords = new Set(exactKey(sourceText).split(' ').map(fold));
+    const targetMovement = fold(exactKey(entry.name).split(' ').at(-1));
+    if (movementCount(catalog).get(targetMovement) >= 3 && !sourceWords.has(targetMovement)) {
+      for (const word of sourceWords) if (movementWords(catalog).has(word) && !targetWords.has(word)) return 'variant';
+    }
+  }
   // A rope attachment matters only where the catalog holds a rope version of the picked movement ("Rope pushdown" ≠ Tricep
   // Pushdown because Rope Tricep Pushdown exists; "Rope crunch" = Cable Crunch).
   if (/\b(rope|halat\w*)\b/.test(exactKey(sourceText)) && !/\brope\b/.test(exactKey(entry.name))) {
@@ -207,6 +224,26 @@ export function movementKey(name) {
   let text = ` ${exactKey(name)} `;
   for (const pattern of STRIP) text = text.replace(pattern, ' ');
   return text.replace(/\b(cable|machine|barbell|dumbbell|banded|smith|bench)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+const countMemo = new WeakMap();
+function movementCount(catalog) {
+  let counts = countMemo.get(catalog);
+  if (!counts) {
+    counts = new Map();
+    for (const e of catalog.exercises) { const w = exactKey(e.name).split(' ').at(-1); const f = w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w; counts.set(f, (counts.get(f) || 0) + 1); }
+    countMemo.set(catalog, counts);
+  }
+  return counts;
+}
+const movementMemo = new WeakMap();
+/** The movement word of every catalog name (its last word, plural folded; "up"/"down" of push-up/step-down excluded as too generic). */
+function movementWords(catalog) {
+  let words = movementMemo.get(catalog);
+  if (!words) {
+    words = new Set(catalog.exercises.map(e => exactKey(e.name).split(' ').at(-1)).filter(w => w && w.length > 2 && !['up', 'down'].includes(w)));
+    movementMemo.set(catalog, words);
+  }
+  return words;
 }
 const specificMemo = new WeakMap();
 /** Words that turn this entry into a more specific catalog entry (from catalog name containment, e.g. Leg Press → calf, raise). */
@@ -294,11 +331,16 @@ For every input name return one result with the same index:
   ez bar = ez_bar, trap bar/hex bar = trap_bar, vücut ağırlığı = bodyweight.
 - sourceQualifiers: only words WRITTEN in the name: incline (incline, eğimli, eğik, yukarı eğimli), decline (decline, aşağı eğimli,
   ters eğimli), single_arm (single arm, one arm, tek kol, tek kollu), single_leg (single leg, one leg, tek bacak, tek bacaklı).
-- sameExerciseId: the catalog id of the SAME exercise, else null. Same exercise = same movement pattern, same equipment, same
-  bench angle, same grip/stance variant, same one-sided or two-sided execution. A generic name matches the catalog entry that
-  carries that generic name (e.g. "bench press" = "Bench Press", "lat pulldown" = "Lat Pulldown", "squat" = "Squat").
-  If the catalog only holds DIFFERENT or MORE SPECIFIC variants (another equipment, angle, grip, stance, seated vs standing,
-  unilateral vs bilateral), do not pick one: sameExerciseId null.
+- sameExerciseId: the catalog id of the SAME exercise, else null. Same exercise = same movement (a row stays a row, a squat a
+  squat, a crunch a crunch: sharing another word such as "seal", "sumo", "decline" or "box" is not enough), same equipment, same
+  bench angle, same grip/stance variant, same one-sided or two-sided execution.
+  A generic name ALWAYS takes the catalog entry that carries that generic name, even when more specific variants also exist
+  ("bench press"/"düz bench" = "Bench Press", "lat pulldown"/"lat çekiş"/"lat machine" = "Lat Pulldown", "back squat" = "Squat",
+  "cable row" = "Seated Cable Row", "Bulgar squat" = "Bulgarian Split Squat"). Return null only when NO entry is that exercise
+  without adding or changing equipment, angle, grip, stance, position or side.
+  Turkish body words: bacak = leg, diz = knee, kol = arm, ön kol = forearm, omuz = shoulder, göğüs = chest, sırt = back,
+  kalça = hip/glute, baldır = calf, karın = abs, arka bacak = hamstring, ön bacak = quadriceps; yerde = on the floor,
+  asılı = hanging, sallama = swing/wave, ölü kaldırma = deadlift (romen ölü kaldırma = Romanian deadlift).
 - suggestionIds: when sameExerciseId is null and the exercise is understood, up to 3 closest catalog alternatives (best first),
   for example the same movement with other equipment or angle. Empty when sameExerciseId is set or nothing is reasonably close.
 Only ids from the catalog below are valid. Output JSON only.
