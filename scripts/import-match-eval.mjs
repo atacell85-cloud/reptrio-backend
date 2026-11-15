@@ -76,9 +76,17 @@ const fakeRow = n => {
   }
   return { ...base, sameExerciseId: trap ? c.trap : null };
 };
+const rawRows = new Map();   // the model's own answer per name (id, equipment, qualifiers), for diagnosis only
+const remember = (body, payload) => {
+  const names = JSON.parse(body.input[1].content[0].text).names;
+  let rows = [];
+  try { rows = JSON.parse(payload.output_text ?? payload.output?.flatMap(o => o.content || []).find(c => c.type === 'output_text')?.text ?? '{}').results || []; } catch {}
+  for (const r of rows) if (names[r.index]) rawRows.set(names[r.index].name, { sameExerciseId: r.sameExerciseId, suggestionIds: r.suggestionIds, sourceEquipment: r.sourceEquipment, sourceQualifiers: r.sourceQualifiers, understood: r.understood, interpretation: r.interpretation });
+  return { payload };
+};
 const callModel = offline
-  ? async body => ({ payload: { output_text: JSON.stringify({ results: JSON.parse(body.input[1].content[0].text).names.map(fakeRow) }) } })
-  : body => requestOpenAIBody({ apiKey, config, body, requestId: `eval-${Date.now()}` });
+  ? async body => remember(body, { output_text: JSON.stringify({ results: JSON.parse(body.input[1].content[0].text).names.map(fakeRow) }) })
+  : async body => { const res = await requestOpenAIBody({ apiKey, config, body, requestId: `eval-${Date.now()}` }); remember(body, res.payload); return res; };
 
 const ref = { page: null, sheet: null, cellRange: null, text: null };
 const results = [], calls = [];
@@ -92,7 +100,7 @@ for (let i = 0; i < cases.length; i += batchSize) {
     const r = matching.results.find(x => x.sourceName === c.name);
     // The model's raw pick: an accepted id, or the id a guard refused (always the first suggestion then).
     const modelPick = r.exerciseId || (r.guard && r.guard !== 'unknownId' ? r.suggestions[0] : null);
-    results.push({ ...c, status: r.status, method: r.method, exerciseId: r.exerciseId, modelPick, suggestions: r.suggestions, understood: r.understood, guard: r.guard });
+    results.push({ ...c, status: r.status, method: r.method, exerciseId: r.exerciseId, modelPick, suggestions: r.suggestions, understood: r.understood, guard: r.guard, model: rawRows.get(c.name) || null });
   }
 }
 

@@ -93,9 +93,9 @@ const VARIANT_WORDS = [
   ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
   ['cuban', /\bcuban\b/], ['weighted', /\b(weighted|agirlikli|yuklu)\b/],
   // Distinguishing words of catalog entries that also exist in a plainer form (with Turkish equivalents).
-  ['walking', /\b(walking|yuruyen|yuruyerek|yurume)\b/], ['diamond', /\b(diamond|elmas)\b/], ['bench_dip', /\bbench dips?\b|\bsehpa\w* dips?\b/],
+  ['walking', /\b(walking|yuruyen|yuruyerek|yurume|yuruyus)\b/], ['diamond', /\b(diamond|elmas)\b/], ['bench_dip', /\bbench dips?\b|\bsehpa\w* dips?\b/],
   ['nordic', /\bnordic\b/], ['kneeling', /\b(kneeling|half kneeling|diz ustu|dizustu|diz cokerek|dizler uzerinde)\b/], ['handstand', /\b(handstand|amut\w*|amuda)\b/],
-  ['archer', /\b(archer|okcu)\b/], ['assisted', /\b(assisted|destekli|yardimli)\b/], ['towel', /\b(towel|havlu\w*)\b/], ['negative', /\b(negative|negatif|eccentric|eksantrik)\b/],
+  ['archer', /\b(archer|okcu)\b/], ['assisted', /\bassisted\b|(?<!gogus |chest )\b(destekli|yardimli)\b/], ['towel', /\b(towel|havlu\w*)\b/], ['negative', /\b(negative|negatif|eccentric|eksantrik)\b/],
   ['pistol', /\bpistol\b/], ['pike', /\bpike\b/], ['sissy', /\bsissy\b/], ['shrimp', /\bshrimp\b/], ['cossack', /\b(cossack|kazak)\b/], ['copenhagen', /\bcopenhagen\b/],
   ['typewriter', /\b(typewriter|daktilo)\b/], ['commando', /\bcommando\b/], ['hindu', /\bhindu\b/], ['explosive', /\b(explosive|patlayici|clap)\b/], ['scapular', /\b(scapular|skapular)\b/],
   ['skater', /\bskater\b/], ['goblet', /\bgoblet\b/], ['hack', /\bhack\b/], ['belt', /\bbelt\b/], ['donkey', /\b(donkey|esek)\b/], ['bulgarian', /\b(bulgarian|bulgar)\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
@@ -111,7 +111,7 @@ export function catalogQualifiers(entry) { return nameQualifiers(entry.name); }
 const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated'], [/\bpulldown\b/, 'front'], [/\bfeet elevated\b/, 'decline'], [/\breverse curl\b/, 'reverse_grip'],
   [/^plank$/, 'front'], [/\bforward lunge\b/, 'front']];
 // Named variants a catalog name implies (a decline push-up is done feet elevated; step-ups / step-downs use a box).
-const IMPLIED_VARIANTS = [[/\bdecline push ?up\b/, 'feet_elevated'], [/\bstep (up|down)\b/, 'box']];
+const IMPLIED_VARIANTS = [[/\bdecline push ?up\b/, 'feet_elevated'], [/\bstep (up|down)\b/, 'box'], [/\bknee push ?up\b/, 'kneeling']];
 function impliedQualifiers(entry) {
   const out = catalogQualifiers(entry);
   const name = exactKey(entry.name);
@@ -183,6 +183,14 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
   const targetVariants = new Set(explicitTarget);
   for (const [pattern, v] of IMPLIED_VARIANTS) if (pattern.test(exactKey(entry.name))) targetVariants.add(v);
   for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
+  // Derived from the catalog itself (no word list): when the source contains a word that the catalog uses to name a MORE
+  // SPECIFIC version of the picked entry (an entry containing every word of the pick plus that word), the source means that
+  // version, not the plainer pick ("Calf press on leg press" is not Leg Press, because Leg Press Calf Raise exists).
+  {
+    const targetTokens = new Set(exactKey(entry.name).split(' '));
+    const sourceTokens = new Set(exactKey(sourceText).split(' ').filter(t => t.length > 2));
+    for (const word of specificWords(entry, catalog)) if (!targetTokens.has(word) && sourceTokens.has(word)) return 'variant';
+  }
   // A rope attachment matters only where the catalog holds a rope version of the picked movement ("Rope pushdown" ≠ Tricep
   // Pushdown because Rope Tricep Pushdown exists; "Rope crunch" = Cable Crunch).
   if (/\b(rope|halat\w*)\b/.test(exactKey(sourceText)) && !/\brope\b/.test(exactKey(entry.name))) {
@@ -199,6 +207,27 @@ export function movementKey(name) {
   let text = ` ${exactKey(name)} `;
   for (const pattern of STRIP) text = text.replace(pattern, ' ');
   return text.replace(/\b(cable|machine|barbell|dumbbell|banded|smith|bench)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+const specificMemo = new WeakMap();
+/** Words that turn this entry into a more specific catalog entry (from catalog name containment, e.g. Leg Press → calf, raise). */
+function specificWords(entry, catalog) {
+  let byId = specificMemo.get(catalog);
+  if (!byId) {
+    byId = new Map();
+    const tokens = new Map(catalog.exercises.map(e => [e.id, exactKey(e.name).split(' ')]));
+    for (const e of catalog.exercises) {
+      const base = tokens.get(e.id);
+      const words = new Set();
+      for (const other of catalog.exercises) {
+        if (other.id === e.id) continue;
+        const ot = tokens.get(other.id);
+        if (ot.length > base.length && base.every(t => ot.includes(t))) for (const t of ot) if (!base.includes(t)) words.add(t);
+      }
+      byId.set(e.id, words);
+    }
+    specificMemo.set(catalog, byId);
+  }
+  return byId.get(entry.id) || new Set();
 }
 const siblingMemo = new WeakMap();
 function siblings(entry, catalog) {
@@ -253,6 +282,8 @@ export function matchPrompt(catalog = IMPORT_MATCH_CATALOG) {
   return `You map exercise names from a user's uploaded workout program to the Reptrio exercise catalog.
 Matching to the catalog is the main goal: a well-known exercise that exists in the catalog must get its catalog id, whatever
 the language (Turkish or English), spelling mistakes, abbreviations (DB, BB, OHP, RDL...), word order, plural or gym slang.
+Turkish names often add a verb or noun for doing the exercise (şınav çekme = push-up, barfiks çekme = pull-up, mekik çekme = crunch,
+… yapma / atma / hareketi): it never changes which exercise it is.
 
 For every input name return one result with the same index:
 - understood: true when the text names a recognizable exercise or activity in any language, false only for text that is not an
@@ -277,6 +308,7 @@ ${catalogLines(catalog)}`;
 }
 
 const nullable = type => ({ type: [type, 'null'] });
+const CATALOG_IDS = IMPORT_MATCH_CATALOG.exercises.map(e => e.id);
 export const matchSchema = {
   type: 'object', additionalProperties: false, required: ['results'],
   properties: { results: { type: 'array', items: {
@@ -286,7 +318,9 @@ export const matchSchema = {
       index: { type: 'integer' }, understood: { type: 'boolean' }, interpretation: { type: 'string' },
       sourceEquipment: { type: 'string', enum: SOURCE_EQUIPMENT },
       sourceQualifiers: { type: 'array', items: { type: 'string', enum: SOURCE_QUALIFIERS } },
-      sameExerciseId: nullable('string'), suggestionIds: { type: 'array', items: { type: 'string' } },
+      // Constrained to the catalog ids (strict structured output): the model cannot return a malformed or invented id. The real
+      // eval showed whole calls whose ids were all unusable without this.
+      sameExerciseId: { type: ['string', 'null'], enum: [...CATALOG_IDS, null] }, suggestionIds: { type: 'array', items: { type: 'string', enum: CATALOG_IDS } },
     },
   } } },
 };

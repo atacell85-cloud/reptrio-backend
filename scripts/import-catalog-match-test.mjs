@@ -149,6 +149,11 @@ const index = catalogIndex();
   // A suffixed Turkish grip word still counts ("ters tutuşlu" lat pulldown is not the plain Lat Pulldown).
   assert.equal(r7('Ters tutuşlu lat pulldown', 'ex_000166').status, 'suggested');
   assert.equal(r7('Ters tutuşla barfiks', 'ex_000066').status, 'matched');
+  // After the real-model run (2026-11-15): catalog-derived specific versions, and refusals the run exposed.
+  assert.equal(r7('Calf press on leg press', 'ex_000172').status, 'suggested', 'Leg Press Calf Raise exists → not the plain Leg Press');
+  assert.equal(r7('Calf press on leg press', 'ex_000173').status, 'matched');
+  for (const [name, id] of [['Dizüstü şınav', 'ex_000159'], ['Göğüs destekli row', 'ex_000064'], ['Yürüyüş lunge', 'ex_000286'], ['Destekli barfiks', 'ex_000010'],
+    ['Leg press', 'ex_000172'], ['Romanian deadlift', 'ex_000215'], ['Barbell squat', 'ex_000258']]) assert.equal(r7(name, id).status, 'matched', `${name} → ${id}`);
   // The extraction model's cleaned name cannot vouch for a pick.
   assert.equal(validateModelRow(index, { key: 'k', sourceName: 'Yana açış', normalizedName: 'Cable Lateral Raise' }, row(0, { sameExerciseId: 'ex_000052' })).status, 'suggested');
   // The golden set: a perfect model loses nothing to the guards; an over-eager model is stopped on every trap.
@@ -169,6 +174,11 @@ await assert.rejects(matchImportPreview({ preview: previewOf(Array.from({ length
   const body = matchRequestBody('gpt-4.1-mini', [{ sourceName: 'Dumbell Bench', normalizedName: 'Dumbbell Bench' }], 'rid');
   assert.equal(body.store, false);
   assert.equal(body.text.format.strict, true);
+  // Ids are constrained to the catalog (the real run returned whole calls of unusable ids without this).
+  const props = body.text.format.schema.properties.results.items.properties;
+  assert.deepEqual(props.sameExerciseId.enum, [...IMPORT_MATCH_CATALOG.exercises.map(e => e.id), null]);
+  assert.deepEqual(props.suggestionIds.items.enum, IMPORT_MATCH_CATALOG.exercises.map(e => e.id));
+  assert.ok(body.input[0].content[0].text.includes('şınav çekme = push-up'));
   assert.equal(body.temperature, 0);
   assert.ok(body.input[0].content[0].text.includes('ex_000095 | Dumbbell Bench Press | Dumbbell'));
   assert.deepEqual(JSON.parse(body.input[1].content[0].text), { names: [{ index: 0, name: 'Dumbell Bench', cleanedName: 'Dumbbell Bench' }] });
