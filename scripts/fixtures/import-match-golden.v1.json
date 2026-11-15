@@ -641,6 +641,50 @@
   [
    "Feet elevated pike push up",
    "ex_000115"
+  ],
+  [
+   "Önden lat çekiş",
+   "ex_000166"
+  ],
+  [
+   "Lat pulldown to front",
+   "ex_000166"
+  ],
+  [
+   "Üstten aşağı çekiş",
+   "ex_000166"
+  ],
+  [
+   "Calf raise on leg press",
+   "ex_000173"
+  ],
+  [
+   "Push-up on knees",
+   "ex_000159"
+  ],
+  [
+   "Hip thrust on bench",
+   "ex_000144"
+  ],
+  [
+   "Crunch on floor",
+   "ex_000076"
+  ],
+  [
+   "Plank on elbows",
+   "ex_000196"
+  ],
+  [
+   "Ön kol curl",
+   "ex_000301"
+  ],
+  [
+   "Box step-up",
+   "ex_000266"
+  ],
+  [
+   "Feet elevated push-up",
+   "ex_000084"
   ]
  ],
  "variant": [
@@ -862,11 +906,6 @@
     "ex_000108"
    ],
    "ex_000258"
-  ],
-  [
-   "Önden lat çekiş",
-   [],
-   "ex_000166"
   ],
   [
    "Seated dumbbell shoulder press",

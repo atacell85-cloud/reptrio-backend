@@ -49,7 +49,8 @@ export function catalogEquipment(entry) {
 // Qualifier words on an exactKey-normalized name (lower case, Turkish letters folded: ğ→g, ş→s, ı→i, ö→o, ü→u, ç→c).
 // Order matters: "ters egimli" is decline (removed before incline is looked for); "ez bar" / "trap bar" before plain barbell.
 const QUALIFIER_WORDS = [
-  ['decline', /\b(decline|ters egimli|asagi egimli|negatif egimli)\b/],
+  // Feet elevated = a decline (push-ups); the named variant word below keeps it apart from the flat movement too.
+  ['decline', /\b(decline|ters egimli|asagi egimli|negatif egimli)\b|\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/],
   ['incline', /\b(incline|egimli|egik|yukari egimli)\b/],
   ['single_arm', /\b(single|one)[ -]?arm\b|\btek (kol|kolla|kollu|el|elle)\b|\bunilateral\b/],
   ['single_leg', /\b(single|one)[ -]?leg\b|\btek (bacak|bacakla|bacakli|ayak|ayakla|ayakli)\b/],
@@ -58,7 +59,7 @@ const QUALIFIER_WORDS = [
   ['neutral_grip', /\b(neutral|notr)( grip| tutus| tutuslu)?\b|\b(parallel|paralel) (grip|tutus|tutuslu)\b/],
   ['reverse_grip', /\b(reverse grip|underhand|supinated|ters tutus|ters tutuslu|ters el)\b/],
   ['sumo', /\bsumo\b/],
-  ['front', /\b(front|onden|on)\b/],
+  ['front', /\b(front|onden)\b|\bon (squat|kaldiris|kaldirma|omuz|raise)\b/],
   ['seated', /\b(seated|sitting|oturarak|oturmus|oturur)\b/],
   ['standing', /\b(standing|ayakta)\b/],
   ['lying', /\b(lying|yatarak|yatar|prone|supine|yuzustu|yuz ustu|sirt ustu)\b/],
@@ -88,7 +89,7 @@ const VARIANT_WORDS = [
   ['guillotine', /\bguillotine\b/], ['svend', /\bsvend\b/], ['landmine', /\blandmine\b/], ['meadows', /\bmeadows\b/],
   ['kroc', /\bkroc\b/], ['seal', /\bseal\b/], ['spider', /\bspider\b/], ['drag', /\bdrag\b/], ['bayesian', /\bbayesian\b/],
   ['cuban', /\bcuban\b/], ['snatch_grip', /\bsnatch( grip)?\b/], ['jerk', /\bjerk\b/], ['zottman', /\bzottman\b/], ['yates', /\byates\b/],
-  ['low_to_high', /\b(low to high|alttan yukari)\b/], ['high_to_low', /\b(high to low|ustten asagi)\b/], ['feet_elevated', /\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
+  ['low_to_high', /\b(low to high|alttan yukari)\b/], ['high_to_low', /\bhigh to low\b/], ['feet_elevated', /\b(feet elevated|ayaklar yukarida|ayak yukseltilmis)\b/], ['jm', /\bjm press\b/], ['tate', /\btate press\b/], ['hatfield', /\bhatfield\b/], ['anderson', /\banderson\b/],
 ];
 const nameVariants = name => wordsIn(name, VARIANT_WORDS);
 /** Qualifiers spelled out in a name (source text or catalog name), parsed without the model. */
@@ -97,7 +98,9 @@ export const nameQualifiers = name => wordsIn(name, QUALIFIER_WORDS);
 export const nameEquipment = name => wordsIn(name, EQUIPMENT_WORDS);
 export function catalogQualifiers(entry) { return nameQualifiers(entry.name); }
 // What a catalog name implies for a source that spells it out (a chin-up is underhand, a hammer curl neutral, a preacher curl seated).
-const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated']];
+const IMPLIED = [[/\bchin ?up\b/, 'reverse_grip'], [/\bhammer\b/, 'neutral_grip'], [/\bpreacher\b/, 'seated'], [/\bpulldown\b/, 'front'], [/\bfeet elevated\b/, 'decline']];
+// Named variants a catalog name implies (a decline push-up is done feet elevated; step-ups / step-downs use a box).
+const IMPLIED_VARIANTS = [[/\bdecline push ?up\b/, 'feet_elevated'], [/\bstep (up|down)\b/, 'box']];
 function impliedQualifiers(entry) {
   const out = catalogQualifiers(entry);
   const name = exactKey(entry.name);
@@ -149,6 +152,7 @@ export function guardRefusal(entry, sourceEquipment, sourceQualifiers, sourceTex
     if (pool.some(other => [null, ...POSITIONS].some(p => !targetPos.includes(p) && quals(other) === withPos(target, p)))) return 'variant';
   }
   const targetVariants = nameVariants(entry.name);
+  for (const [pattern, v] of IMPLIED_VARIANTS) if (pattern.test(exactKey(entry.name))) targetVariants.add(v);
   for (const v of nameVariants(sourceText)) if (!targetVariants.has(v)) return 'variant';
   return null;
 }

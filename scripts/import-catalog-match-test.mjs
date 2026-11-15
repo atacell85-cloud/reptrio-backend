@@ -98,7 +98,7 @@ const index = catalogIndex();
   const silent = (id, name) => validateModelRow(index, { key: 'k', sourceName: name }, row(0, { sameExerciseId: id }));
   for (const [name, id] of [['Incline DB press', 'ex_000095'], ['Neutral grip lat pulldown', 'ex_000166'], ['Sumo deadlift', 'ex_000081'],
     ['Ters eğimli bench', 'ex_000148'], ['Barbell curl', 'ex_000040'], ['Pendulum squat', 'ex_000128'],
-    ['Z press', 'ex_000189'], ['Önden lat çekiş', 'ex_000166'], ['Standing leg curl', 'ex_000170'], ['Calf raise', 'ex_000224'], ['Seated calf raise', 'ex_000059'],
+    ['Z press', 'ex_000189'], ['Standing leg curl', 'ex_000170'], ['Calf raise', 'ex_000224'], ['Seated calf raise', 'ex_000059'],
     ['Seated row machine', 'ex_000229'], ['Floor press', 'ex_000038'],
     ['Ring dip', 'ex_000088'], ['TRX row', 'ex_000153'], ['Snatch grip deadlift', 'ex_000081'], ['Push jerk', 'ex_000204'], ['Zottman curl', 'ex_000040'],
     ['Yates row', 'ex_000032'], ['Low to high cable fly', 'ex_000049'], ['Feet elevated push up', 'ex_000205'], ['Tek kol kablo lateral raise', 'ex_000052'], ['Makinede hip thrust', 'ex_000144']]) {
@@ -110,6 +110,8 @@ const index = catalogIndex();
     ['Yatarak leg curl', 'ex_000176'], ['Geniş tutuş lat pulldown', 'ex_000298'], ['Çekiç curl', 'ex_000131'], ['Kürek makinesi', 'ex_000218'],
     ['Butterfly makinesi', 'ex_000192'], ['Tek kol dambıl row', 'ex_000188'], ['EZ bar curl', 'ex_000111'], ['Barfiks', 'ex_000203'],
     ['Seated leg extension', 'ex_000171'], ['Ayakta OHP', 'ex_000189'], ['Lat pulldown makinesi', 'ex_000166'], ['Cable row', 'ex_000229'],
+    ['Önden lat çekiş', 'ex_000166'], ['Üstten aşağı çekiş', 'ex_000166'], ['Calf raise on leg press', 'ex_000173'], ['Push-up on knees', 'ex_000159'],
+    ['Ön kol curl', 'ex_000301'], ['Box step-up', 'ex_000266'], ['Feet elevated push-up', 'ex_000084'], ['Plank on elbows', 'ex_000196'],
     ['Ön squat', 'ex_000122'], ['Yüzüstü leg curl', 'ex_000176'], ['Tek kolla dumbbell row', 'ex_000188'], ['Parallel bar dips', 'ex_000088'], ['Yerde mekik', 'ex_000076']]) {
     assert.equal(silent(id, name).status, 'matched', `${name} → ${id} stays automatic`);
   }
@@ -226,7 +228,10 @@ const rematched = await (await match(alice, 'job-a')).json();
 assert.equal(rematched.cached, false);
 assert.deepEqual(rematched.catalogMatching.results.map(r => r.sourceName), ['Squat']);
 db.raw.prepare("UPDATE import_jobs SET preview_json = ? WHERE id = 'job-a'").run(JSON.stringify(preview));
-// A catalog revision change invalidates the cached entry too.
+// Re-match the original preview so the stored entry's hash matches it again (cached on the next call)...
+assert.equal((await (await match(alice, 'job-a')).json()).cached, false);
+assert.equal((await (await match(alice, 'job-a')).json()).cached, true, 'same preview + same catalog → cached');
+// ...then only the catalog revision differs: the cached entry must not be served.
 db.raw.prepare("UPDATE import_jobs SET catalog_match_json = json_set(catalog_match_json, '$.catalogMatching.catalogRevision', 'wg-0.0.0+old') WHERE id = 'job-a'").run();
 assert.equal((await (await match(alice, 'job-a')).json()).cached, false, 'old-catalog result is not served');
 
