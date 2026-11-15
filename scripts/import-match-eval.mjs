@@ -3,7 +3,7 @@
 // schema, guards) and the same `requestOpenAIBody` call (model, temperature 0, store:false, 30 s timeout, 1 retry) the Worker
 // runs in POST /api/import/jobs/:id/match. Not covered: the document extraction step before it (names are fed directly).
 //
-//   node scripts/import-match-eval.mjs [--set heldout|golden] [--batch 30] [--model gpt-4.1-mini] [--out result.json]
+//   node scripts/import-match-eval.mjs [--set acceptance|heldout|golden] [--batch 30] [--model gpt-4.1-mini] [--out result.json]
 //       real model calls. The API key is read from OPENAI_API_KEY or, when unset, hidden terminal input (never echoed, never
 //       an argument, never logged or written). Output (console and --out, mode 600) holds names, ids, statuses, token counts
 //       and timings only. Test names are synthetic (no user data).
@@ -27,6 +27,7 @@ const exactOnly = has('--exact-only'), oracle = has('--oracle'), trapReported = 
 // --replay <result.json>: re-run the CURRENT pipeline on the raw model answers recorded by an earlier real run (no key, no network).
 const replayFile = arg('--replay', null);
 const replay = replayFile ? new Map(JSON.parse(readFileSync(replayFile, 'utf8')).results.filter(r => r.model).map(r => [r.name, r.model])) : null;
+if (replay && !replay.size) throw new Error(`${replayFile} holds no recorded model answers (recorded runs start with eval 2)`);
 const offline = exactOnly || oracle || trap || Boolean(replay);
 const setName = arg('--set', 'heldout');
 const batchSize = Number(arg('--batch', 30));
@@ -46,6 +47,7 @@ function loadCases() {
     ];
   }
   if (setName === 'heldout') return read('import-match-heldout.v1.json').cases.map(c => ({ trap: null, ...c }));
+  if (setName === 'acceptance') return read('import-match-acceptance.v1.json').cases.map(c => ({ trap: null, ...c }));
   throw new Error(`unknown --set ${setName}`);
 }
 const cases = loadCases();

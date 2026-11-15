@@ -340,6 +340,8 @@ For every input name return one result with the same index:
   ("bench press"/"düz bench" = "Bench Press", "lat pulldown"/"lat çekiş"/"lat machine" = "Lat Pulldown", "back squat" = "Squat",
   "cable row" = "Seated Cable Row", "Bulgar squat" = "Bulgarian Split Squat"). Return null only when NO entry is that exercise
   without adding or changing equipment, angle, grip, stance, position or side.
+  If your interpretation is exactly the name of a catalog entry, that entry is the same exercise: set its id (do not leave it null
+  and list it only as a suggestion).
   Turkish body words: bacak = leg, diz = knee, kol = arm, ön kol = forearm, omuz = shoulder, göğüs = chest, sırt = back,
   kalça = hip/glute, baldır = calf, karın = abs, arka bacak = hamstring, ön bacak = quadriceps; yerde = on the floor,
   asılı = hanging, sallama = swing/wave, ölü kaldırma = deadlift (romen ölü kaldırma = Romanian deadlift).
@@ -389,18 +391,17 @@ export function validateModelRow(index, entry, row) {
   const equipment = SOURCE_EQUIPMENT.includes(row?.sourceEquipment) ? row.sourceEquipment : 'unspecified';
   const qualifiers = Array.isArray(row?.sourceQualifiers) ? row.sourceQualifiers.filter(q => SOURCE_QUALIFIERS.includes(q)) : [];
   let suggestions = Array.from(new Set((Array.isArray(row?.suggestionIds) ? row.suggestionIds : []).filter(valid)));
-  // The model's own interpretation (its standard English name for the exercise) is a semantic signal, used two ways:
-  // - it left the id empty but named the exercise exactly as a catalog entry ("Lat Pulldown", "Hip Thrust"): that entry is the
-  //   pick (the guards on the source text still apply). Real eval 3: 4 such needless confirmations.
-  // - its pick does not carry the movement it named ("Barbell Lateral Raise" → Upright Row): refused like a source movement word.
+  // The model's own interpretation (its standard English name) is used only as a safety net: a pick lacking the movement the
+  // model itself named is refused ("Barbell Lateral Raise" → Upright Row). An empty id is never filled in from it — the model
+  // decides (Guardian r9: it leaves real variants empty on purpose); the prompt asks it to fill the id itself when its
+  // interpretation is exactly a catalog name.
   const interpretation = typeof row?.interpretation === 'string' ? row.interpretation : '';
-  const named = interpretation ? index.exact.get(exactKey(interpretation)) : null;
-  const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId
-    : row?.sameExerciseId == null && understood && named?.size === 1 ? [...named][0] : null;
+  // A row the model marks as not understood never gets an automatic id.
+  const proposed = valid(row?.sameExerciseId) ? row.sameExerciseId : null;
   let guard = null;
   if (proposed) {
     // Only the name as written in the file: the extraction model's cleaned spelling cannot vouch for the pick.
-    guard = guardRefusal(index.byId.get(proposed), equipment, qualifiers, entry.sourceName)
+    guard = (understood ? null : 'notUnderstood') || guardRefusal(index.byId.get(proposed), equipment, qualifiers, entry.sourceName)
       || movementConflict(index.byId.get(proposed), interpretation, IMPORT_MATCH_CATALOG);
     if (!guard) return { key: entry.key, sourceName: entry.sourceName, status: 'matched', method: 'ai', exerciseId: proposed, suggestions: [], understood: true, guard: null };
     suggestions = [proposed, ...suggestions.filter(id => id !== proposed)];

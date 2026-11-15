@@ -86,14 +86,19 @@ const index = catalogIndex();
   assert.equal(named('EZ bar ile curl', { sameExerciseId: 'ex_000111', sourceEquipment: 'barbell' }).status, 'matched');
   assert.equal(named('Dizüstü şınav', { sameExerciseId: 'ex_000159', sourceQualifiers: ['single_arm'] }).status, 'matched');
   assert.equal(named('Dumbbell press', { sameExerciseId: 'ex_000151', sourceEquipment: 'dumbbell', sourceQualifiers: ['incline'] }).status, 'suggested');
-  // The model's interpretation: an empty id with an exact catalog name is that entry (source-text guards still apply); a pick
-  // that lacks the movement the model itself named is refused (real eval 3).
+  // The model decides: an empty id is never filled in from its interpretation (it leaves real variants empty on purpose);
+  // a not-understood row never matches; a pick lacking the movement the model itself named is refused.
   const lat = named('Önden lat çekiş', { sameExerciseId: null, interpretation: 'Lat Pulldown', suggestionIds: ['ex_000166'] });
-  assert.deepEqual([lat.status, lat.exerciseId], ['matched', 'ex_000166']);
-  assert.equal(named('Lat çekişi', { sameExerciseId: null, understood: false, interpretation: 'Lat Pulldown' }).status, 'personal', 'not understood → never adopted');
-  assert.equal(named('Lastikli lat çekiş', { sameExerciseId: null, interpretation: 'Lat Pulldown' }).status, 'suggested', 'adopted pick still passes the source guards');
+  assert.deepEqual([lat.status, lat.exerciseId, lat.suggestions], ['suggested', null, ['ex_000166']]);
+  assert.equal(named('Kettlebell bench press', { sameExerciseId: null, interpretation: 'Bench Press' }).exerciseId, null);
+  assert.equal(named('Bench press', { sameExerciseId: 'ex_000038', understood: false }).status, 'suggested', 'not understood → never automatic');
+  assert.ok(matchPrompt().includes('If your interpretation is exactly the name of a catalog entry'));
   assert.equal(named('Halter ile yana kaldırış', { sameExerciseId: 'ex_000283', interpretation: 'Barbell Lateral Raise' }).status, 'suggested', 'pick lacks the named movement');
   assert.equal(named('Dik çekiş', { sameExerciseId: 'ex_000283', interpretation: 'Upright Row' }).status, 'matched');
+  // Plurals fold and "up"/"down" are not movement triggers (Guardian r9 M13 / M18).
+  assert.equal(named('Box squats', { sameExerciseId: 'ex_000081' }).status, 'suggested', 'plural movement word still conflicts');
+  assert.equal(named('Push up on knees', { sameExerciseId: 'ex_000159' }).status, 'matched', '"up" alone does not refuse');
+  assert.equal(named('Step down', { sameExerciseId: 'ex_000265' }).status, 'matched');
   // Movement words from the catalog: another movement is never auto-matched ("Sumo squat" is not Sumo Deadlift).
   for (const [name, id] of [['Sumo squat', 'ex_000268'], ['Seal row', 'ex_000223'], ['Decline crunch', 'ex_000085']]) assert.equal(named(name, { sameExerciseId: id }).status, 'suggested', `${name} → ${id}`);
   for (const [name, id] of [['Pec fly machine', 'ex_000192'], ['Skull crushers', 'ex_000247'], ['Calf press on leg press', 'ex_000173'], ['Hip thrust on bench', 'ex_000144']]) assert.equal(named(name, { sameExerciseId: id }).status, 'matched', `${name} → ${id}`);
