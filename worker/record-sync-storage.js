@@ -1,6 +1,6 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import {WIRE_RULES} from './personal-backup-contract.js';
-import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement } from './data-feature-guard.js';
+import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement, dataFeatureSchemaStatus, DATA_FEATURE_TABLE, DATA_FEATURE_LEVEL, assertClientMayRead, payloadDataLevel, EXERCISE_REMOVAL_LEVEL } from './data-feature-guard.js';
 // The wire AppData remains raw JSON. This adapter owns storage, not client normalization/export projection.
 // Preserve validated raw scalar signs without changing A's canonical request/receipt hashes.
 export function storageJSON(value) {
@@ -49,10 +49,11 @@ export function personalRestoreSchemaStatus(tables) {
  return indexed&&rows.length===5 && rows.every(row=>required[row.name].every(column=>new RegExp(`\\b${column}\\b`).test(row.sql)))?'ready':'unsupported';
 }
 // Lightweight state only; the internal token never crosses a response boundary.
-export async function readRecordState(db,userId,mutationId=undefined) {
+export async function readRecordState(db,userId,mutationId=undefined,withDataLevel=false) {
   db=await activeAccountDB(db,userId);
+  // `withDataLevel` (capabilities only, guard table present): the stored account data level in the same query (no extra round trip).
   const state = await db.prepare(`SELECT u.deleted_at, s.storage_schema_version, s.revision, s.write_token, s.write_status, s.updated_at,
-    COALESCE(s.revision,d.sync_version,0) AS sync_version ${mutationId === undefined ? '' : ',m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision'} FROM users u LEFT JOIN sync_account_state s ON s.user_id=u.id LEFT JOIN user_data d ON d.user_id=u.id ${mutationId === undefined ? '' : 'LEFT JOIN sync_mutation_receipts m ON m.user_id=u.id AND m.mutation_id=?'}
+    COALESCE(s.revision,d.sync_version,0) AS sync_version ${withDataLevel ? `,(SELECT level FROM ${DATA_FEATURE_TABLE} WHERE user_id=u.id) AS data_level` : ''} ${mutationId === undefined ? '' : ',m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision'} FROM users u LEFT JOIN sync_account_state s ON s.user_id=u.id LEFT JOIN user_data d ON d.user_id=u.id ${mutationId === undefined ? '' : 'LEFT JOIN sync_mutation_receipts m ON m.user_id=u.id AND m.mutation_id=?'}
     WHERE u.id=? AND u.deleted_at IS NULL`).bind(...(mutationId === undefined ? [userId] : [mutationId,userId])).first();
   if (!state || state.deleted_at !== null || (state.write_status && state.write_status !== 'ACTIVE')) fail('SYNC_ACCOUNT_BLOCKED');
   if (state.storage_schema_version !== null && state.storage_schema_version !== STORAGE_SCHEMA_VERSION) fail('SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
@@ -104,8 +105,21 @@ export async function readRecordSnapshot(db, userId, readiness) {
   return { state: first, rows: records, data: assembleRecordData(records), syncVersion: first.revision, updatedAt: first.updated_at };
 }
 
-export async function recordPull(env, userId) {
-  try { const result = await readRecordSnapshot(env.DB, userId, await storageSchema(env.DB)); return response({ data: result.data, syncVersion: result.syncVersion, updatedAt: result.updatedAt }); }
+export async function recordPull(env, userId, request = null) {
+  try {
+    const result = await readRecordSnapshot(env.DB, userId, await storageSchema(env.DB));
+    // B57-002: a level-3 account (exercise removal stored) is not served to an older client. Level from the returned snapshot (its rows,
+    // or the legacy document split the same way) and the stored level read after it.
+    const clientLevel = clientDataLevel(request);
+    if (clientLevel < EXERCISE_REMOVAL_LEVEL) {
+      // Records: the returned rows. Legacy document: only its draft can carry the marker (no full split, which could refuse an old blob).
+      const rowLevel = result.state ? rowsDataLevel(result.rows) : payloadDataLevel('metadata', JSON.stringify(['draft']), result.data?.draft == null ? null : JSON.stringify(result.data.draft));
+      // Fail closed: only a missing guard table (before migration 0016) counts as "no stored level"; any other error refuses the read.
+      const stored = await storedDataLevel(env.DB, userId).catch(error => { if (/no such table/i.test(String(error?.message || error))) return 0; throw error; });
+      assertClientMayRead(clientLevel, Math.max(rowLevel, stored));
+    }
+    return response({ data: result.data, syncVersion: result.syncVersion, updatedAt: result.updatedAt });
+  }
   catch (cause) { return rejection(cause); }
 }
 export async function recordCapabilities(env, userId) {
@@ -113,8 +127,12 @@ export async function recordCapabilities(env, userId) {
     const tables = await storageTables(env.DB); const readiness = recordSchemaStatus(tables);
     const transport = receiptSchemaStatus(tables) === 'ready' && env.RECORD_TRANSPORT_ENABLED !== 'false';
     if (readiness !== 'ready') return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false, rootDeltaSync:false, personalRestoreProtocol:false,personalBackupVersions:[], code: readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED' });
-    const state = await readRecordState(env.DB,userId); const authority = state.write_token ? 'records' : 'legacy';
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?(env.PERSONAL_EXERCISES_ENABLED==='false'?[1,2]:[1,2,3]):[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
+    const withLevel = dataFeatureSchemaStatus(tables) === 'ready';
+    const state = await readRecordState(env.DB,userId,undefined,withLevel); const authority = state.write_token ? 'records' : 'legacy';
+    // B57-002: the account's stored data level (3 once an exercise removal was stored; the raise shares that write's batch, so the
+    // stored value is exact for level 3). The app shows its one-time first-removal notice while this is below 3.
+    const dataLevel = withLevel && Number.isSafeInteger(state.data_level) ? Math.min(Math.max(state.data_level, 0), DATA_FEATURE_LEVEL) : 0;
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.DRAFT_SET_DELETION_ENABLED === 'false' || env.DRAFT_EXERCISE_REMOVAL_ENABLED === 'false' ? {} : { draftExerciseRemoval: 1, accountDataLevel: dataLevel }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?(env.PERSONAL_EXERCISES_ENABLED==='false'?[1,2]:[1,2,3]):[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -275,6 +293,9 @@ const measurementShape47 = { ...measurementShape, ...scalarFields('shoulderCm ch
 // Reactivating an archived gym removes archivedAt; nothing else of a gym may disappear.
 const gymShape47 = { ...scalarFields('id name note googlePlaceId'), archivedAt: Object.assign(Object.create(null), { [OMITTABLE]: true }) };
 const mobileDraftShape47 = { ...mobileDraftShape, exercises: [exerciseShape47] };
+// Build 57 (data level 3, B57-002): the row ids of exercises removed from the active workout. Only a level-3 client writes or
+// clears it (finishing or replacing the draft); older clients are refused by the account data-feature guard.
+const mobileDraftShape57 = { ...mobileDraftShape47, removedExercises: [true] };
 // Build 52 (data level 2): the account-level personal exercise cards (root `personalExercises`). A card is a tombstoned record, never
 // deleted from the array while live; only a tombstone may be released (the client keeps at most 500). Known fields are closed
 // coverage; unknown future fields on a surviving card are protected by the generic loss rule.
@@ -323,7 +344,7 @@ export function personalExercisesLoss(previous, next) {
 // Undo of a catalog link restores set rows exactly, which can remove these two identity labels again.
 const omittableScalar = () => Object.assign(Object.create(null), { [OMITTABLE]: true });
 const setShape47 = { ...setShape, exerciseName: omittableScalar(), canonicalExerciseId: omittableScalar() };
-const shapes = level => level >= 1 ? { program: programShape47, measurement: measurementShape47, gym: gymShape47, mobileDraft: mobileDraftShape47, set: setShape47 } : { program: programShape, measurement: measurementShape, gym: scalarFields('id name note'), mobileDraft: mobileDraftShape, set: null };
+const shapes = level => level >= 1 ? { program: programShape47, measurement: measurementShape47, gym: gymShape47, mobileDraft: level >= 3 ? mobileDraftShape57 : mobileDraftShape47, set: setShape47 } : { program: programShape, measurement: measurementShape, gym: scalarFields('id name note'), mobileDraft: mobileDraftShape, set: null };
 // Actual preview producers: Worker responseSchema, local parser/PWA resolution, mobile ImportPreview and
 // document-extractor. All nested branches are closed coverage; unknown/any payloads cannot authorize discard.
 const sourceReferenceShape = scalarFields('page sheet cellRange text');
@@ -370,7 +391,7 @@ function knownShape(value, shape) {
 // Unknown nested fields cannot disappear from a surviving object. Known schema 8 permits collection deletion,
 // but does not prove future opaque extensions are disposable. Conservative loss rejection keeps those values safe.
 function noFieldLoss(previous, next, clearCoverage = null, context = null) {
-  const knownNullable = [mobileDraftShape,mobileDraftShape47,pwaDraftShape,programShape,programShape47,timerShape].includes(clearCoverage);
+  const knownNullable = [mobileDraftShape,mobileDraftShape47,mobileDraftShape57,pwaDraftShape,programShape,programShape47,timerShape].includes(clearCoverage);
   if (next === null && previous !== null && knownNullable && knownShape(previous,clearCoverage)) return;
   if (object(previous)) {
     if (!object(next)) fail('SYNC_SCHEMA_LOSS_RISK');
@@ -446,8 +467,33 @@ function draftLoss(previous,next,clearCoverage) {
   const without = draft => ({ ...draft, sets: Object.fromEntries(Object.entries(draft.sets).filter(([row]) => !relayout.includes(row))) });
   noFieldLoss(without(previous),without(next),clearCoverage,context);
 }
+// Build 57 (B57-002) exercise removal: `draft.removedExercises` lists the row ids of exercises removed from the active workout.
+// A removed row is never listed again and holds no set (its row stays `{}`, the sets left through `setDeletionLog`); for the same
+// draft id the list only grows. A push breaking either rule was built on a copy that does not contain a removal the server
+// holds, or merged sets of another phone under a removed row (invisible on screen, kept in history at finish): refused with
+// SYNC_DRAFT_LAYOUT_STALE (nothing written; the phone reconciles against the server draft, a true conflict is archived).
+const MAX_REMOVED_EXERCISES = 200;
+export function assertDraftExerciseRemovals(previousDraft, nextDraft) {
+  if (!object(nextDraft)) return;
+  const removed = own(nextDraft, 'removedExercises') ? nextDraft.removedExercises : [];
+  if (!Array.isArray(removed) || removed.length > MAX_REMOVED_EXERCISES || removed.some(id => typeof id !== 'string' || id.length === 0 || id.length > 128) || new Set(removed).size !== removed.length) fail('SYNC_PAYLOAD_INVALID', 400);
+  const listed = new Set(Array.isArray(nextDraft.exercises) ? nextDraft.exercises.filter(object).map(item => item.id) : []);
+  for (const id of removed) {
+    const rows = object(nextDraft.sets) && own(nextDraft.sets, id) ? nextDraft.sets[id] : undefined;
+    if (listed.has(id) || (rows !== undefined && (!object(rows) || Object.keys(rows).length > 0))) fail('SYNC_DRAFT_LAYOUT_STALE');
+  }
+  if (object(previousDraft) && previousDraft.id === nextDraft.id) {
+    const kept = new Set(removed);
+    if (Array.isArray(previousDraft.removedExercises) && previousDraft.removedExercises.some(id => !kept.has(id))) fail('SYNC_DRAFT_LAYOUT_STALE');
+    // No removal without its marker (user decision 2026-11-18): an exercise of the stored draft may leave the list only when the
+    // same write names it in `removedExercises` — so a removal is never stored without the data-level-3 raise of that same batch.
+    const before = Array.isArray(previousDraft.exercises) ? previousDraft.exercises.filter(item => object(item) && typeof item.id === 'string' && item.id.length > 0).map(item => item.id) : [];
+    if (before.some(id => !listed.has(id) && !kept.has(id))) fail('SYNC_DRAFT_LAYOUT_STALE');
+  }
+}
 export function compatible(previous, submitted, dataLevel = 0) {
   if (object(submitted) && own(submitted, 'personalExercises')) assertPersonalExercisesShape(submitted.personalExercises);
+  if (object(submitted) && submitted.schemaVersion === 8 && own(submitted, 'draft')) assertDraftExerciseRemovals(object(previous) ? previous.draft : null, submitted.draft);
   if (!previous) return submitted;
   const shape = shapes(dataLevel);
   // Preserve omitted top-level fields, including measurements absent from PWA. Explicit null is still presence.
@@ -524,13 +570,16 @@ export async function recordPush(request, env, userId) {
     if (readiness !== 'ready') fail(readiness === 'missing' ? 'SYNC_STORAGE_MIGRATION_REQUIRED' : 'SYNC_STORAGE_SCHEMA_UNSUPPORTED',503);
     requireDataFeatureSchema(tables);
     const previous = await readRecordSnapshot(env.DB,userId,readiness);
-    if (previous.syncVersion !== payload.syncVersion) fail('SYNC_CONFLICT');
     const oldRows = previous.state ? previous.rows : (previous.data ? splitData(previous.data).map(item => ({ ...item, created_revision: payload.syncVersion, modified_revision: payload.syncVersion, tombstone: 0, deleted_revision: null })) : []);
     // H1: the account level is the stored marker or Build 47 data already present; checked before field-loss rules
     // so an old client gets the explicit upgrade code. The raise below shares the CAS batch (race-free, monotonic).
     const clientLevel = clientDataLevel(request), storedLevel = await storedDataLevel(env.DB,userId);
     const accountLevel = Math.max(storedLevel, rowsDataLevel(oldRows));
     assertClientMayWrite(clientLevel, accountLevel);
+    // B57-002 (Guardian MAJOR-A): the old-client refusal comes BEFORE the revision check. A stale Build <= 56 phone on a level-3
+    // account must get SYNC_CLIENT_UPGRADE_REQUIRED, never SYNC_CONFLICT: a conflict makes it pull and run its old merge, which can
+    // put its new set under an exercise another phone removed (invisible there, finished into history, pushed after the update).
+    if (previous.syncVersion !== payload.syncVersion) fail('SYNC_CONFLICT');
     const data = compatible(previous.data,payload.data,clientLevel);
     if (size(JSON.stringify(data)) > LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413);
     const records = splitData(data);
@@ -571,8 +620,14 @@ export async function recordPush(request, env, userId) {
       ...(raiseLevel ? [raiseDataLevelStatement(db,userId,version,token,now,true,Math.max(accountLevel,submittedLevel))] : [])];
     const results = await db.batch(statements);
     if (results[0]?.meta?.changes !== 1) {
-      const latest = await db.prepare(`SELECT s.revision, s.write_status, u.deleted_at FROM users u LEFT JOIN sync_account_state s ON s.user_id = u.id WHERE u.id = ?`).bind(userId).first();
-      fail(!latest || latest.deleted_at !== null || latest.write_status === 'BLOCKED' ? 'SYNC_ACCOUNT_BLOCKED' : 'SYNC_CONFLICT');
+      // The outcome read also returns the account's stored data level (same query, no extra round trip).
+      const latest = await db.prepare(`SELECT s.revision, s.write_status, u.deleted_at, (SELECT level FROM ${DATA_FEATURE_TABLE} WHERE user_id = u.id) AS data_level FROM users u LEFT JOIN sync_account_state s ON s.user_id = u.id WHERE u.id = ?`).bind(userId).first();
+      if (!latest || latest.deleted_at !== null || latest.write_status === 'BLOCKED') fail('SYNC_ACCOUNT_BLOCKED');
+      // B57-002 (Guardian round 3 MAJOR-R3-1): the write lost the race to another one that may have raised the account's level (an
+      // exercise removal committed in between). An old client must get the upgrade code here too, never SYNC_CONFLICT (which would
+      // send it into its old merge).
+      assertClientMayWrite(clientLevel, Number.isSafeInteger(latest.data_level) ? Math.min(latest.data_level, DATA_FEATURE_LEVEL) : 0);
+      fail('SYNC_CONFLICT');
     }
     return response({ ok: true, syncVersion: version, updatedAt: now });
   } catch (cause) { return rejection(cause); }

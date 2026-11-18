@@ -1,10 +1,11 @@
-const CACHE_VERSION = 'a2-workout-v66-english-youtube-2026-08-26';
+// B57-002: new version so returning web users get the upgrade-required handling (sync-service.js, app.js) instead of the cached code.
+const CACHE_VERSION = 'a2-workout-v67-b57-upgrade-required-2026-11-18';
 const APP_SHELL = [
   './',
   './index.html',
   './recovery.html',
   './styles.css',
-  './app.js?v=english-youtube-v1',
+  './app.js?v=b57-upgrade-required-v1',
   './storage.js',
   './exercise-service.js',
   './program-service.js',

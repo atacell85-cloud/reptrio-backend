@@ -11,7 +11,11 @@ export const DATA_LEVEL_WRITE_GATE_SQL = `EXISTS (SELECT 1 FROM sync_account_sta
 // Level 1 = Build 47 data (gym place ids, extended measurements, catalog link journal).
 // Level 2 = Build 52 personal exercise cards (root `personalExercises` holding at least one card). A client that does not declare
 // the level of the account's data may not write (it would drop or fail to merge the cards); pull stays allowed.
-export const DATA_FEATURE_LEVEL = 2;   // the highest level this Worker understands (the level a current client declares)
+// Level 3 = Build 57 exercise removal (B57-002): the active workout draft names exercise rows removed from it
+// (`draft.removedExercises`). A Build <= 56 client merges such a draft with its own stale copy and can put sets back under a
+// removed row (invisible on screen, kept in history at finish), so once an account's draft carries a removal the server refuses
+// that client's writes. The level is raised in the same CAS batch as the write that first stores the marker (race-free).
+export const DATA_FEATURE_LEVEL = 3;   // the highest level this Worker understands (the level a current client declares)
 export const DATA_FEATURE_TABLE = 'sync_account_data_features';
 export const DATA_LEVEL_HEADER = 'X-Reptrio-Data-Level';
 
@@ -25,11 +29,16 @@ const token = key => `"${key}":`;
 const SETTINGS_RECORD_KEY = JSON.stringify(['settings']);
 const PERSONAL_RECORD_KEY = JSON.stringify(['personalExercises']);
 export const PERSONAL_EXERCISES_LEVEL = 2;
+export const EXERCISE_REMOVAL_LEVEL = 3;
+const DRAFT_RECORD_KEY = JSON.stringify(['draft']);
 
 // Level 2: the personalExercises metadata row holds at least one card (a stored card always carries `"id":`; `[]` does not count).
 const holdsPersonalCards = (kind, recordKey, payloadJson) => kind === 'metadata' && recordKey === PERSONAL_RECORD_KEY && payloadJson.includes(token('id'));
+// Level 3: the draft metadata row carries the removal marker (any `removedExercises` key, even an empty list: conservative).
+const holdsExerciseRemoval = (kind, recordKey, payloadJson) => kind === 'metadata' && recordKey === DRAFT_RECORD_KEY && payloadJson.includes(token('removedExercises'));
 export function payloadDataLevel(kind, recordKey, payloadJson) {
   if (typeof payloadJson !== 'string') return 0;
+  if (holdsExerciseRemoval(kind, recordKey, payloadJson)) return EXERCISE_REMOVAL_LEVEL;
   if (holdsPersonalCards(kind, recordKey, payloadJson)) return PERSONAL_EXERCISES_LEVEL;
   const has = keys => keys.some(key => payloadJson.includes(token(key)));
   if (has(ANY_KEYS)) return 1;
@@ -44,18 +53,19 @@ export function rowsDataLevel(rows) {
   return level;
 }
 // The same predicates in SQL (instr is case-sensitive, unlike LIKE). `alias` qualifies sync_records columns. `level` 1 (default) is
-// the Build 47 predicate (unchanged text), level 2 the personal-card row.
+// the Build 47 predicate (unchanged text), level 2 the personal-card row, level 3 the draft row carrying an exercise removal.
 export function dataLevelPredicate(alias = '', level = 1) {
   const c = column => (alias ? `${alias}.` : '') + column;
+  if (level >= EXERCISE_REMOVAL_LEVEL) return `(${c('kind')}='metadata' AND ${c('record_key')}='${DRAFT_RECORD_KEY}' AND instr(${c('payload_json')},'${token('removedExercises')}')>0)`;
   if (level >= PERSONAL_EXERCISES_LEVEL) return `(${c('kind')}='metadata' AND ${c('record_key')}='${PERSONAL_RECORD_KEY}' AND instr(${c('payload_json')},'${token('id')}')>0)`;
   const any = keys => keys.map(key => `instr(${c('payload_json')},'${token(key)}')>0`).join(' OR ');
   return `(${any(ANY_KEYS)} OR (${c('kind')}='measurement' AND (${any(MEASUREMENT_KEYS)})) OR (${c('kind')}='metadata' AND ${c('record_key')}='${SETTINGS_RECORD_KEY}' AND (${any(SETTINGS_KEYS)})))`;
 }
-// SQL expression: the data level of a live row (0, 1 or 2).
-export const dataLevelCase = (alias = '') => `CASE WHEN ${dataLevelPredicate(alias, 2)} THEN 2 WHEN ${dataLevelPredicate(alias, 1)} THEN 1 ELSE 0 END`;
+// SQL expression: the data level of a live row (0, 1, 2 or 3).
+export const dataLevelCase = (alias = '') => `CASE WHEN ${dataLevelPredicate(alias, 3)} THEN 3 WHEN ${dataLevelPredicate(alias, 2)} THEN 2 WHEN ${dataLevelPredicate(alias, 1)} THEN 1 ELSE 0 END`;
 
 // Declared capability of the calling client. Absent, malformed or lower means a pre-Build-47 client.
-// The declared number, capped at the highest level this Worker knows (a future client declaring 3 is treated as 2).
+// The declared number, capped at the highest level this Worker knows (a future client declaring 4 is treated as 3).
 export function clientDataLevel(request) {
   const value = request?.headers?.get(DATA_LEVEL_HEADER);
   return typeof value === 'string' && /^[1-9][0-9]{0,2}$/.test(value.trim()) ? Math.min(Number(value.trim()), DATA_FEATURE_LEVEL) : 0;
@@ -76,7 +86,7 @@ export async function storedDataLevel(db, userId) {
   return Number.isSafeInteger(row?.level) && row.level >= 1 ? Math.min(row.level, DATA_FEATURE_LEVEL) : 0;
 }
 export async function accountDataLevel(db, userId) {
-  const row = await db.prepare(`SELECT MAX(level) AS level FROM (SELECT level FROM ${DATA_FEATURE_TABLE} WHERE user_id=? UNION ALL SELECT 2 WHERE EXISTS(SELECT 1 FROM sync_records WHERE user_id=? AND tombstone=0 AND ${dataLevelPredicate('', 2)}) UNION ALL SELECT 1 WHERE EXISTS(SELECT 1 FROM sync_records WHERE user_id=? AND tombstone=0 AND ${dataLevelPredicate('', 1)}))`).bind(userId, userId, userId).first();
+  const row = await db.prepare(`SELECT MAX(level) AS level FROM (SELECT level FROM ${DATA_FEATURE_TABLE} WHERE user_id=? UNION ALL SELECT 3 WHERE EXISTS(SELECT 1 FROM sync_records WHERE user_id=? AND tombstone=0 AND ${dataLevelPredicate('', 3)}) UNION ALL SELECT 2 WHERE EXISTS(SELECT 1 FROM sync_records WHERE user_id=? AND tombstone=0 AND ${dataLevelPredicate('', 2)}) UNION ALL SELECT 1 WHERE EXISTS(SELECT 1 FROM sync_records WHERE user_id=? AND tombstone=0 AND ${dataLevelPredicate('', 1)}))`).bind(userId, userId, userId, userId).first();
   const level = Number(row?.level);
   return Number.isSafeInteger(level) && level >= 1 ? Math.min(level, DATA_FEATURE_LEVEL) : 0;
 }
@@ -85,9 +95,17 @@ export async function accountDataLevel(db, userId) {
 export function assertClientMayWrite(clientLevel, accountLevel, submittedLevel = 0) {
   if (clientLevel < Math.max(accountLevel, submittedLevel)) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
 }
+// B57-002 (user decision 2026-11-18): reads. Levels 1–2 keep the old policy (an old client may still pull). From level 3 (an exercise
+// removal is stored) an older client may not even read: it would merge the level-3 draft with its own copy and could put a set under a
+// removed exercise. `accountLevel` must be derived from the rows being returned AND the stored level read AFTER them (the raise shares
+// the marker's write batch, so a returned marker always comes with a stored 3).
+export function assertClientMayRead(clientLevel, accountLevel) {
+  if (accountLevel >= EXERCISE_REMOVAL_LEVEL && clientLevel < accountLevel) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
+}
 // Appended LAST to a write batch, after the record statements: it only applies when this batch's CAS installed
 // (version, writeToken). `force` records an already observed level (`level`, 1..DATA_FEATURE_LEVEL); otherwise the level is derived
-// in SQL from the rows this revision wrote (2 if one is a personal-card row, else 1; no row, no raise). Monotonic: an existing
+// in SQL from the rows this revision wrote (3 if one is a draft carrying an exercise removal, 2 if one is a personal-card row,
+// else 1; no row, no raise). Monotonic: an existing
 // row is only ever raised (the 0016 trigger also forbids a decrease); equal or lower is a no-op.
 export function raiseDataLevelStatement(db, userId, version, writeToken, stamp, force = false, level = 1) {
   const upsert = ` ON CONFLICT(user_id) DO UPDATE SET level=excluded.level, raised_revision=excluded.raised_revision, raised_at=excluded.raised_at WHERE excluded.level > ${DATA_FEATURE_TABLE}.level`;
@@ -97,6 +115,6 @@ export function raiseDataLevelStatement(db, userId, version, writeToken, stamp, 
       .bind(userId, forced, version, stamp, userId, version, writeToken);
   }
   const rows = pred => `EXISTS(SELECT 1 FROM sync_records r WHERE r.user_id=? AND r.modified_revision=? AND r.tombstone=0 AND ${pred})`;
-  return db.prepare(`INSERT INTO ${DATA_FEATURE_TABLE}(user_id,level,raised_revision,raised_at) SELECT ?,CASE WHEN ${rows(dataLevelPredicate('r', 2))} THEN 2 ELSE 1 END,?,? WHERE ${DATA_LEVEL_WRITE_GATE_SQL} AND (${rows(dataLevelPredicate('r', 1))} OR ${rows(dataLevelPredicate('r', 2))})${upsert}`)
-    .bind(userId, userId, version, version, stamp, userId, version, writeToken, userId, version, userId, version);
+  return db.prepare(`INSERT INTO ${DATA_FEATURE_TABLE}(user_id,level,raised_revision,raised_at) SELECT ?,CASE WHEN ${rows(dataLevelPredicate('r', 3))} THEN 3 WHEN ${rows(dataLevelPredicate('r', 2))} THEN 2 ELSE 1 END,?,? WHERE ${DATA_LEVEL_WRITE_GATE_SQL} AND (${rows(dataLevelPredicate('r', 1))} OR ${rows(dataLevelPredicate('r', 2))} OR ${rows(dataLevelPredicate('r', 3))})${upsert}`)
+    .bind(userId, userId, version, userId, version, version, stamp, userId, version, writeToken, userId, version, userId, version, userId, version);
 }

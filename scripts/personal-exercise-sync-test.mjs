@@ -41,8 +41,8 @@ const withCards = (cards, over = {}) => ({ ...base(), personalExercises: cards, 
 const build47 = () => { const d = base(); d.settings.gyms.push({ id: 'g2', name: 'Eski', note: null, archivedAt: '2026-10-20T08:00:00.000Z', googlePlaceId: 'ChIJ_x' }); return d; };
 
 // ---- Constants and header parsing.
-assert.equal(DATA_FEATURE_LEVEL, 2);
-for (const [value, expected] of [[null, 0], ['0', 0], ['1', 1], ['2', 2], [' 2 ', 2], ['3', 2], ['999', 2], ['abc', 0], ['-1', 0], ['2.5', 0]]) {
+assert.equal(DATA_FEATURE_LEVEL, 3);   // B57-002 raised the highest level to 3 (exercise removal)
+for (const [value, expected] of [[null, 0], ['0', 0], ['1', 1], ['2', 2], [' 2 ', 2], ['3', 3], ['999', 3], ['abc', 0], ['-1', 0], ['2.5', 0]]) {
   assert.equal(clientDataLevel(new Request(ORIGIN, value === null ? {} : { headers: { 'X-Reptrio-Data-Level': value } })), expected, String(value));
 }
 

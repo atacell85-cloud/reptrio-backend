@@ -1,7 +1,7 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import { storageJSON } from './record-sync-storage.js';
 import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
-import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, raiseDataLevelStatement, dataLevelCase } from './data-feature-guard.js';
+import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, assertClientMayRead, raiseDataLevelStatement, dataLevelCase } from './data-feature-guard.js';
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -52,7 +52,7 @@ const PAGE_SQL = `WITH candidates AS (
  FROM sync_records r WHERE r.user_id=? AND (r.kind>? OR (r.kind=? AND r.record_key>?)) ORDER BY r.kind,r.record_key LIMIT 256
 ), bounded AS (SELECT *, SUM(encoded_bytes) OVER (ORDER BY kind,record_key) AS cumulative_bytes FROM candidates),
  totals AS (SELECT count(*) AS total FROM sync_records WHERE user_id=?)
- SELECT s.storage_schema_version,s.revision,s.write_token,s.write_status,s.updated_at,u.deleted_at,t.total,
+ SELECT s.storage_schema_version,s.revision,s.write_token,s.write_status,s.updated_at,u.deleted_at,t.total,(SELECT level FROM sync_account_data_features WHERE user_id=s.user_id) AS data_level,
  r.kind,r.record_key,r.parent_key,r.ordinal,r.address_json,r.payload_json,r.created_revision,r.modified_revision,r.tombstone,r.deleted_revision,CAST(r.rowid AS TEXT) AS locator,
  CASE WHEN ? IS NULL THEN 1 ELSE EXISTS (SELECT 1 FROM sync_records a WHERE a.user_id=s.user_id AND a.rowid=CAST(? AS INTEGER) AND a.kind=? AND a.record_key=?) END AS anchor_valid
  FROM sync_account_state s JOIN users u ON u.id=s.user_id CROSS JOIN totals t
@@ -84,7 +84,10 @@ export async function recordPage(request,env,userId) {
       state = await readRecordState(env.DB,userId); authority(state);
     }
     const total = rows[0].total; if (!int(total) || (tuple && tuple[8] !== total)) fail('SYNC_SNAPSHOT_CHANGED');
-    const records = rows.filter(row=>row.kind !== null).map(({storage_schema_version,revision,write_token,write_status,updated_at,deleted_at,total,locator,anchor_valid,...record})=>record);
+    const records = rows.filter(row=>row.kind !== null).map(({storage_schema_version,revision,write_token,write_status,updated_at,deleted_at,total,locator,anchor_valid,data_level,...record})=>record);
+    // B57-002: no page of a level-3 account to an older client (page rows + stored level read after them).
+    // (The stored level comes from the same page statement: one consistent snapshot, no extra query.)
+    assertClientMayRead(clientDataLevel(request), Math.max(rowsDataLevel(records), Number.isSafeInteger(rows[0].data_level) ? rows[0].data_level : 0));
     const start = tuple?.[7] || 0, cumulative = start + records.length;
     if (cumulative > total || (!records.length && cumulative < total)) fail('SYNC_PAGE_LIMIT',413);
     const terminal = cumulative === total;
@@ -206,7 +209,6 @@ export async function recordMutation(request,env,userId) {
     const state=await readRecordState(db,userId,p.mutationId); authority(state);
     const receipt=state.request_hash ? state : null;
     if (receipt && receipt.expires_at > new Date().toISOString()) { if (receipt.request_hash !== requestHash) fail('SYNC_MUTATION_ID_CONFLICT'); if(receipt.base_revision!==p.baseRevision || receipt.committed_revision!==p.baseRevision+1) fail('SYNC_STORAGE_UNAVAILABLE',503); return json(JSON.parse(receipt.outcome_json)); }
-    if (state.revision !== p.baseRevision) fail('SYNC_CONFLICT');
     const metadataFields=new Set(['schemaVersion',...touched.map(item=>item.field),...Object.keys(p.metadata || {})]);
     const oldRows=await touchedRows(db,userId,touched,[...metadataFields].map(idKey),state);
     const previous=assembleRecordData(oldRows);
@@ -217,6 +219,9 @@ export async function recordMutation(request,env,userId) {
     const clientLevel=clientDataLevel(request),storedLevel=await storedDataLevel(db,userId);
     const accountLevel=Math.max(storedLevel,rowsDataLevel(oldRows),...maxima.map(row=>Number(row.data_level)||0));
     assertClientMayWrite(clientLevel,accountLevel);
+    // B57-002 (Guardian MAJOR-A): the old-client refusal precedes the revision check (a stale old client must never be sent into
+    // its conflict merge on an account whose data it cannot handle).
+    if (state.revision !== p.baseRevision) fail('SYNC_CONFLICT');
     if (p.clientSchemaVersion===5 && (previous.schemaVersion!==5 || maxima.some(row=>row.pwa_incompatible) || touched.some(item=>item.kind==='measurement'))) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     const submitted={schemaVersion:p.clientSchemaVersion,...p.metadata};
     for (const field of new Set(touched.map(item=>item.field))) submitted[field]=p.upserts?.[field] || [];
@@ -271,6 +276,9 @@ export async function recordMutation(request,env,userId) {
     const outcome=await db.prepare(`SELECT m.request_hash,m.outcome_json,m.expires_at,m.base_revision,m.committed_revision FROM sync_mutation_receipts m JOIN users u ON u.id=m.user_id JOIN sync_account_state s ON s.user_id=m.user_id WHERE m.user_id=? AND m.mutation_id=? AND u.deleted_at IS NULL AND s.write_status='ACTIVE' AND s.storage_schema_version=1`).bind(userId,p.mutationId).first();
     if(result[0]?.meta?.changes!==1) {
       if(outcome && outcome.expires_at>new Date().toISOString()) { if(outcome.request_hash!==requestHash) fail('SYNC_MUTATION_ID_CONFLICT'); if(outcome.base_revision!==p.baseRevision || outcome.committed_revision!==version) fail('SYNC_STORAGE_UNAVAILABLE',503); return json(JSON.parse(outcome.outcome_json)); }
+      // B57-002 (Guardian round 3 MAJOR-R3-1): the CAS lost to a write that may have raised the account level; an old client gets the
+      // upgrade code, never SYNC_CONFLICT (which would send it into its old merge).
+      assertClientMayWrite(clientLevel, await storedDataLevel(db,userId));
       fail('SYNC_CONFLICT');
     }
     if(!outcome || outcome.request_hash!==requestHash || outcome.committed_revision!==version) fail('SYNC_STORAGE_UNAVAILABLE',503);

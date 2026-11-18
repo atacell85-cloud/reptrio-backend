@@ -281,7 +281,7 @@ async function me(request, env) {
 async function pull(request, env) {
   if (request.method !== 'GET') return error('METHOD_NOT_ALLOWED', 405, { Allow: 'GET' });
   const user = await currentUser(request, env); if (!user) return error('AUTH_REQUIRED', 401);
-  return recordPull(env, user.id);
+  return recordPull(env, user.id, request);
 }
 
 async function capabilities(request, env) {

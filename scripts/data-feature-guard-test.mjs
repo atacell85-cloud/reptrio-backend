@@ -62,7 +62,7 @@ const build47 = () => {
     sqlite.prepare('INSERT INTO sync_records VALUES (?,?,?,0)').run(kind, key, payload);
     assert.equal(sqlite.prepare(`SELECT COUNT(*) AS n FROM sync_records WHERE ${dataLevelPredicate()}`).get().n, expected, 'SQL ' + payload);
   }
-  for (const [value, expected] of [[null, 0], ['', 0], ['0', 0], ['1', 1], [' 2 ', 2], ['3', 2], ['999', 2], ['abc', 0], ['-1', 0], ['1.5', 0]]) {
+  for (const [value, expected] of [[null, 0], ['', 0], ['0', 0], ['1', 1], [' 2 ', 2], ['3', 3], ['4', 3], ['999', 3], ['abc', 0], ['-1', 0], ['1.5', 0]]) {
     assert.equal(clientDataLevel(new Request(ORIGIN, value === null ? {} : { headers: { 'X-Reptrio-Data-Level': value } })), expected, String(value));
   }
 }
@@ -174,7 +174,6 @@ const build47 = () => {
     // F1: an active workout started before the mobile fix may still hold the journal in draft.exercises.
     'finish workout from a linked day': d => { d.draft = null; d.sessions.push({ id: 's2', programId: 'p', dayId: 'd', title: 'Gün 1', startedAt: '2026-10-21T08:00:00.000Z', completedAt: '2026-10-21T09:00:00.000Z', sets: { i: { 1: clone(linkedSet) } } }); },
     // (Deleting draft set rows is refused for schema 8 at every level since Build 44; no app flow does it.)
-    'remove linked exercise from the active draft': d => { d.draft.exercises = d.draft.exercises.filter(e => e.id !== 'i'); },
     // F3: catalog Undo restores rows that originally had NO exerciseName (and a custom canonical id).
     'undo restores a set row without exerciseName': d => { const row = d.sessions[0].sets.i[1]; delete row.exerciseName; row.canonicalExerciseId = 'custom:name:row';
       const item = d.programs[0].days[0].sections[0].items[0]; delete item.catalogLink; item.exerciseId = 'custom:name:row'; item.customExerciseName = 'Row'; item.displayName = 'Row'; },
@@ -196,6 +195,12 @@ const build47 = () => {
     const f = await fixture(); assert.equal((await f.push(seed(), 0, 1)).status, 200, name);
     const next = seed(); change(next);
     await rejected(f, () => f.push(next, 1, 1), [409, 'SYNC_SCHEMA_LOSS_RISK']);
+  }  // B57-002 (user decision 2026-11-18): an exercise may leave the active draft only with its `removedExercises` marker (which
+  // raises the account to data level 3 in the same write). Before Build 57 no app flow removed one; the server accepted it silently.
+  {
+    const f = await fixture(); assert.equal((await f.push(seed(), 0, 1)).status, 200);
+    const next = seed(); next.draft.exercises = next.draft.exercises.filter(e => e.id !== 'i');
+    await rejected(f, () => f.push(next, 1, 1), [409, 'SYNC_DRAFT_LAYOUT_STALE']);
   }
 }
 

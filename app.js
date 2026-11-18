@@ -162,7 +162,7 @@ function discoverRoutinesView() {
 
 async function programsView() { return myRoutinesView(); }
 
-function syncLabel(status) { return ({ saved: 'Kaydedildi', syncing: 'Senkronize ediliyor...', offline: 'Çevrimdışı — sonra senkronize edilecek', pending: 'Senkronizasyon bekliyor' })[status] || 'Kaydedildi'; }
+function syncLabel(status) { return ({ saved: 'Kaydedildi', syncing: 'Senkronize ediliyor...', offline: 'Çevrimdışı — sonra senkronize edilecek', pending: 'Senkronizasyon bekliyor', upgradeRequired: 'Bu hesap Reptrio mobil uygulamasının yeni sürümüyle güncellendi; web uygulaması şu an bu hesabı senkronize edemiyor. Bu cihazdaki veriler değiştirilmedi.' })[status] || 'Kaydedildi'; }
 
 function welcomeView() {
   state.view = 'welcome'; state.onboarding = null; title.textContent = 'Reptrio'; nav('');
@@ -1479,7 +1479,7 @@ app.addEventListener('click', async event => {
   if (action === 'resume') return resumeWorkout();
   if (action === 'login') return submitAuth('login');
   if (action === 'register') return submitAuth('register');
-  if (action === 'migrate-legacy') { try { await sync.migrateLegacy(); cachedSessions = await workoutRepository.getSessions(); toast('Mevcut veriler hesabınıza aktarıldı.'); return todayView(); } catch { return toast('Veriler aktarılırken bir sorun oluştu.'); } }
+  if (action === 'migrate-legacy') { try { await sync.migrateLegacy(); cachedSessions = await workoutRepository.getSessions(); toast(sync.isUpgradeRequired() ? 'Veriler bu cihazda kaydedildi; hesap Reptrio mobil uygulamasının yeni sürümünü gerektirdiği için şu an hesaba aktarılamadı.' : 'Mevcut veriler hesabınıza aktarıldı.'); return todayView(); } catch { return toast('Veriler aktarılırken bir sorun oluştu.'); } }
   if (action === 'skip-legacy') return todayView();
   if (action === 'install-app') { if (state.installPrompt) { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; return accountView(); } const help = document.querySelector('#installHelp'); if (help) help.hidden = false; return; }
   if (action === 'logout') { await authService.logout(); sync.stop(); await workoutRepository.setActiveAccount(null); state.user = null; state.workout = null; state.onboarding = null; state.authMode = 'login'; cachedSessions = []; return welcomeView(); }
