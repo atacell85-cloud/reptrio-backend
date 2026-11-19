@@ -132,7 +132,7 @@ export async function recordCapabilities(env, userId) {
     // B57-002: the account's stored data level (3 once an exercise removal was stored; the raise shares that write's batch, so the
     // stored value is exact for level 3). The app shows its one-time first-removal notice while this is below 3.
     const dataLevel = withLevel && Number.isSafeInteger(state.data_level) ? Math.min(Math.max(state.data_level, 0), DATA_FEATURE_LEVEL) : 0;
-    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(env.DRAFT_SET_DELETION_ENABLED === 'false' || env.DRAFT_EXERCISE_REMOVAL_ENABLED === 'false' ? {} : { draftExerciseRemoval: 1, accountDataLevel: dataLevel }), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?(env.PERSONAL_EXERCISES_ENABLED==='false'?[1,2]:[1,2,3]):[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
+    return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: true, ...(env.DRAFT_SET_DELETION_ENABLED === 'false' ? {} : { draftSetDeletion: 1 }), ...(exerciseRemovalEnabled(env) ? { draftExerciseRemoval: 1, accountDataLevel: dataLevel } : {}), ...(env.PERSONAL_EXERCISES_ENABLED === 'false' ? {} : { personalExercises: 1 }), authority, syncVersion:state.sync_version, recordPaging:transport && authority === 'records', rootDeltaSync:transport && authority === 'records', personalRestoreProtocol:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false,personalBackupVersions:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?(env.PERSONAL_EXERCISES_ENABLED==='false'?[1,2]:[1,2,3]):[],stagedRecordPublisher:personalRestoreSchemaStatus(tables)==='ready'&&env.PERSONAL_RESTORE_ENABLED!=='false'?1:false });
   } catch (cause) { return response({ storageSchemaVersion: STORAGE_SCHEMA_VERSION, writable: false, recordPaging:false,rootDeltaSync:false,personalRestoreProtocol:false,personalBackupVersions:[],code: cause.code || 'SYNC_STORAGE_UNAVAILABLE' }); }
 }
 
@@ -491,7 +491,22 @@ export function assertDraftExerciseRemovals(previousDraft, nextDraft) {
     if (before.some(id => !listed.has(id) && !kept.has(id))) fail('SYNC_DRAFT_LAYOUT_STALE');
   }
 }
-export function compatible(previous, submitted, dataLevel = 0) {
+// B57-002 release safety: the same switch as the `draftExerciseRemoval` capability. While it is off the server refuses every NEW
+// exercise removal, not only the advertisement: a draft whose row would carry the level-3 marker (the exact predicate of the
+// level raise) is accepted only when it is the SAME draft already holding the marker and its `removedExercises` list names no id
+// the stored draft does not name. So a level-3 account keeps syncing and finishing its existing draft; nothing new reaches level 3.
+export const exerciseRemovalEnabled = env => env?.DRAFT_SET_DELETION_ENABLED !== 'false' && env?.DRAFT_EXERCISE_REMOVAL_ENABLED !== 'false';
+const DRAFT_KEY = JSON.stringify(['draft']);
+const holdsRemovalMarker = draft => object(draft) && payloadDataLevel('metadata', DRAFT_KEY, JSON.stringify(draft)) >= EXERCISE_REMOVAL_LEVEL;
+export function assertNoNewExerciseRemoval(previousDraft, nextDraft) {
+  if (!holdsRemovalMarker(nextDraft)) return;
+  const sameMarkedDraft = holdsRemovalMarker(previousDraft) && previousDraft.id === nextDraft.id;
+  const known = new Set(sameMarkedDraft && Array.isArray(previousDraft.removedExercises) ? previousDraft.removedExercises : []);
+  const listed = own(nextDraft, 'removedExercises') ? nextDraft.removedExercises : [];
+  if (!sameMarkedDraft || !Array.isArray(listed) || listed.some(id => !known.has(id))) fail('SYNC_EXERCISE_REMOVAL_DISABLED');
+}
+export function compatible(previous, submitted, dataLevel = 0, options = {}) {
+  if (options.exerciseRemoval === false && object(submitted) && own(submitted, 'draft')) assertNoNewExerciseRemoval(object(previous) ? previous.draft : null, submitted.draft);
   if (object(submitted) && own(submitted, 'personalExercises')) assertPersonalExercisesShape(submitted.personalExercises);
   if (object(submitted) && submitted.schemaVersion === 8 && own(submitted, 'draft')) assertDraftExerciseRemovals(object(previous) ? previous.draft : null, submitted.draft);
   if (!previous) return submitted;
@@ -580,7 +595,7 @@ export async function recordPush(request, env, userId) {
     // account must get SYNC_CLIENT_UPGRADE_REQUIRED, never SYNC_CONFLICT: a conflict makes it pull and run its old merge, which can
     // put its new set under an exercise another phone removed (invisible there, finished into history, pushed after the update).
     if (previous.syncVersion !== payload.syncVersion) fail('SYNC_CONFLICT');
-    const data = compatible(previous.data,payload.data,clientLevel);
+    const data = compatible(previous.data,payload.data,clientLevel,{ exerciseRemoval: exerciseRemovalEnabled(env) });
     if (size(JSON.stringify(data)) > LIMITS.dataBytes) fail('SYNC_PAYLOAD_INVALID',413);
     const records = splitData(data);
     const submittedLevel = rowsDataLevel(records);

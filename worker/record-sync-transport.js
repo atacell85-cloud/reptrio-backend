@@ -1,6 +1,6 @@
 import { activeAccountDB } from './account-lifecycle.js';
 import { storageJSON } from './record-sync-storage.js';
-import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
+import { storageTables, recordSchemaStatus, receiptSchemaStatus, readRecordState, boundedBody, inspect, compatible, exerciseRemovalEnabled, splitData, assembleRecordData, recordChunks, RECORD_WRITE_GATE_SQL, LIMITS } from './record-sync-storage.js';
 import { clientDataLevel, requireDataFeatureSchema, storedDataLevel, rowsDataLevel, assertClientMayWrite, assertClientMayRead, raiseDataLevelStatement, dataLevelCase } from './data-feature-guard.js';
 const encoder = new TextEncoder();
 const bytes = value => encoder.encode(value).byteLength;
@@ -225,7 +225,7 @@ export async function recordMutation(request,env,userId) {
     if (p.clientSchemaVersion===5 && (previous.schemaVersion!==5 || maxima.some(row=>row.pwa_incompatible) || touched.some(item=>item.kind==='measurement'))) fail('SYNC_CLIENT_UPGRADE_REQUIRED');
     const submitted={schemaVersion:p.clientSchemaVersion,...p.metadata};
     for (const field of new Set(touched.map(item=>item.field))) submitted[field]=p.upserts?.[field] || [];
-    const nextData=compatible(previous,submitted,clientLevel); const nextRecords=splitData(nextData);
+    const nextData=compatible(previous,submitted,clientLevel,{exerciseRemoval:exerciseRemovalEnabled(env)}); const nextRecords=splitData(nextData);
     const submittedLevel=rowsDataLevel(nextRecords); assertClientMayWrite(clientLevel,accountLevel,submittedLevel);
     const raiseLevel=storedLevel<Math.max(accountLevel,submittedLevel);
     const old=new Map(oldRows.map(item=>[identity(item),item]));

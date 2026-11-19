@@ -319,4 +319,107 @@ const addSet = (data, row) => { const next = clone(data); const n = Object.keys(
   k.db.prepare = original;
 }
 
+// 12. Release safety: with DRAFT_EXERCISE_REMOVAL_ENABLED=false (or set deletion off) the server refuses every NEW removal marker —
+// direct API push, record mutation and staged publication — so no account reaches level 3; an account already at level 3 keeps
+// syncing and finishing its existing draft.
+{
+  const OFF = { DRAFT_EXERCISE_REMOVAL_ENABLED: 'false' };
+  const pushEnv = (f, data, v, env) => f.call('push', { method: 'POST', body: JSON.stringify({ data, syncVersion: v }) }, '3', env);
+  const mutate = (f, rev, metadata, env) => f.call('records/mutations', { method: 'POST', body: JSON.stringify({ mutationId: `off-${++ids}`, baseRevision: rev, clientSchemaVersion: 8, metadata }) }, '3', env);
+  const marked = f => f.dump().includes('removedExercises');
+
+  // (a) Direct API push of a first removal, a new draft carrying an (empty) marker, and a marker nested deeper in the draft row.
+  for (const env of [OFF, { DRAFT_SET_DELETION_ENABLED: 'false' }]) {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    await refused(f, () => pushEnv(f, removeExercise(d, 'row-x'), 1, env), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    const fresh = clone(d); fresh.draft.id = 'draft-2'; fresh.draft.removedExercises = [];
+    await refused(f, () => pushEnv(f, strip(fresh), 1, env), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    const nested = clone(d); nested.draft.exercises[0].removedExercises = [];
+    await refused(f, () => pushEnv(f, strip(nested), 1, env), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    assert.equal(f.level(), null); assert.equal(marked(f), false);
+    // Everything else still syncs with the switch off: a normal edit and the finish.
+    assert.equal((await pushEnv(f, addSet(d, 'row-y'), 1, env)).status, 200, 'normal draft edit accepted');
+    const done = clone(d); done.draft = null; assert.equal((await pushEnv(f, strip(done), 2, env)).status, 200, 'finish accepted');
+    // Capability and enforcement read the same switch.
+    assert.equal((await (await f.call('capabilities', {}, '3', env)).json()).draftExerciseRemoval, undefined);
+  }
+  // (b) An account already at level 3 (removal made while the switch was on) keeps its draft working after the switch is off.
+  {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    const removed = removeExercise(d, 'row-x'); assert.equal((await f.push(removed, 1)).status, 200);
+    assert.deepEqual(f.level(), { level: 3, raised_revision: 2 });
+    const edited = addSet(removed, 'row-y'); assert.equal((await pushEnv(f, edited, 2, OFF)).status, 200, 'existing marked draft: edit accepted');
+    assert.equal((await pushEnv(f, clone(edited), 3, OFF)).status, 200, 'same marker list re-sent (second phone union): accepted');
+    await refused(f, () => pushEnv(f, removeExercise(edited, 'row-y'), 4, OFF), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    const swapped = clone(edited); swapped.draft.removedExercises = ['row-empty']; swapped.draft.exercises = swapped.draft.exercises.filter(item => item.id !== 'row-empty');
+    await refused(f, () => pushEnv(f, strip(swapped), 4, OFF), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    const other = clone(edited); other.draft.id = 'draft-9';
+    await refused(f, () => pushEnv(f, strip(other), 4, OFF), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    // Record mutation path, same account: the existing marker passes, a new id is refused.
+    assert.equal((await mutate(f, 4, { draft: addSet(edited, 'row-y').draft }, OFF)).status, 200, 'mutation: existing marked draft accepted');
+    const current = (await f.pull()).data;
+    await refused(f, () => mutate(f, 5, { draft: removeExercise(current, 'row-y').draft }, OFF), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    const finished = clone(current); finished.draft = null; assert.equal((await pushEnv(f, strip(finished), 5, OFF)).status, 200, 'finish accepted');
+    const next = clone(base()); next.draft.id = 'draft-new';
+    assert.equal((await pushEnv(f, strip(next), 6, OFF)).status, 200, 'a new workout without a marker starts normally');
+    assert.equal((await f.pull()).data.draft.removedExercises, undefined);
+  }
+  // (c) Record mutation path on a level-0 account: the first removal is refused; with the switch on it is accepted (same request shape).
+  {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    await refused(f, () => mutate(f, 1, { draft: removeExercise(d, 'row-x').draft }, OFF), 'SYNC_EXERCISE_REMOVAL_DISABLED');
+    assert.equal(f.level(), null);
+    const on = await mutate(f, 1, { draft: removeExercise(d, 'row-x').draft }, {});
+    assert.equal(on.status, 200, 'switch on: the mutation removal is accepted ' + JSON.stringify(await on.clone().json()));
+    assert.equal(f.level().level, 3);
+  }
+  // (d) Race: a normal edit and a direct-API removal on the same base revision, both orders and concurrently — never a marker.
+  for (const order of ['edit-first', 'removal-first', 'concurrent']) {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    const edit = () => pushEnv(f, addSet(d, 'row-y'), 1, OFF); const removal = () => pushEnv(f, removeExercise(d, 'row-x'), 1, OFF);
+    let results;
+    if (order === 'concurrent') results = await Promise.all([edit(), removal()]);
+    else if (order === 'edit-first') { const e = await edit(); results = [e, await removal()]; }
+    else { const r = await removal(); results = [await edit(), r]; }
+    assert.equal(results[0].status, 200, `${order}: the edit lands`);
+    assert.equal(results[1].status, 409, `${order}: the removal is refused`);
+    assert.equal(marked(f), false); assert.equal(f.level(), null);
+  }
+  // (e) Staged SYNC publication (records/operations): a snapshot whose draft brings a new marker is refused at commit; the same
+  // snapshot is published with the switch on (proves the refusal is this rule).
+  // Stages `data` as a SYNC publication on revision `rev` and commits it; returns [status, body] of the commit.
+  const stagedCommit = async (f, env, data, rev) => {
+    const op = async (action, body, id) => { const r = await f.call(`records/operations${id ? `/${id}/${action}` : ''}`, { method: 'POST', body: JSON.stringify(body) }, '3', env); return [r.status, await r.json()]; };
+    const roots = Object.entries(data).map(([field, record]) => ({ kind: 'metadata', field, record }));
+    const zero = { sessions: 0, sets: 0, programs: 0, days: 0, sections: 0, exercises: 0, measurements: 0, gyms: 0, importHistory: 0 };
+    const [s, started] = await op('start', { sourceNamespace: 'src', archiveRetryHash: 'a'.repeat(64), localBinding: 'l', dataSchemaVersion: 8, expectedChunks: 1, expectedCounts: zero, baseRevision: rev });
+    assert.equal(s, 200, JSON.stringify(started));
+    const [c, chunked] = await op('chunks', { localBinding: 'l', index: 0, roots }, started.operationId); assert.equal(c, 200, JSON.stringify(chunked));
+    let ready; for (let i = 0; i < 50; i++) { const [status, body] = await op('finalize', { localBinding: 'l', generationId: ready?.generationId }, started.operationId); assert.equal(status, 200, JSON.stringify(body)); ready = body; if (body.status === 'READY') break; }
+    assert.equal(ready.status, 'READY');
+    return op('commit', { localBinding: 'l', confirm: true, confirmationDigest: ready.confirmationDigest, semanticDigest: ready.semanticDigest, baseRevision: rev }, started.operationId);
+  };
+  for (const env of [OFF, {}]) {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    const before = f.dump(); const [status, body] = await stagedCommit(f, env, removeExercise(d, 'row-x'), 1);
+    if (env === OFF) {
+      assert.deepEqual([status, body.code], [409, 'SYNC_EXERCISE_REMOVAL_DISABLED']); assert.equal(f.dump(), before); assert.equal(f.level(), null);
+    } else {
+      assert.equal(status, 200, JSON.stringify(body)); assert.equal(f.level().level, 3);
+    }
+  }
+  // (f) Guardian r1 MINOR-1: a level-3 account with the switch off publishes its EXISTING marked draft through the staged path;
+  // the same draft id with a new removed id is refused there.
+  {
+    const f = await fixture(); const d = base(); assert.equal((await f.push(d, 0)).status, 200);
+    const removed = removeExercise(d, 'row-x'); assert.equal((await f.push(removed, 1)).status, 200);
+    const edited = addSet(removed, 'row-y');
+    const [ok, okBody] = await stagedCommit(f, OFF, edited, 2);
+    assert.equal(ok, 200, 'staged publication of the existing marked draft ' + JSON.stringify(okBody));
+    assert.deepEqual((await f.pull()).data.draft, edited.draft);
+    const before = f.dump(); const [status, body] = await stagedCommit(f, OFF, removeExercise(edited, 'row-y'), 3);
+    assert.deepEqual([status, body.code], [409, 'SYNC_EXERCISE_REMOVAL_DISABLED']); assert.equal(f.dump(), before);
+  }
+}
+
 console.log('draft exercise removal (B57-002) tests passed');

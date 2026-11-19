@@ -2,7 +2,7 @@ import { activeAccountDB } from './account-lifecycle.js';
 import { validatePortableRootV2, V2_SETTINGS_FIELDS } from './personal-backup-v2-contract.js';
 import { validatePortableRootV3, personalExercisesOpaque, PERSONAL_EXERCISE_V3_RULES } from './personal-backup-v3-contract.js';
 import { clientDataLevel, requireDataFeatureSchema, accountDataLevel, assertClientMayWrite, raiseDataLevelStatement, PERSONAL_EXERCISES_LEVEL } from './data-feature-guard.js';
-import {assertPersonalExercisesShape,storageTables,recordSchemaStatus,personalRestoreSchemaStatus,readRecordState,splitData,storageJSON,assembleRecordData,compatible,compatibleStorageRow,recordChunks,inspect,RECORD_WRITE_GATE_SQL,personalExercisesLoss} from './record-sync-storage.js';
+import {assertPersonalExercisesShape,storageTables,recordSchemaStatus,personalRestoreSchemaStatus,readRecordState,splitData,storageJSON,assembleRecordData,compatible,compatibleStorageRow,recordChunks,inspect,RECORD_WRITE_GATE_SQL,personalExercisesLoss,exerciseRemovalEnabled,assertNoNewExerciseRemoval} from './record-sync-storage.js';
 import {portableBody,portableHash,byteHash,WIRE_RULES,canonicalPortable,portableBytes,portableFail as fail,object,own,exactFields,validatePortableRoot,parsePortable} from './personal-backup-contract.js';
 export const RESTORE_LIMITS=Object.freeze({ttl:3_600_000,pageRows:256,pageBytes:1_800_000,pages:8,queries:50,roots:128,chunks:10000});
 const json=(body,status=200)=>new Response(storageJSON(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
@@ -44,7 +44,7 @@ export async function personalRestoreRequest(request,env,userId,purpose,id,actio
   if(action==='chunks')return json(await chunk(db,userId,op,p));
   if(action==='finalize')return json(await finalize(db,userId,op,state,p,clientDataLevel(request)));
   if(action==='preview'&&purpose==='RESTORE')return json(await preview(db,userId,op,state,p));
-  if(action==='commit')return json(await commit(db,userId,op,state,p));
+  if(action==='commit'){if(!exerciseRemovalEnabled(env))await assertPublishAddsNoExerciseRemoval(db,userId,op);return json(await commit(db,userId,op,state,p));}
   if(action==='undo-preview'&&purpose==='RESTORE')return json(await undoPreview(db,userId,op,state,p));
   if(action==='undo'&&purpose==='RESTORE')return json(await undo(db,userId,op,state,p));
   fail('ROUTE_INVALID',404);
@@ -426,6 +426,17 @@ async function allocateOrdinals(db,userId,op){
  const bad=await db.prepare('SELECT COUNT(*) AS n FROM personal_restore_records WHERE user_id=? AND operation_id=? AND publish_kind IS NOT NULL AND selected=1 AND classification=\'NEW\' AND(target_ordinal IS NULL OR target_ordinal>=9007199254740991)').bind(userId,op.operation_id).first();if(bad.n)fail('ORDER_LIMIT',413);
 }
 const publicationGate=`EXISTS(SELECT 1 FROM personal_restore_operations o JOIN sync_account_state s ON s.user_id=o.user_id JOIN users u ON u.id=o.user_id WHERE o.user_id=? AND o.operation_id=? AND o.state=? AND o.generation_id=? AND s.revision=? AND s.write_token=? AND s.storage_schema_version=1 AND s.write_status='ACTIVE' AND u.deleted_at IS NULL)`;
+// B57-002 release safety (exercise removal switched off): a staged publication (SYNC or RESTORE) may not bring a NEW removal
+// marker either. Its draft row is held to the push rule against the live draft row; the publication's CAS on the pinned revision
+// makes this read the state the commit replaces.
+const DRAFT_ROW_KEY=storageJSON(['draft']);
+async function assertPublishAddsNoExerciseRemoval(db,userId,op){
+ const staged=(await db.prepare("SELECT payload_json FROM personal_restore_records WHERE user_id=? AND operation_id=? AND root_id>=0 AND kind='metadata' AND record_key=?").bind(userId,op.operation_id,DRAFT_ROW_KEY).all()).results;
+ if(!staged.length)return;
+ const live=await db.prepare("SELECT payload_json FROM sync_records WHERE user_id=? AND kind='metadata' AND record_key=? AND tombstone=0").bind(userId,DRAFT_ROW_KEY).first();
+ const previous=live?JSON.parse(live.payload_json):null;
+ for(const row of staged)assertNoNewExerciseRemoval(previous,JSON.parse(row.payload_json));
+}
 async function commit(db,userId,op,state,p){
  if(op.purpose!=='RESTORE')return commitSync(db,userId,op,state,p);
  exactFields(p,['localBinding','confirm','previewDigest','semanticDigest','selectionDigest','baseRevision']);
