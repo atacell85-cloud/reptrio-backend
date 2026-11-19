@@ -1,0 +1,2784 @@
+{
+ "schemaVersion": 1,
+ "revision": "wg-1.0.0+b6239e0abf91",
+ "count": 302,
+ "exercises": [
+  {
+   "id": "ex_000001",
+   "name": "Ab Wheel Rollout",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000002",
+   "name": "Active Hang",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000003",
+   "name": "Archer Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000004",
+   "name": "Arm Circles",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000005",
+   "name": "Arnold Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000006",
+   "name": "Assault Bike",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000007",
+   "name": "Assisted Chin-up",
+   "equipment": "Machine",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000008",
+   "name": "Assisted Dip",
+   "equipment": "Machine",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000009",
+   "name": "Assisted Pistol Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000010",
+   "name": "Assisted Pull-up",
+   "equipment": "Machine",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000011",
+   "name": "Back Extension",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lower Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000012",
+   "name": "Band Pull-Apart",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000013",
+   "name": "Banded Clamshell",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000014",
+   "name": "Banded Dead Bug",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000015",
+   "name": "Banded Donkey Kick",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000016",
+   "name": "Banded Face Pull",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000017",
+   "name": "Banded Fire Hydrant",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000018",
+   "name": "Banded Frog Pump",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000019",
+   "name": "Banded Glute Bridge",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000020",
+   "name": "Banded Hip Thrust",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000021",
+   "name": "Banded Kickback",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000022",
+   "name": "Banded Lat Pulldown",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000023",
+   "name": "Banded Lateral Walk",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000024",
+   "name": "Banded Monster Walk",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000025",
+   "name": "Banded Pallof Press",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000026",
+   "name": "Banded Row",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000027",
+   "name": "Banded Seated Hip Abduction",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000028",
+   "name": "Banded Squat",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000029",
+   "name": "Banded Standing Hip Abduction",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000030",
+   "name": "Banded Woodchop",
+   "equipment": "Resistance Band",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000031",
+   "name": "Barbell Glute Bridge",
+   "equipment": "Barbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000032",
+   "name": "Barbell Row",
+   "equipment": "Barbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000033",
+   "name": "Battle Ropes",
+   "equipment": "Cardio",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000034",
+   "name": "Bear Crawl",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000035",
+   "name": "Bear Plank",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000036",
+   "name": "Belt Squat",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000037",
+   "name": "Bench Dip",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000038",
+   "name": "Bench Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": [
+    "barbell bench",
+    "barbell bench press",
+    "flat barbell bench press",
+    "bench press barbell"
+   ]
+  },
+  {
+   "id": "ex_000039",
+   "name": "Bent-Over Rear Delt Raise",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Rear Delts"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000040",
+   "name": "Bicep Curl",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000041",
+   "name": "Bicycle Crunch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000042",
+   "name": "Bird Dog",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000043",
+   "name": "Bodyweight Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000044",
+   "name": "Bulgarian Split Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000045",
+   "name": "Burpee",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000046",
+   "name": "Butterfly Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hips"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000047",
+   "name": "Cable Crunch",
+   "equipment": "Cable",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000048",
+   "name": "Cable Curl",
+   "equipment": "Cable",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000049",
+   "name": "Cable Fly",
+   "equipment": "Cable",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000050",
+   "name": "Cable Front Raise",
+   "equipment": "Cable",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000051",
+   "name": "Cable Kickback",
+   "equipment": "Cable",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000052",
+   "name": "Cable Lateral Raise",
+   "equipment": "Cable",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000053",
+   "name": "Cable Pallof Hold",
+   "equipment": "Cable",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000054",
+   "name": "Cable Pull-Through",
+   "equipment": "Cable",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000055",
+   "name": "Cable Rear Delt Fly",
+   "equipment": "Cable",
+   "primary": [
+    "Rear Delts"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000056",
+   "name": "Cable Standing Hip Abduction",
+   "equipment": "Cable",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000057",
+   "name": "Cable Standing Hip Adduction",
+   "equipment": "Cable",
+   "primary": [
+    "Adductors"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000058",
+   "name": "Cable Woodchop",
+   "equipment": "Cable",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000059",
+   "name": "Calf Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000060",
+   "name": "Captain's Chair Knee Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000061",
+   "name": "Cat-Cow Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Mobility"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000062",
+   "name": "Chair Dip",
+   "equipment": "Chair",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000063",
+   "name": "Chest Dip",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000064",
+   "name": "Chest Supported Row",
+   "equipment": "Machine",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000065",
+   "name": "Child's Pose",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000066",
+   "name": "Chin-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000067",
+   "name": "Clamshell",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000068",
+   "name": "Close-Grip Bench Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000069",
+   "name": "Close-Grip Lat Pulldown",
+   "equipment": "Cable",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000070",
+   "name": "Commando Pull-up",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000071",
+   "name": "Concentration Curl",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000072",
+   "name": "Copenhagen Plank",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000073",
+   "name": "Cossack Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000074",
+   "name": "Crab Walk",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000075",
+   "name": "Cross-Body Shoulder Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000076",
+   "name": "Crunch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000077",
+   "name": "Curtsy Lunge",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000078",
+   "name": "Cycling",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000079",
+   "name": "Dead Bug",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000080",
+   "name": "Dead Hang",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Forearms"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000081",
+   "name": "Deadlift",
+   "equipment": "Barbell",
+   "primary": [
+    "Posterior Chain"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000082",
+   "name": "Decline Bench Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000083",
+   "name": "Decline Dumbbell Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000084",
+   "name": "Decline Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000085",
+   "name": "Decline Sit-Up",
+   "equipment": "Bench",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000086",
+   "name": "Deficit Reverse Lunge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000087",
+   "name": "Diamond Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000088",
+   "name": "Dip",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000089",
+   "name": "Donkey Calf Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000090",
+   "name": "Donkey Kick",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000091",
+   "name": "Doorway Chest Stretch",
+   "equipment": "Doorway",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000092",
+   "name": "Doorway Row",
+   "equipment": "Doorway",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000093",
+   "name": "Drag Curl",
+   "equipment": "Barbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000094",
+   "name": "Dragon Flag",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000095",
+   "name": "Dumbbell Bench Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000096",
+   "name": "Dumbbell Bent Over Row",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000097",
+   "name": "Dumbbell Curtsy Lunge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000098",
+   "name": "Dumbbell Fly",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000099",
+   "name": "Dumbbell Glute Bridge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000100",
+   "name": "Dumbbell Hip Thrust",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000101",
+   "name": "Dumbbell Lateral Lunge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000102",
+   "name": "Dumbbell Overhead Tricep Extension",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000103",
+   "name": "Dumbbell Romanian Deadlift",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000104",
+   "name": "Dumbbell Shrug",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000105",
+   "name": "Dumbbell Side Bend",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000106",
+   "name": "Two Dumbbell Skullcrusher",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000107",
+   "name": "Dumbbell Sumo Deadlift",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Posterior Chain"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000108",
+   "name": "Dumbbell Sumo Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000109",
+   "name": "Elliptical",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000110",
+   "name": "Explosive Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000111",
+   "name": "EZ-Bar Curl",
+   "equipment": "Barbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000112",
+   "name": "Face Pull",
+   "equipment": "Cable",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000113",
+   "name": "Farmer Carry",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Forearms"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000114",
+   "name": "Fast Feet",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000115",
+   "name": "Feet-Elevated Pike Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000116",
+   "name": "Fire Hydrant",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000117",
+   "name": "Flutter Kick",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000118",
+   "name": "Forward Lunge",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000119",
+   "name": "Frog Pump",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000120",
+   "name": "Front-Foot Elevated Split Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000121",
+   "name": "Front Raise",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000122",
+   "name": "Front Squat",
+   "equipment": "Barbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000123",
+   "name": "Glute Bridge",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000124",
+   "name": "Glute Bridge March",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000125",
+   "name": "Glute-Focused Back Extension",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000126",
+   "name": "Goblet Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000127",
+   "name": "Good Morning",
+   "equipment": "Barbell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000128",
+   "name": "Hack Squat",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000129",
+   "name": "Half Burpee",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000130",
+   "name": "Half-Kneeling Pallof Press",
+   "equipment": "Cable",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000131",
+   "name": "Hammer Curl",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000132",
+   "name": "Hamstring Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000133",
+   "name": "Handstand Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000134",
+   "name": "Hanging Knee Raise",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000135",
+   "name": "Hanging Leg Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000136",
+   "name": "Heel-Elevated Goblet Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000137",
+   "name": "Heel Tap",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000138",
+   "name": "High Knees",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000139",
+   "name": "Hiking",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000140",
+   "name": "Hindu Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000141",
+   "name": "Hip Abduction Machine",
+   "equipment": "Machine",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": [
+    "hip abd",
+    "hip abductor",
+    "hip abduction machine",
+    "abductor machine",
+    "abduction machine",
+    "outer thigh machine",
+    "abductor",
+    "abduktor",
+    "abduktor makinesi",
+    "dış bacak makinesi",
+    "dis bacak makinesi",
+    "kalça abduksiyon",
+    "kalca abduksiyon",
+    "kalça abduksiyonu",
+    "kalca abduksiyonu"
+   ]
+  },
+  {
+   "id": "ex_000142",
+   "name": "Hip Adduction Machine",
+   "equipment": "Machine",
+   "primary": [
+    "Adductors"
+   ],
+   "aliases": [
+    "hip add",
+    "hip adductor",
+    "hip adduction machine",
+    "adductor machine",
+    "adduction machine",
+    "inner thigh machine",
+    "adductor",
+    "adduktor",
+    "adduktor makinesi",
+    "iç bacak makinesi",
+    "ic bacak makinesi",
+    "kalça adduksiyon",
+    "kalca adduksiyon",
+    "kalça adduksiyonu",
+    "kalca adduksiyonu"
+   ]
+  },
+  {
+   "id": "ex_000143",
+   "name": "Hip Airplane",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000144",
+   "name": "Hip Thrust",
+   "equipment": "Barbell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000145",
+   "name": "Hollow Body Hold",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000146",
+   "name": "Hollow Rock",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000147",
+   "name": "Inchworm",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000148",
+   "name": "Incline Bench Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000149",
+   "name": "Incline Cable Fly",
+   "equipment": "Cable",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000150",
+   "name": "Incline Dumbbell Curl",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000151",
+   "name": "Incline Dumbbell Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000152",
+   "name": "Incline Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000153",
+   "name": "Inverted Row",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000154",
+   "name": "Jump Rope",
+   "equipment": "Cardio",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000155",
+   "name": "Jump Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000156",
+   "name": "Jumping Jack",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000157",
+   "name": "Kettlebell Romanian Deadlift",
+   "equipment": "Kettlebell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000158",
+   "name": "Kettlebell Swing",
+   "equipment": "Kettlebell",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000159",
+   "name": "Knee Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000160",
+   "name": "Kneeling Hip Flexor Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hips"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000161",
+   "name": "L-Sit Hold",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000162",
+   "name": "L-Sit Pull-up",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000163",
+   "name": "Landmine Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000164",
+   "name": "Landmine Romanian Deadlift",
+   "equipment": "Barbell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000165",
+   "name": "Landmine Squat",
+   "equipment": "Barbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000166",
+   "name": "Lat Pulldown",
+   "equipment": "Cable",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": [
+    "lat pull down",
+    "lat pull-down",
+    "lat pull"
+   ]
+  },
+  {
+   "id": "ex_000167",
+   "name": "Lateral Lunge",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000168",
+   "name": "Lateral Raise",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": [
+    "db lateral raise",
+    "dumbbell side raise",
+    "side lateral raise",
+    "lateral raise db",
+    "dumbbell lateral"
+   ]
+  },
+  {
+   "id": "ex_000169",
+   "name": "Lateral Shuffle",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000170",
+   "name": "Leg Curl",
+   "equipment": "Machine",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000171",
+   "name": "Leg Extension",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000172",
+   "name": "Leg Press",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": [
+    "legpress",
+    "leg press machine",
+    "bacak press",
+    "bacak pres"
+   ]
+  },
+  {
+   "id": "ex_000173",
+   "name": "Leg Press Calf Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000174",
+   "name": "Leg Swings",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Mobility"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000175",
+   "name": "Lying Hamstring Walkout",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000176",
+   "name": "Lying Leg Curl",
+   "equipment": "Machine",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000177",
+   "name": "Lying Leg Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000178",
+   "name": "Machine Chest Press",
+   "equipment": "Machine",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000179",
+   "name": "Machine Glute Kickback",
+   "equipment": "Machine",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000180",
+   "name": "Machine Lateral Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000181",
+   "name": "Machine Row",
+   "equipment": "Machine",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000182",
+   "name": "Machine Shoulder Press",
+   "equipment": "Machine",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000183",
+   "name": "Meadows Row",
+   "equipment": "Barbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000184",
+   "name": "Mountain Climber",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000185",
+   "name": "Negative Pull-up",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000186",
+   "name": "Neutral-Grip Pull-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000187",
+   "name": "Nordic Hamstring Curl",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000188",
+   "name": "One-Arm Dumbbell Row",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000189",
+   "name": "Overhead Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000190",
+   "name": "Overhead Tricep Extension",
+   "equipment": "Cable",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000191",
+   "name": "Pallof Press",
+   "equipment": "Cable",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000192",
+   "name": "Pec Deck",
+   "equipment": "Machine",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000193",
+   "name": "Pendlay Row",
+   "equipment": "Barbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000194",
+   "name": "Pike Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000195",
+   "name": "Pistol Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000196",
+   "name": "Plank",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000197",
+   "name": "Plank Jack",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000198",
+   "name": "Plank Shoulder Tap",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000199",
+   "name": "Plate Front Raise",
+   "equipment": "Plate",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000200",
+   "name": "Preacher Curl",
+   "equipment": "Machine",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000201",
+   "name": "Prone T Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000202",
+   "name": "Prone Y Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000203",
+   "name": "Pull-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000204",
+   "name": "Push Press",
+   "equipment": "Barbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000205",
+   "name": "Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000206",
+   "name": "Push-up Shoulder Tap",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000207",
+   "name": "Rack Pull",
+   "equipment": "Barbell",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000208",
+   "name": "Rear Delt Fly",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Rear Delts"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000209",
+   "name": "Reverse Crunch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000210",
+   "name": "Reverse Curl",
+   "equipment": "Barbell",
+   "primary": [
+    "Forearms"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000211",
+   "name": "Reverse Hyperextension",
+   "equipment": "Machine",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000212",
+   "name": "Reverse Lunge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000213",
+   "name": "Reverse Pec Deck",
+   "equipment": "Machine",
+   "primary": [
+    "Rear Delts"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000214",
+   "name": "Reverse Snow Angel",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000215",
+   "name": "Romanian Deadlift",
+   "equipment": "Barbell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": [
+    "rdl",
+    "barbell rdl",
+    "romanian dead lift",
+    "romanian dl",
+    "rumen deadlift",
+    "romen deadlift"
+   ]
+  },
+  {
+   "id": "ex_000216",
+   "name": "Rope Hammer Curl",
+   "equipment": "Cable",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000217",
+   "name": "Rope Tricep Pushdown",
+   "equipment": "Cable",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000218",
+   "name": "Rowing",
+   "equipment": "Cardio",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000219",
+   "name": "Running",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000220",
+   "name": "Russian Twist",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000221",
+   "name": "Scapular Pull-up",
+   "equipment": "Pull-up Bar",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000222",
+   "name": "Scapular Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000223",
+   "name": "Seal Jack",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000224",
+   "name": "Seated Calf Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000225",
+   "name": "Dumbbell Seated Shoulder Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000226",
+   "name": "Seated Forward Fold",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000227",
+   "name": "Seated Knee Tuck",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000228",
+   "name": "Seated Leg Curl",
+   "equipment": "Machine",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000229",
+   "name": "Seated Cable Row",
+   "equipment": "Cable",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000230",
+   "name": "Shrimp Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000231",
+   "name": "Barbell Shrug",
+   "equipment": "Barbell",
+   "primary": [
+    "Upper Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000232",
+   "name": "Side-Lying Hip Abduction",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000233",
+   "name": "Side-Lying Leg Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000234",
+   "name": "Side Plank",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000235",
+   "name": "Side Plank Hip Dip",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000236",
+   "name": "Single-Arm Cable Row",
+   "equipment": "Cable",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000237",
+   "name": "Single Arm Dumbbell Tricep Extension",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000238",
+   "name": "Single Dumbbell Skullcrusher",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000239",
+   "name": "Single-Leg Box Squat",
+   "equipment": "Box",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000240",
+   "name": "Single-Leg Calf Raise",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000241",
+   "name": "Single-Leg Glute Bridge",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000242",
+   "name": "Single-Leg Romanian Deadlift",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000243",
+   "name": "Sissy Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000244",
+   "name": "Skater Hop",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000245",
+   "name": "Skater Squat",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000246",
+   "name": "SkiErg",
+   "equipment": "Cardio",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000247",
+   "name": "Skull Crusher",
+   "equipment": "Barbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000248",
+   "name": "Smith Machine Bench Press",
+   "equipment": "Machine",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000249",
+   "name": "Smith Machine Bulgarian Split Squat",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000250",
+   "name": "Smith Machine Hip Thrust",
+   "equipment": "Machine",
+   "primary": [
+    "Glutes"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000251",
+   "name": "Smith Machine Reverse Lunge",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000252",
+   "name": "Smith Machine Romanian Deadlift",
+   "equipment": "Machine",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000253",
+   "name": "Smith Machine Split Squat",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000254",
+   "name": "Smith Machine Squat",
+   "equipment": "Machine",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000255",
+   "name": "Spider Curl",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000256",
+   "name": "Split Squat",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000257",
+   "name": "Sprawl",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000258",
+   "name": "Squat",
+   "equipment": "Barbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000259",
+   "name": "Squat Thrust",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000260",
+   "name": "Stability Ball Hamstring Curl",
+   "equipment": "Stability Ball",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000261",
+   "name": "Stair Climber",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000262",
+   "name": "Standing Calf Raise",
+   "equipment": "Machine",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000263",
+   "name": "Standing Dumbbell Press",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000264",
+   "name": "Standing Quad Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000265",
+   "name": "Step-Down",
+   "equipment": "Box",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000266",
+   "name": "Step-Up",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000267",
+   "name": "Straight-Arm Pulldown",
+   "equipment": "Cable",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000268",
+   "name": "Sumo Deadlift",
+   "equipment": "Barbell",
+   "primary": [
+    "Posterior Chain"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000269",
+   "name": "Superman",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lower Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000270",
+   "name": "Superman Hold",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lower Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000271",
+   "name": "Swimming",
+   "equipment": "Cardio",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000272",
+   "name": "T-Bar Row",
+   "equipment": "Machine",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000273",
+   "name": "Toe Touch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000274",
+   "name": "Torso Twists",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Mobility"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000275",
+   "name": "Towel Hamstring Curl",
+   "equipment": "Towel",
+   "primary": [
+    "Hamstrings"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000276",
+   "name": "Towel Pull-up",
+   "equipment": "Towel",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000277",
+   "name": "Towel Row",
+   "equipment": "Towel",
+   "primary": [
+    "Back"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000278",
+   "name": "Trap Bar Deadlift",
+   "equipment": "Barbell",
+   "primary": [
+    "Posterior Chain"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000279",
+   "name": "Treadmill Incline Walk",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000280",
+   "name": "Tricep Kickback",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000281",
+   "name": "Tricep Pushdown",
+   "equipment": "Cable",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000282",
+   "name": "Typewriter Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000283",
+   "name": "Upright Row",
+   "equipment": "Barbell",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000284",
+   "name": "V-Up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000285",
+   "name": "Walking",
+   "equipment": "Cardio",
+   "primary": [
+    "Legs"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000286",
+   "name": "Walking Lunge",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000287",
+   "name": "Wall Calf Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Calves"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000288",
+   "name": "Wall Handstand Push-up",
+   "equipment": "Wall",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000289",
+   "name": "Wall Push-up",
+   "equipment": "Wall",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000290",
+   "name": "Wall Sit",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Quads"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000291",
+   "name": "Wall Walk",
+   "equipment": "Wall",
+   "primary": [
+    "Shoulders"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000292",
+   "name": "Weighted Chin-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Biceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000293",
+   "name": "Weighted Crunch",
+   "equipment": "Plate",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000294",
+   "name": "Weighted Dip",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Triceps"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000295",
+   "name": "Weighted Pull-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000296",
+   "name": "Weighted Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000297",
+   "name": "Weighted Russian Twist",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Core"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000298",
+   "name": "Wide-Grip Lat Pulldown",
+   "equipment": "Cable",
+   "primary": [
+    "Lats"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000299",
+   "name": "Wide Push-up",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Chest"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000300",
+   "name": "World's Greatest Stretch",
+   "equipment": "Bodyweight",
+   "primary": [
+    "Mobility"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000301",
+   "name": "Wrist Curl",
+   "equipment": "Barbell",
+   "primary": [
+    "Forearms"
+   ],
+   "aliases": []
+  },
+  {
+   "id": "ex_000302",
+   "name": "Wrist Extension",
+   "equipment": "Dumbbell",
+   "primary": [
+    "Forearms"
+   ],
+   "aliases": []
+  }
+ ]
+}

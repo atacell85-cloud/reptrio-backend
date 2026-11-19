@@ -1,0 +1,1665 @@
+{
+ "schemaVersion": 1,
+ "note": "B57-007 held-out evaluation set, written 2026-11-15 AFTER the guard rules and NOT used to tune them. Synthetic names only (no user data). same: the catalog holds the same exercise (expected id). variant: no automatic id is correct except `acceptable` ids; `trap` is the tempting wrong entry. nonsense: not an exercise. Classes: same_tr, same_en, typo, similar_different, ambiguous, not_in_catalog, nonsense.",
+ "cases": [
+  {
+   "name": "Düz bench",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000038",
+   "acceptable": [
+    "ex_000038"
+   ]
+  },
+  {
+   "name": "Dambıl göğüs press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000095",
+   "acceptable": [
+    "ex_000095"
+   ]
+  },
+  {
+   "name": "Eğimli halter press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000148",
+   "acceptable": [
+    "ex_000148"
+   ]
+  },
+  {
+   "name": "Eğimli dumbbell göğüs press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000151",
+   "acceptable": [
+    "ex_000151"
+   ]
+  },
+  {
+   "name": "Ters eğimli bench press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000082",
+   "acceptable": [
+    "ex_000082"
+   ]
+  },
+  {
+   "name": "Göğüs makinesi press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000178",
+   "acceptable": [
+    "ex_000178"
+   ]
+  },
+  {
+   "name": "Kelebek makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000192",
+   "acceptable": [
+    "ex_000192"
+   ]
+  },
+  {
+   "name": "Kablo çapraz",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000049",
+   "acceptable": [
+    "ex_000049"
+   ]
+  },
+  {
+   "name": "Dambıl açış",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000098",
+   "acceptable": [
+    "ex_000098"
+   ]
+  },
+  {
+   "name": "Şınav çekme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000205",
+   "acceptable": [
+    "ex_000205"
+   ]
+  },
+  {
+   "name": "Dizüstü şınav",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000159",
+   "acceptable": [
+    "ex_000159"
+   ]
+  },
+  {
+   "name": "Duvar şınavı",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000289",
+   "acceptable": [
+    "ex_000289"
+   ]
+  },
+  {
+   "name": "Geniş şınav",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000299",
+   "acceptable": [
+    "ex_000299"
+   ]
+  },
+  {
+   "name": "Barfiks çekme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000203",
+   "acceptable": [
+    "ex_000203"
+   ]
+  },
+  {
+   "name": "Ters tutuş barfiks çekme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000066",
+   "acceptable": [
+    "ex_000066"
+   ]
+  },
+  {
+   "name": "Lat makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000166",
+   "acceptable": [
+    "ex_000166"
+   ]
+  },
+  {
+   "name": "Oturarak kablo kürek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000229",
+   "acceptable": [
+    "ex_000229"
+   ]
+  },
+  {
+   "name": "Tek kol dambıl kürek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000188",
+   "acceptable": [
+    "ex_000188"
+   ]
+  },
+  {
+   "name": "Halter kürek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000032",
+   "acceptable": [
+    "ex_000032"
+   ]
+  },
+  {
+   "name": "T bar kürek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000272",
+   "acceptable": [
+    "ex_000272"
+   ]
+  },
+  {
+   "name": "Göğüs destekli row",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000064",
+   "acceptable": [
+    "ex_000064"
+   ]
+  },
+  {
+   "name": "Halatla yüze çekiş",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000112",
+   "acceptable": [
+    "ex_000112"
+   ]
+  },
+  {
+   "name": "Askeri press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000189",
+   "acceptable": [
+    "ex_000189"
+   ]
+  },
+  {
+   "name": "Arnold omuz press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000005",
+   "acceptable": [
+    "ex_000005"
+   ]
+  },
+  {
+   "name": "Yana kaldırış",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000168",
+   "acceptable": [
+    "ex_000168"
+   ]
+  },
+  {
+   "name": "Kabloda yana açış",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000052",
+   "acceptable": [
+    "ex_000052"
+   ]
+  },
+  {
+   "name": "Önden kaldırış",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000121",
+   "acceptable": [
+    "ex_000121"
+   ]
+  },
+  {
+   "name": "Arka omuz açış",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000208",
+   "acceptable": [
+    "ex_000208"
+   ]
+  },
+  {
+   "name": "Dambıl shrug",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000104",
+   "acceptable": [
+    "ex_000104"
+   ]
+  },
+  {
+   "name": "Dambıl ile pazu curl",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000040",
+   "acceptable": [
+    "ex_000040"
+   ]
+  },
+  {
+   "name": "Çekiç pazu",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000131",
+   "acceptable": [
+    "ex_000131"
+   ]
+  },
+  {
+   "name": "Konsantrasyon curl",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000071",
+   "acceptable": [
+    "ex_000071"
+   ]
+  },
+  {
+   "name": "Scott curl",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000200",
+   "acceptable": [
+    "ex_000200"
+   ]
+  },
+  {
+   "name": "EZ bar ile curl",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000111",
+   "acceptable": [
+    "ex_000111"
+   ]
+  },
+  {
+   "name": "Kablo pazu curl",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000048",
+   "acceptable": [
+    "ex_000048"
+   ]
+  },
+  {
+   "name": "Triceps itme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000281",
+   "acceptable": [
+    "ex_000281"
+   ]
+  },
+  {
+   "name": "Halatla triceps itme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000217",
+   "acceptable": [
+    "ex_000217"
+   ]
+  },
+  {
+   "name": "Alın ezme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000247",
+   "acceptable": [
+    "ex_000247"
+   ]
+  },
+  {
+   "name": "Dambıl triceps kickback",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000280",
+   "acceptable": [
+    "ex_000280"
+   ]
+  },
+  {
+   "name": "Halter ön squat",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000122",
+   "acceptable": [
+    "ex_000122"
+   ]
+  },
+  {
+   "name": "Goblet çömelme",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000126",
+   "acceptable": [
+    "ex_000126"
+   ]
+  },
+  {
+   "name": "Bacak itme makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000172",
+   "acceptable": [
+    "ex_000172"
+   ]
+  },
+  {
+   "name": "Hack squat makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000128",
+   "acceptable": [
+    "ex_000128"
+   ]
+  },
+  {
+   "name": "Ön bacak makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000171",
+   "acceptable": [
+    "ex_000171"
+   ]
+  },
+  {
+   "name": "Yatarak arka bacak",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000176",
+   "acceptable": [
+    "ex_000176"
+   ]
+  },
+  {
+   "name": "Oturarak arka bacak",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000228",
+   "acceptable": [
+    "ex_000228"
+   ]
+  },
+  {
+   "name": "Romen ölü kaldırma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000215",
+   "acceptable": [
+    "ex_000215"
+   ]
+  },
+  {
+   "name": "Sumo ölü kaldırma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000268",
+   "acceptable": [
+    "ex_000268"
+   ]
+  },
+  {
+   "name": "Kalça köprüsü",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000123",
+   "acceptable": [
+    "ex_000123"
+   ]
+  },
+  {
+   "name": "Halterli kalça itişi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000144",
+   "acceptable": [
+    "ex_000144"
+   ]
+  },
+  {
+   "name": "Bulgar bölünmüş squat",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000044",
+   "acceptable": [
+    "ex_000044"
+   ]
+  },
+  {
+   "name": "Yürüyüş lunge",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000286",
+   "acceptable": [
+    "ex_000286"
+   ]
+  },
+  {
+   "name": "Geri adım lunge",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000212",
+   "acceptable": [
+    "ex_000212"
+   ]
+  },
+  {
+   "name": "Yan lunge",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000167",
+   "acceptable": [
+    "ex_000167"
+   ]
+  },
+  {
+   "name": "Oturarak baldır",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000224",
+   "acceptable": [
+    "ex_000224"
+   ]
+  },
+  {
+   "name": "Ayakta baldır makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000262",
+   "acceptable": [
+    "ex_000262"
+   ]
+  },
+  {
+   "name": "Basamak çıkma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000266",
+   "acceptable": [
+    "ex_000266"
+   ]
+  },
+  {
+   "name": "Duvarda oturma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000290",
+   "acceptable": [
+    "ex_000290"
+   ]
+  },
+  {
+   "name": "Plank duruşu",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000196",
+   "acceptable": [
+    "ex_000196"
+   ]
+  },
+  {
+   "name": "Yan plank",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000234",
+   "acceptable": [
+    "ex_000234"
+   ]
+  },
+  {
+   "name": "Kablo mekik",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000047",
+   "acceptable": [
+    "ex_000047"
+   ]
+  },
+  {
+   "name": "Bisiklet mekik",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000041",
+   "acceptable": [
+    "ex_000041"
+   ]
+  },
+  {
+   "name": "Asılı bacak kaldırma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000135",
+   "acceptable": [
+    "ex_000135"
+   ]
+  },
+  {
+   "name": "Yatarak bacak kaldırma",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000177",
+   "acceptable": [
+    "ex_000177"
+   ]
+  },
+  {
+   "name": "Rus twist",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000220",
+   "acceptable": [
+    "ex_000220"
+   ]
+  },
+  {
+   "name": "Dağcı",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000184",
+   "acceptable": [
+    "ex_000184"
+   ]
+  },
+  {
+   "name": "Ölü böcek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000079",
+   "acceptable": [
+    "ex_000079"
+   ]
+  },
+  {
+   "name": "Kuş köpek",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000042",
+   "acceptable": [
+    "ex_000042"
+   ]
+  },
+  {
+   "name": "Süpermen",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000269",
+   "acceptable": [
+    "ex_000269"
+   ]
+  },
+  {
+   "name": "Koşu bandında koşu",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000219",
+   "acceptable": [
+    "ex_000219"
+   ]
+  },
+  {
+   "name": "Eliptik bisiklet",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000109",
+   "acceptable": [
+    "ex_000109"
+   ]
+  },
+  {
+   "name": "Kürek çekme makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000218",
+   "acceptable": [
+    "ex_000218"
+   ]
+  },
+  {
+   "name": "Merdiven makinesi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000261",
+   "acceptable": [
+    "ex_000261"
+   ]
+  },
+  {
+   "name": "Kettlebell sallama",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000158",
+   "acceptable": [
+    "ex_000158"
+   ]
+  },
+  {
+   "name": "Çiftçi yürüyüşü",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000113",
+   "acceptable": [
+    "ex_000113"
+   ]
+  },
+  {
+   "name": "Burpi",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000045",
+   "acceptable": [
+    "ex_000045"
+   ]
+  },
+  {
+   "name": "Kriko zıplama",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000156",
+   "acceptable": [
+    "ex_000156"
+   ]
+  },
+  {
+   "name": "İp atlamak",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000154",
+   "acceptable": [
+    "ex_000154"
+   ]
+  },
+  {
+   "name": "Oturarak dambıl omuz press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000225",
+   "acceptable": [
+    "ex_000225"
+   ]
+  },
+  {
+   "name": "Ayakta halter omuz press",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000189",
+   "acceptable": [
+    "ex_000189"
+   ]
+  },
+  {
+   "name": "Eğimli şınav",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000152",
+   "acceptable": [
+    "ex_000152"
+   ]
+  },
+  {
+   "name": "Ters eğimli şınav",
+   "class": "same_tr",
+   "kind": "same",
+   "expected": "ex_000084",
+   "acceptable": [
+    "ex_000084"
+   ]
+  },
+  {
+   "name": "Flat dumbbell press",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000095",
+   "acceptable": [
+    "ex_000095"
+   ]
+  },
+  {
+   "name": "BB row",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000032",
+   "acceptable": [
+    "ex_000032"
+   ]
+  },
+  {
+   "name": "Pec fly machine",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000192",
+   "acceptable": [
+    "ex_000192"
+   ]
+  },
+  {
+   "name": "Lying hamstring curl",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000176",
+   "acceptable": [
+    "ex_000176"
+   ]
+  },
+  {
+   "name": "Quad extension",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000171",
+   "acceptable": [
+    "ex_000171"
+   ]
+  },
+  {
+   "name": "Calf press on leg press",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000173",
+   "acceptable": [
+    "ex_000173"
+   ]
+  },
+  {
+   "name": "Weighted chin-up",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000292",
+   "acceptable": [
+    "ex_000292"
+   ]
+  },
+  {
+   "name": "Chest-supported row",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000064",
+   "acceptable": [
+    "ex_000064"
+   ]
+  },
+  {
+   "name": "Skull crushers",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000247",
+   "acceptable": [
+    "ex_000247"
+   ]
+  },
+  {
+   "name": "Cable overhead triceps extension",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000190",
+   "acceptable": [
+    "ex_000190"
+   ]
+  },
+  {
+   "name": "Single-arm cable row",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000236",
+   "acceptable": [
+    "ex_000236"
+   ]
+  },
+  {
+   "name": "Straight-arm cable pulldown",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000267",
+   "acceptable": [
+    "ex_000267"
+   ]
+  },
+  {
+   "name": "Glute kickback machine",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000179",
+   "acceptable": [
+    "ex_000179"
+   ]
+  },
+  {
+   "name": "Reverse hyper",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000211",
+   "acceptable": [
+    "ex_000211"
+   ]
+  },
+  {
+   "name": "Good mornings",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000127",
+   "acceptable": [
+    "ex_000127"
+   ]
+  },
+  {
+   "name": "Rack pulls",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000207",
+   "acceptable": [
+    "ex_000207"
+   ]
+  },
+  {
+   "name": "Ab rollout",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000001",
+   "acceptable": [
+    "ex_000001"
+   ]
+  },
+  {
+   "name": "Hollow hold",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000145",
+   "acceptable": [
+    "ex_000145"
+   ]
+  },
+  {
+   "name": "Dragon flags",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000094",
+   "acceptable": [
+    "ex_000094"
+   ]
+  },
+  {
+   "name": "L-sit",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000161",
+   "acceptable": [
+    "ex_000161"
+   ]
+  },
+  {
+   "name": "Farmer's carry",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000113",
+   "acceptable": [
+    "ex_000113"
+   ]
+  },
+  {
+   "name": "Air bike",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000006",
+   "acceptable": [
+    "ex_000006"
+   ]
+  },
+  {
+   "name": "Cable reverse fly",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000055",
+   "acceptable": [
+    "ex_000055"
+   ]
+  },
+  {
+   "name": "Single leg RDL",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000242",
+   "acceptable": [
+    "ex_000242"
+   ]
+  },
+  {
+   "name": "Smith machine bench press",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000248",
+   "acceptable": [
+    "ex_000248"
+   ]
+  },
+  {
+   "name": "Cable hip adduction",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000057",
+   "acceptable": [
+    "ex_000057"
+   ]
+  },
+  {
+   "name": "Machine preacher curl",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000200",
+   "acceptable": [
+    "ex_000200"
+   ]
+  },
+  {
+   "name": "Seated DB shoulder press",
+   "class": "same_en",
+   "kind": "same",
+   "expected": "ex_000225",
+   "acceptable": [
+    "ex_000225"
+   ]
+  },
+  {
+   "name": "Dumbel flye",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000098",
+   "acceptable": [
+    "ex_000098"
+   ]
+  },
+  {
+   "name": "Benchpres",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000038",
+   "acceptable": [
+    "ex_000038"
+   ]
+  },
+  {
+   "name": "Lat pulldwon",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000166",
+   "acceptable": [
+    "ex_000166"
+   ]
+  },
+  {
+   "name": "Deadlfit",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000081",
+   "acceptable": [
+    "ex_000081"
+   ]
+  },
+  {
+   "name": "Squatt",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000258",
+   "acceptable": [
+    "ex_000258"
+   ]
+  },
+  {
+   "name": "Hip trust",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000144",
+   "acceptable": [
+    "ex_000144"
+   ]
+  },
+  {
+   "name": "Romainan deadlift",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000215",
+   "acceptable": [
+    "ex_000215"
+   ]
+  },
+  {
+   "name": "Tricep pushdwon",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000281",
+   "acceptable": [
+    "ex_000281"
+   ]
+  },
+  {
+   "name": "Bicep cruls",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000040",
+   "acceptable": [
+    "ex_000040"
+   ]
+  },
+  {
+   "name": "Lateral rasie",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000168",
+   "acceptable": [
+    "ex_000168"
+   ]
+  },
+  {
+   "name": "Şinav",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000205",
+   "acceptable": [
+    "ex_000205"
+   ]
+  },
+  {
+   "name": "Barfix",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000203",
+   "acceptable": [
+    "ex_000203"
+   ]
+  },
+  {
+   "name": "Mountian climbers",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000184",
+   "acceptable": [
+    "ex_000184"
+   ]
+  },
+  {
+   "name": "Leg pres",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000172",
+   "acceptable": [
+    "ex_000172"
+   ]
+  },
+  {
+   "name": "Hammer crul",
+   "class": "typo",
+   "kind": "same",
+   "expected": "ex_000131",
+   "acceptable": [
+    "ex_000131"
+   ]
+  },
+  {
+   "name": "Decline cable fly",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000149"
+  },
+  {
+   "name": "Close grip pull up",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000203"
+  },
+  {
+   "name": "Wide grip seated row",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000229"
+  },
+  {
+   "name": "Single leg hip thrust",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000144"
+  },
+  {
+   "name": "Deficit deadlift",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000081"
+  },
+  {
+   "name": "Pause squat",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000258"
+  },
+  {
+   "name": "Box squat",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000258"
+  },
+  {
+   "name": "Smith incline press",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000148"
+  },
+  {
+   "name": "Cable pullover",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000267"
+  },
+  {
+   "name": "Landmine row",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000272"
+  },
+  {
+   "name": "Seal row",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000032"
+  },
+  {
+   "name": "Dumbbell preacher curl",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000200"
+  },
+  {
+   "name": "Standing cable crunch",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000047"
+  },
+  {
+   "name": "Captain's chair leg raise",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000135"
+  },
+  {
+   "name": "Front squat with dumbbells",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000122"
+  },
+  {
+   "name": "Barbell bulgarian split squat",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000044"
+  },
+  {
+   "name": "Reverse grip lat pulldown",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000166"
+  },
+  {
+   "name": "V-handle lat pulldown",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000166"
+  },
+  {
+   "name": "Overhead cable curl",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000048"
+  },
+  {
+   "name": "Incline sit up",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000085"
+  },
+  {
+   "name": "Tek kol halter curl",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000040"
+  },
+  {
+   "name": "Tek bacak leg extension",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000171"
+  },
+  {
+   "name": "Tek kol lat pulldown",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000166"
+  },
+  {
+   "name": "Halter ile yana kaldırış",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000168"
+  },
+  {
+   "name": "Eğimli kablo kürek",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000229"
+  },
+  {
+   "name": "Makinede omuz silkme",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000231"
+  },
+  {
+   "name": "Kettlebell bench press",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000038"
+  },
+  {
+   "name": "Dambıl ile hack squat",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000128"
+  },
+  {
+   "name": "Kablolu kalça itişi",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000144"
+  },
+  {
+   "name": "Lastikli barfiks",
+   "class": "similar_different",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000203"
+  },
+  {
+   "name": "Omuz press",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000189",
+    "ex_000225",
+    "ex_000182",
+    "ex_000263"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Omuz silkme",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000104",
+    "ex_000231"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Seated lateral raise",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000168"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Kneeling cable crunch",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000047"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Wide stance squat",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000108"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Smith machine lunge",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000251"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Cable hammer curl",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000216"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Mekik",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000076"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Biceps curl",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000040"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Row",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Lunge",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000118",
+    "ex_000212"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Leg raise",
+   "class": "ambiguous",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000177",
+    "ex_000135"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Sled push",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Battle rope slams",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [
+    "ex_000033"
+   ],
+   "trap": null
+  },
+  {
+   "name": "Turkish get-up",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Clean and jerk",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Power clean",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Snatch",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Ab crunch machine",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000076"
+  },
+  {
+   "name": "Glute ham raise",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000187"
+  },
+  {
+   "name": "Wrist roller",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000301"
+  },
+  {
+   "name": "Neck curl",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Boyun egzersizi",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Reformer pilates",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": null
+  },
+  {
+   "name": "Hip thrust makinesi",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000144"
+  },
+  {
+   "name": "Pendulum squat makinesi",
+   "class": "not_in_catalog",
+   "kind": "variant",
+   "expected": null,
+   "acceptable": [],
+   "trap": "ex_000128"
+  },
+  {
+   "name": "lorem ipsum 3x10",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "Gün 1 Isınma",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "aaaa",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "123456",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "Antrenman B",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "###",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "Dinlenme günü",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  },
+  {
+   "name": "Notlar: su iç",
+   "class": "nonsense",
+   "kind": "nonsense",
+   "expected": null,
+   "acceptable": []
+  }
+ ]
+}

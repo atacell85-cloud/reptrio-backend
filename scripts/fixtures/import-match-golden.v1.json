@@ -1,0 +1,1193 @@
+{
+ "schemaVersion": 1,
+ "note": "B57-007 synthetic golden set (no user data). same: the catalog holds the same exercise -> expected id. variant: understood, the catalog has no equivalent -> no automatic id (acceptable lists ids that are also defensible). nonsense: not an exercise -> no id, personal card. Each variant may carry a trap id: the tempting wrong catalog entry an over-eager model would pick (used by --trap). Round-2 Guardian probe names (Turkish inflections, implicit positions, machine-named cable stations) were added to `same` after review. 2026-11-15: label fix after the real-model run — 'Ters eğimli bench' is the Decline Bench Press (acceptable), not a trap.",
+ "same": [
+  [
+   "Dumbell Bench",
+   "ex_000095"
+  ],
+  [
+   "DB bench press",
+   "ex_000095"
+  ],
+  [
+   "Dambıl bench press",
+   "ex_000095"
+  ],
+  [
+   "Dumbbell ile düz bench",
+   "ex_000095"
+  ],
+  [
+   "Bench press",
+   "ex_000038"
+  ],
+  [
+   "Barbell bench press",
+   "ex_000038"
+  ],
+  [
+   "Halter ile bench press",
+   "ex_000038"
+  ],
+  [
+   "Düz bench press",
+   "ex_000038"
+  ],
+  [
+   "Incline bench press",
+   "ex_000148"
+  ],
+  [
+   "Eğik bench press",
+   "ex_000148"
+  ],
+  [
+   "Incline barbell press",
+   "ex_000148"
+  ],
+  [
+   "Incline DB press",
+   "ex_000151"
+  ],
+  [
+   "Eğimli dambıl press",
+   "ex_000151"
+  ],
+  [
+   "Decline bench",
+   "ex_000082"
+  ],
+  [
+   "Lat pulldown",
+   "ex_000166"
+  ],
+  [
+   "Lat çekiş",
+   "ex_000166"
+  ],
+  [
+   "Wide grip lat pulldown",
+   "ex_000298"
+  ],
+  [
+   "Geniş tutuş lat pulldown",
+   "ex_000298"
+  ],
+  [
+   "Close grip pulldown",
+   "ex_000069"
+  ],
+  [
+   "Seated cable row",
+   "ex_000229"
+  ],
+  [
+   "Kablo ile oturarak row",
+   "ex_000229"
+  ],
+  [
+   "Barbell row",
+   "ex_000032"
+  ],
+  [
+   "Bent over barbell row",
+   "ex_000032"
+  ],
+  [
+   "Halter row",
+   "ex_000032"
+  ],
+  [
+   "One arm dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Tek kol dambıl row",
+   "ex_000188"
+  ],
+  [
+   "Pull up",
+   "ex_000203"
+  ],
+  [
+   "Barfiks",
+   "ex_000203"
+  ],
+  [
+   "Chin up",
+   "ex_000066"
+  ],
+  [
+   "Deadlift",
+   "ex_000081"
+  ],
+  [
+   "Ölü kaldırma",
+   "ex_000081"
+  ],
+  [
+   "RDL",
+   "ex_000215"
+  ],
+  [
+   "Romen deadlift",
+   "ex_000215"
+  ],
+  [
+   "Dumbbell RDL",
+   "ex_000103"
+  ],
+  [
+   "Sumo deadlift",
+   "ex_000268"
+  ],
+  [
+   "Trap bar deadlift",
+   "ex_000278"
+  ],
+  [
+   "Hex bar deadlift",
+   "ex_000278"
+  ],
+  [
+   "Squat",
+   "ex_000258"
+  ],
+  [
+   "Back squat",
+   "ex_000258"
+  ],
+  [
+   "Barbell squat",
+   "ex_000258"
+  ],
+  [
+   "Front squat",
+   "ex_000122"
+  ],
+  [
+   "Goblet squat",
+   "ex_000126"
+  ],
+  [
+   "Leg press",
+   "ex_000172"
+  ],
+  [
+   "Bacak press",
+   "ex_000172"
+  ],
+  [
+   "Hack squat",
+   "ex_000128"
+  ],
+  [
+   "Hack squat machine",
+   "ex_000128"
+  ],
+  [
+   "Leg extension",
+   "ex_000171"
+  ],
+  [
+   "Leg ext",
+   "ex_000171"
+  ],
+  [
+   "Lying leg curl",
+   "ex_000176"
+  ],
+  [
+   "Yatarak leg curl",
+   "ex_000176"
+  ],
+  [
+   "Seated leg curl",
+   "ex_000228"
+  ],
+  [
+   "Leg curl",
+   "ex_000170"
+  ],
+  [
+   "Hip thrust",
+   "ex_000144"
+  ],
+  [
+   "Barbell hip thrust",
+   "ex_000144"
+  ],
+  [
+   "Glute bridge",
+   "ex_000123"
+  ],
+  [
+   "Bulgarian split squat",
+   "ex_000044"
+  ],
+  [
+   "Bulgar squat",
+   "ex_000044"
+  ],
+  [
+   "Walking lunge",
+   "ex_000286"
+  ],
+  [
+   "Yürüyerek lunge",
+   "ex_000286"
+  ],
+  [
+   "Reverse lunge",
+   "ex_000212"
+  ],
+  [
+   "Seated calf raise",
+   "ex_000224"
+  ],
+  [
+   "Leg press calf raise",
+   "ex_000173"
+  ],
+  [
+   "Overhead press",
+   "ex_000189"
+  ],
+  [
+   "OHP",
+   "ex_000189"
+  ],
+  [
+   "Military press",
+   "ex_000189"
+  ],
+  [
+   "Arnold press",
+   "ex_000005"
+  ],
+  [
+   "Yana açış",
+   "ex_000168"
+  ],
+  [
+   "Side lateral raise",
+   "ex_000168"
+  ],
+  [
+   "Cable lateral raise",
+   "ex_000052"
+  ],
+  [
+   "Face pull",
+   "ex_000112"
+  ],
+  [
+   "Face pulls",
+   "ex_000112"
+  ],
+  [
+   "Rear delt fly",
+   "ex_000208"
+  ],
+  [
+   "Reverse pec deck",
+   "ex_000213"
+  ],
+  [
+   "Pec deck",
+   "ex_000192"
+  ],
+  [
+   "Butterfly makinesi",
+   "ex_000192"
+  ],
+  [
+   "Cable crossover",
+   "ex_000049"
+  ],
+  [
+   "Dumbbell fly",
+   "ex_000098"
+  ],
+  [
+   "Dambıl fly",
+   "ex_000098"
+  ],
+  [
+   "Chest dip",
+   "ex_000063"
+  ],
+  [
+   "Dips",
+   "ex_000088"
+  ],
+  [
+   "Push up",
+   "ex_000205"
+  ],
+  [
+   "Şınav",
+   "ex_000205"
+  ],
+  [
+   "Diamond push up",
+   "ex_000087"
+  ],
+  [
+   "Elmas şınav",
+   "ex_000087"
+  ],
+  [
+   "Incline push-up",
+   "ex_000152"
+  ],
+  [
+   "Bicep curl",
+   "ex_000040"
+  ],
+  [
+   "Dumbbell biceps curl",
+   "ex_000040"
+  ],
+  [
+   "Hammer curl",
+   "ex_000131"
+  ],
+  [
+   "Çekiç curl",
+   "ex_000131"
+  ],
+  [
+   "EZ bar curl",
+   "ex_000111"
+  ],
+  [
+   "Preacher curl",
+   "ex_000200"
+  ],
+  [
+   "Concentration curl",
+   "ex_000071"
+  ],
+  [
+   "Cable curl",
+   "ex_000048"
+  ],
+  [
+   "Spider curl",
+   "ex_000255"
+  ],
+  [
+   "Tricep pushdown",
+   "ex_000281"
+  ],
+  [
+   "Rope pushdown",
+   "ex_000217"
+  ],
+  [
+   "Halatla triceps pushdown",
+   "ex_000217"
+  ],
+  [
+   "Skull crusher",
+   "ex_000247"
+  ],
+  [
+   "Triceps kickback",
+   "ex_000280"
+  ],
+  [
+   "Barbell shrug",
+   "ex_000231"
+  ],
+  [
+   "Plank",
+   "ex_000196"
+  ],
+  [
+   "Crunch",
+   "ex_000076"
+  ],
+  [
+   "Cable crunch",
+   "ex_000047"
+  ],
+  [
+   "Hanging leg raise",
+   "ex_000135"
+  ],
+  [
+   "Russian twist",
+   "ex_000220"
+  ],
+  [
+   "Koşu",
+   "ex_000219"
+  ],
+  [
+   "Bisiklet",
+   "ex_000078"
+  ],
+  [
+   "İp atlama",
+   "ex_000154"
+  ],
+  [
+   "Kürek makinesi",
+   "ex_000218"
+  ],
+  [
+   "Burpee",
+   "ex_000045"
+  ],
+  [
+   "Mountain climbers",
+   "ex_000184"
+  ],
+  [
+   "Jumping jacks",
+   "ex_000156"
+  ],
+  [
+   "Kettlebell swing",
+   "ex_000158"
+  ],
+  [
+   "Farmer walk",
+   "ex_000113"
+  ],
+  [
+   "Good morning",
+   "ex_000127"
+  ],
+  [
+   "Hiperekstansiyon",
+   "ex_000011"
+  ],
+  [
+   "T-bar row",
+   "ex_000272"
+  ],
+  [
+   "Pendlay row",
+   "ex_000193"
+  ],
+  [
+   "Machine chest press",
+   "ex_000178"
+  ],
+  [
+   "Göğüs press makinesi",
+   "ex_000178"
+  ],
+  [
+   "Smith machine squat",
+   "ex_000254"
+  ],
+  [
+   "Abductor",
+   "ex_000141"
+  ],
+  [
+   "Adductor",
+   "ex_000142"
+  ],
+  [
+   "Wall sit",
+   "ex_000290"
+  ],
+  [
+   "Step up",
+   "ex_000266"
+  ],
+  [
+   "Inverted row",
+   "ex_000153"
+  ],
+  [
+   "Straight arm pulldown",
+   "ex_000267"
+  ],
+  [
+   "Upright row",
+   "ex_000283"
+  ],
+  [
+   "Landmine press",
+   "ex_000163"
+  ],
+  [
+   "Eğimli dambıl curl",
+   "ex_000150"
+  ],
+  [
+   "Seated leg extension",
+   "ex_000171"
+  ],
+  [
+   "Oturarak leg extension",
+   "ex_000171"
+  ],
+  [
+   "Seated chest press machine",
+   "ex_000178"
+  ],
+  [
+   "Oturarak göğüs press makinesi",
+   "ex_000178"
+  ],
+  [
+   "Seated machine shoulder press",
+   "ex_000182"
+  ],
+  [
+   "Seated leg press",
+   "ex_000172"
+  ],
+  [
+   "Standing overhead press",
+   "ex_000189"
+  ],
+  [
+   "Ayakta OHP",
+   "ex_000189"
+  ],
+  [
+   "Standing military press",
+   "ex_000189"
+  ],
+  [
+   "Ayakta lateral raise",
+   "ex_000168"
+  ],
+  [
+   "Standing lateral raise",
+   "ex_000168"
+  ],
+  [
+   "Ön squat",
+   "ex_000122"
+  ],
+  [
+   "Ön kaldırış",
+   "ex_000121"
+  ],
+  [
+   "Dumbbell ön omuz kaldırma",
+   "ex_000121"
+  ],
+  [
+   "Plaka ile ön kaldırış",
+   "ex_000199"
+  ],
+  [
+   "Yüzüstü leg curl",
+   "ex_000176"
+  ],
+  [
+   "Yüzüstü T raise",
+   "ex_000201"
+  ],
+  [
+   "Tek kolla dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Tek el dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Parallel bar dips",
+   "ex_000088"
+  ],
+  [
+   "Paralel tutuş barfiks",
+   "ex_000186"
+  ],
+  [
+   "Yerde mekik",
+   "ex_000076"
+  ],
+  [
+   "Floor crunch",
+   "ex_000076"
+  ],
+  [
+   "Yerde bacak kaldırma",
+   "ex_000177"
+  ],
+  [
+   "Lat pulldown machine",
+   "ex_000166"
+  ],
+  [
+   "Lat pulldown makinesi",
+   "ex_000166"
+  ],
+  [
+   "Cable row",
+   "ex_000229"
+  ],
+  [
+   "Kablo row",
+   "ex_000229"
+  ],
+  [
+   "Feet elevated pike push up",
+   "ex_000115"
+  ],
+  [
+   "Önden lat çekiş",
+   "ex_000166"
+  ],
+  [
+   "Lat pulldown to front",
+   "ex_000166"
+  ],
+  [
+   "Üstten aşağı çekiş",
+   "ex_000166"
+  ],
+  [
+   "Calf raise on leg press",
+   "ex_000173"
+  ],
+  [
+   "Push-up on knees",
+   "ex_000159"
+  ],
+  [
+   "Hip thrust on bench",
+   "ex_000144"
+  ],
+  [
+   "Crunch on floor",
+   "ex_000076"
+  ],
+  [
+   "Plank on elbows",
+   "ex_000196"
+  ],
+  [
+   "Ön kol curl",
+   "ex_000301"
+  ],
+  [
+   "Box step-up",
+   "ex_000266"
+  ],
+  [
+   "Feet elevated push-up",
+   "ex_000084"
+  ],
+  [
+   "Reverse grip curl",
+   "ex_000210"
+  ],
+  [
+   "Ters tutuşlu curl",
+   "ex_000210"
+  ],
+  [
+   "Front plank",
+   "ex_000196"
+  ],
+  [
+   "Front lunge",
+   "ex_000118"
+  ],
+  [
+   "CGBP",
+   "ex_000068"
+  ],
+  [
+   "Hammer grip pull-up",
+   "ex_000186"
+  ],
+  [
+   "Ağırlıklı barfiks",
+   "ex_000295"
+  ],
+  [
+   "Destekli barfiks",
+   "ex_000010"
+  ],
+  [
+   "Negatif barfiks",
+   "ex_000185"
+  ],
+  [
+   "Halat sallama",
+   "ex_000033"
+  ],
+  [
+   "Skipping rope",
+   "ex_000154"
+  ],
+  [
+   "Tek taraflı dumbbell row",
+   "ex_000188"
+  ],
+  [
+   "Bant ile squat",
+   "ex_000028"
+  ]
+ ],
+ "variant": [
+  [
+   "Incline dumbbell fly",
+   [],
+   "ex_000098"
+  ],
+  [
+   "Decline dumbbell fly",
+   [],
+   "ex_000098"
+  ],
+  [
+   "Barbell curl",
+   [],
+   "ex_000040"
+  ],
+  [
+   "Dumbbell shoulder press",
+   [
+    "ex_000225",
+    "ex_000263"
+   ],
+   null
+  ],
+  [
+   "Shrug",
+   [
+    "ex_000104",
+    "ex_000231"
+   ],
+   null
+  ],
+  [
+   "Incline smith press",
+   [],
+   "ex_000248"
+  ],
+  [
+   "Pendulum squat",
+   [],
+   "ex_000128"
+  ],
+  [
+   "Sissy squat machine",
+   [],
+   "ex_000243"
+  ],
+  [
+   "Wide grip pull up",
+   [],
+   "ex_000203"
+  ],
+  [
+   "Close grip push up",
+   [],
+   "ex_000205"
+  ],
+  [
+   "Single arm lat pulldown",
+   [],
+   "ex_000166"
+  ],
+  [
+   "Single leg leg press",
+   [],
+   "ex_000172"
+  ],
+  [
+   "Incline hammer curl",
+   [],
+   "ex_000131"
+  ],
+  [
+   "Seated dumbbell curl",
+   [
+    "ex_000040"
+   ],
+   null
+  ],
+  [
+   "Machine hip thrust",
+   [],
+   "ex_000144"
+  ],
+  [
+   "Dumbbell squat",
+   [],
+   "ex_000258"
+  ],
+  [
+   "Barbell lunge",
+   [],
+   "ex_000118"
+  ],
+  [
+   "Dumbbell front squat",
+   [],
+   "ex_000122"
+  ],
+  [
+   "Kettlebell goblet squat",
+   [],
+   "ex_000126"
+  ],
+  [
+   "Cable chest press",
+   [],
+   "ex_000178"
+  ],
+  [
+   "Machine fly",
+   [
+    "ex_000192"
+   ],
+   null
+  ],
+  [
+   "Reverse grip bench press",
+   [],
+   "ex_000038"
+  ],
+  [
+   "Floor press",
+   [],
+   "ex_000038"
+  ],
+  [
+   "Zercher squat",
+   [],
+   "ex_000258"
+  ],
+  [
+   "Jefferson curl",
+   [],
+   "ex_000081"
+  ],
+  [
+   "Dumbbell pullover",
+   [],
+   "ex_000098"
+  ],
+  [
+   "Behind the neck press",
+   [],
+   "ex_000189"
+  ],
+  [
+   "Z press",
+   [],
+   "ex_000189"
+  ],
+  [
+   "Decline crunch",
+   [],
+   "ex_000076"
+  ],
+  [
+   "Standing leg curl",
+   [],
+   "ex_000170"
+  ],
+  [
+   "Tek kol kablo lateral raise",
+   [],
+   "ex_000052"
+  ],
+  [
+   "Smith makinesinde eğimli press",
+   [],
+   "ex_000248"
+  ],
+  [
+   "Makinede hip thrust",
+   [],
+   "ex_000144"
+  ],
+  [
+   "Halter ile lunge",
+   [],
+   "ex_000118"
+  ],
+  [
+   "Kablo göğüs press",
+   [],
+   "ex_000178"
+  ],
+  [
+   "Tek bacak leg press",
+   [],
+   "ex_000172"
+  ],
+  [
+   "Dambıl ile squat",
+   [],
+   "ex_000258"
+  ],
+  [
+   "Barbell incline row",
+   [],
+   "ex_000032"
+  ],
+  [
+   "Seated chest fly machine",
+   [
+    "ex_000192"
+   ],
+   null
+  ],
+  [
+   "Neutral grip lat pulldown",
+   [],
+   "ex_000166"
+  ],
+  [
+   "Sumo squat",
+   [
+    "ex_000108"
+   ],
+   "ex_000258"
+  ],
+  [
+   "Seated dumbbell shoulder press",
+   [
+    "ex_000225"
+   ],
+   null
+  ],
+  [
+   "Ters eğimli bench",
+   [
+    "ex_000082"
+   ],
+   null
+  ],
+  [
+   "Oturarak cable row",
+   [
+    "ex_000229"
+   ],
+   null
+  ],
+  [
+   "Seated calf raise machine",
+   [
+    "ex_000224"
+   ],
+   "ex_000059"
+  ],
+  [
+   "Seated row machine",
+   [
+    "ex_000181"
+   ],
+   "ex_000229"
+  ],
+  [
+   "Seated leg curl machine",
+   [
+    "ex_000228"
+   ],
+   "ex_000176"
+  ],
+  [
+   "Ring dip",
+   [],
+   "ex_000088"
+  ],
+  [
+   "TRX row",
+   [],
+   "ex_000153"
+  ],
+  [
+   "Snatch grip deadlift",
+   [],
+   "ex_000081"
+  ],
+  [
+   "Push jerk",
+   [],
+   "ex_000204"
+  ],
+  [
+   "Zottman curl",
+   [],
+   "ex_000040"
+  ],
+  [
+   "Yates row",
+   [],
+   "ex_000032"
+  ],
+  [
+   "Low to high cable fly",
+   [],
+   "ex_000049"
+  ],
+  [
+   "Feet elevated push up",
+   [],
+   "ex_000205"
+  ],
+  [
+   "Low row",
+   [
+    "ex_000229",
+    "ex_000181"
+   ],
+   null
+  ],
+  [
+   "Pazı curl",
+   [
+    "ex_000040"
+   ],
+   "ex_000048"
+  ],
+  [
+   "Çömelme",
+   [
+    "ex_000258"
+   ],
+   "ex_000254"
+  ],
+  [
+   "Lat çekişi",
+   [
+    "ex_000166"
+   ],
+   "ex_000022"
+  ],
+  [
+   "Glute bridges",
+   [
+    "ex_000123"
+   ],
+   "ex_000031"
+  ],
+  [
+   "Weighted plank",
+   [],
+   "ex_000196"
+  ],
+  [
+   "Barfiks çekişi",
+   [
+    "ex_000203"
+   ],
+   "ex_000295"
+  ],
+  [
+   "Paralel dips",
+   [
+    "ex_000088"
+   ],
+   "ex_000294"
+  ],
+  [
+   "Yana açış hareketi",
+   [
+    "ex_000168"
+   ],
+   "ex_000052"
+  ],
+  [
+   "Kalça itişi",
+   [
+    "ex_000144"
+   ],
+   "ex_000250"
+  ],
+  [
+   "Bulgarian squat",
+   [
+    "ex_000044"
+   ],
+   "ex_000249"
+  ],
+  [
+   "Tek taraflı leg press",
+   [],
+   "ex_000172"
+  ],
+  [
+   "Seated calf",
+   [
+    "ex_000224"
+   ],
+   "ex_000059"
+  ],
+  [
+   "Walking lunges",
+   [
+    "ex_000286"
+   ],
+   "ex_000212"
+  ],
+  [
+   "Diamond pushups",
+   [
+    "ex_000087"
+   ],
+   "ex_000205"
+  ],
+  [
+   "Bench dips",
+   [
+    "ex_000037"
+   ],
+   "ex_000088"
+  ],
+  [
+   "Nordic curl",
+   [
+    "ex_000187"
+   ],
+   "ex_000170"
+  ],
+  [
+   "Kneeling pallof press",
+   [
+    "ex_000130"
+   ],
+   "ex_000191"
+  ],
+  [
+   "Halatla pushdown",
+   [
+    "ex_000217"
+   ],
+   "ex_000281"
+  ],
+  [
+   "Push-ups",
+   [
+    "ex_000205"
+   ],
+   "ex_000133"
+  ],
+  [
+   "Leg curl machine lying",
+   [
+    "ex_000176"
+   ],
+   "ex_000228"
+  ]
+ ],
+ "nonsense": [
+  "asf@@ 2!!",
+  "xqzt lmrp",
+  "qwerty 12",
+  "Kral rutini 3",
+  "???",
+  "zzz-0042"
+ ]
+}

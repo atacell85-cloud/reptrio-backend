@@ -9,6 +9,7 @@ import { handleAiConsentRequest, hasAiImportConsent, assertAiImportConsent } fro
 import { handlePasswordResetRequest } from './password-reset.js';
 import { handleLiveActivityRequest } from './live-activity-end.js';
 import { handlePlacesRequest } from './places-api.js';
+import { IMPORT_MATCH_CATALOG, matchImportPreview } from './import-catalog-match.js';
 
 const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
@@ -41,6 +42,8 @@ export default {
     if (url.pathname === '/api/health') return health(request, env);
     if (url.pathname === '/api/import/parse') return parseImport(request, env);
     if (url.pathname === '/api/import/jobs') return createImportJob(request, env, ctx);
+    const importMatchRoute = url.pathname.match(/^\/api\/import\/jobs\/([^/]+)\/match$/);
+    if (importMatchRoute) return matchImportJob(request, env, importMatchRoute[1]);
     const importJobMatch = url.pathname.match(/^\/api\/import\/jobs\/([^/]+)(?:\/retry)?$/);
     if (importJobMatch) return handleImportJob(request, env, ctx, importJobMatch[1], url.pathname.endsWith('/retry'));
     if (url.pathname === '/api/youtube/search') return searchYouTube(request, env, url);
@@ -285,6 +288,71 @@ async function handleImportJob(request, env, ctx, importId, retry) {
   });
 }
 
+// B57-007: one batched catalog match per finished import (POST /api/import/jobs/:id/match {catalogRevision}).
+// Same gates as the import itself (session, same origin, AI consent, rate limit). Idempotent: a stored result for the same
+// catalog revision is returned without a new model call (double submit / reopen costs nothing). Failures return a technical
+// error code and leave the stored preview untouched.
+async function matchImportJob(request, env, importId) {
+  if (request.method !== 'POST') return apiError('METHOD_NOT_ALLOWED', 405, { Allow: 'POST' });
+  const user = await currentUser(request, env);
+  if (!user) return apiError('AUTH_REQUIRED', 401);
+  if (!sameOrigin(request)) return apiError('AUTH_ORIGIN_INVALID', 403);
+  if (!(await hasAiImportConsent(env, user.id))) return apiError('AI_CONSENT_REQUIRED', 403);
+  const config = importConfig(env);
+  const requestId = crypto.randomUUID();
+  const started = Date.now();
+  try {
+    let body;
+    try { body = await readJson(request, 4096); } catch { throw coded('INVALID_JSON'); }
+    if (body?.catalogRevision !== IMPORT_MATCH_CATALOG.revision) throw coded('IMPORT_MATCH_CATALOG_MISMATCH');
+    let row;
+    // Missing column (migration 0019 not applied) → technical failure, never a write into the synced preview.
+    try { row = await env.DB.prepare('SELECT status, preview_json, updated_at, catalog_match_json FROM import_jobs WHERE user_id = ? AND id = ?').bind(user.id, importId).first(); }
+    catch { throw coded('IMPORT_MATCH_UNAVAILABLE'); }
+    if (!row) throw coded('IMPORT_JOB_NOT_FOUND');
+    const preview = parseJson(row.preview_json);
+    if (row.status !== 'done' || !preview?.program?.days) throw coded('IMPORT_NOT_READY');
+    // The stored result is valid only for this exact preview and catalog revision (a retry / re-upload / re-extraction or a
+    // catalog update invalidates it without touching any other code path).
+    const previewSha = await sha256Hex(row.preview_json);
+    const cachedEntry = parseJson(row.catalog_match_json);
+    if (cachedEntry?.previewSha === previewSha && cachedEntry.catalogMatching?.status === 'done' && cachedEntry.catalogMatching.catalogRevision === IMPORT_MATCH_CATALOG.revision) {
+      return json({ importId, catalogMatching: cachedEntry.catalogMatching, cached: true });
+    }
+    const rate = await env.AI_IMPORT_LIMITER?.limit({ key: request.headers.get('cf-connecting-ip') || 'unknown' });
+    if (rate && !rate.success) throw coded('AI_IMPORT_RATE_LIMITED');
+    if (!env.OPENAI_API_KEY) throw coded('OPENAI_API_KEY_MISSING');
+    const matchConfig = { ...config, model: env.OPENAI_MATCH_MODEL || config.model, timeoutMs: positive(env.OPENAI_MATCH_TIMEOUT_MS, 30000), maxRetries: nonNegative(env.OPENAI_MATCH_MAX_RETRIES, 1) };
+    const catalogMatching = await matchImportPreview({
+      preview, model: matchConfig.model, requestId,
+      callModel: body => requestOpenAIBody({ apiKey: env.OPENAI_API_KEY, config: matchConfig, body, requestId, beforeAttempt: () => assertAiImportConsent(env, user.id) }),
+    });
+    await assertAiImportConsent(env, user.id);
+    // Stored beside (never inside) the preview, and only while the job still holds the SAME finished preview: a re-upload,
+    // retry or re-extraction meanwhile wins and this result is answered as a technical conflict (the app re-polls and rematches).
+    const saved = await env.DB.prepare("UPDATE import_jobs SET catalog_match_json = ? WHERE user_id = ? AND id = ? AND status = 'done' AND updated_at = ? AND preview_json = ?")
+      .bind(JSON.stringify({ previewSha, catalogMatching }), user.id, importId, row.updated_at, row.preview_json).run();
+    if (saved.meta?.changes !== 1) throw coded('IMPORT_CHANGED');
+    console.log(JSON.stringify({ event: 'import_match', requestId, status: 'ok', durationMs: Date.now() - started, summary: catalogMatching.summary, usage: catalogMatching.usage, model: catalogMatching.model }));
+    return json({ importId, catalogMatching, cached: false }, 200, { 'X-Import-Request-Id': requestId });
+  } catch (error) {
+    const code = error.code || 'OPENAI_REQUEST_FAILED';
+    console.warn(JSON.stringify({ event: 'import_match', requestId, status: code, attempts: error.attempts || 0, durationMs: Date.now() - started }));
+    return apiError(code, matchStatusFor(code), { 'X-Import-Request-Id': requestId });
+  }
+}
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text ?? '')));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function matchStatusFor(code) {
+  if (code === 'IMPORT_MATCH_UNAVAILABLE') return 503;
+  if (code === 'IMPORT_JOB_NOT_FOUND') return 404;
+  if (code === 'IMPORT_MATCH_CATALOG_MISMATCH' || code === 'IMPORT_NOT_READY' || code === 'IMPORT_CHANGED') return 409;
+  if (code === 'IMPORT_MATCH_INVALID_RESPONSE' || code === 'IMPORT_MATCH_INCOMPLETE' || code === 'OPENAI_REQUEST_FAILED' || code === 'OPENAI_NETWORK_ERROR' || code === 'OPENAI_INVALID_RESPONSE') return 502;
+  return statusFor(code);
+}
+
 async function enqueueImportJob(env, ctx, jobId, userId) {
   if (!jobId || !userId) return; // Old queue messages cannot acquire a different account's document.
   if (env.IMPORT_QUEUE) await env.IMPORT_QUEUE.send({ jobId, userId });
@@ -351,6 +419,11 @@ async function searchYouTube(request, env, url) {
 }
 
 export async function requestOpenAI({ apiKey, config, input, requestId, fetchImpl = fetch, sleep = delay, beforeAttempt = async () => {} }) {
+  return requestOpenAIBody({ apiKey, config, body: requestBody(config.model, input, requestId), requestId, fetchImpl, sleep, beforeAttempt });
+}
+
+// Synchronous Responses API call with timeout and bounded retries (rate limit / network / 5xx) for an already built body.
+export async function requestOpenAIBody({ apiKey, config, body, requestId, fetchImpl = fetch, sleep = delay, beforeAttempt = async () => {} }) {
   let attempts = 0;
   let lastError;
   while (attempts <= config.maxRetries) {
@@ -365,7 +438,7 @@ export async function requestOpenAI({ apiKey, config, input, requestId, fetchImp
         upstream = await fetchImpl(OPENAI_URL, {
           method: 'POST', signal: controller.signal,
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Client-Request-Id': requestId },
-          body: JSON.stringify(requestBody(config.model, input, requestId))
+          body: JSON.stringify(body)
         });
       } catch (error) {
         throw coded(controller.signal.aborted || error?.name === 'AbortError' ? 'OPENAI_TIMEOUT' : 'OPENAI_NETWORK_ERROR');
@@ -486,7 +559,7 @@ Hard rules:
 - Do not infer missing exercises, missing sets, missing reps, missing rest, missing RIR/RPE, or missing weights.
 - Do not split a day into multiple sections. Every day must contain exactly one section titled "Ana Antrenman" with sectionType "strength".
 - Do not output instruction items. Every section item must be an exercise.
-- exerciseMatch must always be null. AKS will match exercise names against its own exercise database after extraction.
+- Leave exerciseMatch null here. Reptrio maps every exercise name to its catalog in a separate validated matching step (B57-007), so keep each exercise name faithful to the source; do not rename it to a catalog name.
 - If an exercise is not clearly an exercise name, omit it.
 - Keep sourceExerciseName as written in the file. normalizedExerciseName may be a cleaned spelling of the same exercise, but must not be a different exercise.
 - Do not put set count inside repsText. For "3x15", output sets=3, setsText="3", repsText="15".
