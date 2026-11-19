@@ -17,10 +17,23 @@
   "assets": {
     "directory": "./.cloudflare-assets",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/runtime-config.js", "/reset-password", "/account-deletion-link"]
+    "run_worker_first": [
+      "/api/*",
+      "/runtime-config.js",
+      "/reset-password",
+      "/account-deletion-link"
+    ]
   },
-  "triggers": { "crons": ["*/15 * * * *", "* * * * *", "0 6 * * *"] },
-  "observability": { "enabled": true },
+  "triggers": {
+    "crons": [
+      "*/15 * * * *",
+      "* * * * *",
+      "0 6 * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
   "vars": {
     "RECORD_TRANSPORT_ENABLED": "true",
     "PERSONAL_RESTORE_ENABLED": "true",
@@ -31,7 +44,8 @@
     "OPENAI_IMPORT_MAX_INPUT_BYTES": "180000",
     "OPENAI_IMPORT_MAX_FILE_BYTES": "6000000",
     "OPS_ALERT_EMAIL": "support@reptrio.com",
-    "PLACES_DAILY_QUOTA_POLICY": "first-use-24h"
+    "PLACES_DAILY_QUOTA_POLICY": "first-use-24h",
+    "DRAFT_EXERCISE_REMOVAL_ENABLED": "false"
   },
   "d1_databases": [
     {
@@ -58,8 +72,22 @@
     ]
   },
   "ratelimits": [
-    { "name": "ACCOUNT_LIFECYCLE_LIMITER", "namespace_id": "1003", "simple": { "limit": 6, "period": 60 } },
-    { "name": "PLACES_LIMITER", "namespace_id": "1004", "simple": { "limit": 12, "period": 60 } },
+    {
+      "name": "ACCOUNT_LIFECYCLE_LIMITER",
+      "namespace_id": "1003",
+      "simple": {
+        "limit": 6,
+        "period": 60
+      }
+    },
+    {
+      "name": "PLACES_LIMITER",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 12,
+        "period": 60
+      }
+    },
     {
       "name": "AI_IMPORT_LIMITER",
       "namespace_id": "1001",
