@@ -310,3 +310,11 @@ VERIFIED (runbook §4b). No production migration/deploy.
 - Guardian: round 1 DURDURULDU (3 MAJOR: two untested guards, final code unmeasured) -> fixed; round 2 GEÇTİ (no
   BLOCKING/MAJOR; MINOR test gaps a-c and LOW-d closed with tests 9j-9m).
 - Device checks: none (server-only). Production check after deploy: §4b.
+
+## 2026-11-21 — Build 57 temiz backend hattı (kullanıcı kararı A; HIGH: sync kuralları production'a göre geri alınır)
+- Karar: production'daki `9adec6e` (eski B57-002: Data Level 3, `removedExercises`, `draftExerciseRemoval`, `DRAFT_EXERCISE_REMOVAL_ENABLED` / `SYNC_EXERCISE_REMOVAL_DISABLED`, eski istemci okuma reddi, web "yükseltme gerekli") yerine bu temiz hat (`a555d89`, B57-007 AI içe aktarma eşleştirmesi + migration 0019) esas alınır. Eski mimari geri taşınmaz; runtime kodu `a555d89` ile birebir aynıdır.
+- Mobil B57-002 hareket silme (`c67fa4d`) yalnız mevcut set silme kaydı + syncVersion kontrolüyle çalışır; `9adec6e`'nin "işaretsiz hareket listeden çıkamaz" kuralı onu reddediyordu, bu hatta o kural yok.
+- Yapılandırma: `wrangler.jsonc` production'da çalışan sürümle (cbb47476, 2026-11-20) karşılaştırıldı: rotalar, cron'lar, `observability: enabled`, D1/kuyruk/rate-limit bağları, uyumluluk tarihi ve tüm `vars` aynı; 15 secret Worker'da kalır. Tek fark eski `DRAFT_EXERCISE_REMOVAL_ENABLED=false` değişkeni; bu hatta okuyan kod yok, bilerek eklenmedi.
+- Production salt-okuma doğrulaması (2026-11-21 07:24 UTC, `changes: 0`): Level ≥ 3 hesap 0, en yüksek seviye 2; `removedExercises` içeren sync kaydı / legacy belge / staged restore kaydı 0; uygulanmamış migration yok (0016–0019 uygulanmış). Bu hatta veri seviyesi 3'ü tanıyan kod olmadığından geçiş öncesi bu sorgu tekrar çalıştırılmalı.
+- Bilinen kabul edilmiş risk (mobil, 2026-11-21): Build 56 veya daha eski bir telefonun silinen harekete çevrimdışı set eklemesi bitişte o hareketi kayda sokabilir; sunucu kuralı eklenmedi (mobil `BUILD_CURRENT.md` B57-002).
+- Doğrulama: `npm test` PASS; mobil çapraz testler (B57-002 hareket silme senaryo 1–5, B51 set silme, B51 iki telefon) bu hatta PASS. Deploy yapılmadı.

@@ -217,3 +217,6 @@ Syntax/diff PASS. Complete npm local run blocked at headless smoke Chrome CDP st
 ## 2026-10-21 — Build 47 data-feature guard (HIGH)
 
 Eski istemci koruması hesap bazlı ve monotondur; seviye istemci beyanından değil sunucudaki Build 47 alanlarından türetilir ve CAS batch'inde yükselir. Başlık yalnız yetenek beyanıdır; kayıp kontrolü (`noFieldLoss`) her durumda sürer. Yeni Worker migration 0016 olmadan yazmaz (önce migration, sonra deploy). Build 47 mobil uygulaması bu backend'i gerektirir. Prosedür: `docs/build47/PRODUCTION_ROLLOUT.md`.
+
+## 2026-11-21 — Build 57: temiz backend hattı (karar A)
+Kullanıcı kararı: eski Data Level 3 hareket silme mimarisine dönülmez. Build 57 backend'i `a555d89` (B57-007 + migration 0019) üzerinden ilerler; `9adec6e`'deki `removedExercises`, Data Level 3, `draftExerciseRemoval` capability'si ve `DRAFT_EXERCISE_REMOVAL_ENABLED` bayrağı geri taşınmaz. Production'a geçiş ayrı onaylı deploy ile ve öncesinde salt-okuma Level 3 / `removedExercises` kontrolü tekrarlanarak yapılır.
